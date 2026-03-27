@@ -1,0 +1,58 @@
+use dcmview::types::FileEntry;
+use dicom_core::value::PixelFragmentSequence;
+use dicom_core::{DataElement, PrimitiveValue, VR};
+use dicom_dictionary_std::{tags, uids};
+use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
+use std::path::{Path, PathBuf};
+
+pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragments: Vec<Vec<u8>>) {
+	let frame_count = fragments.len().max(1) as u32;
+
+	let mut obj = InMemDicomObject::from_element_iter([
+		DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::DIGITAL_MAMMOGRAPHY_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION),
+		DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, format!("2.25.{}", 100_000 + frame_count)),
+		DataElement::new(tags::PATIENT_ID, VR::LO, PrimitiveValue::from("TEST")),
+		DataElement::new(tags::MODALITY, VR::CS, PrimitiveValue::from("MG")),
+		DataElement::new(tags::STUDY_DATE, VR::DA, PrimitiveValue::from("20260101")),
+		DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(16_u16)),
+		DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(16_u16)),
+		DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(8_u16)),
+		DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(8_u16)),
+		DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(7_u16)),
+		DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
+		DataElement::new(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, PrimitiveValue::from("MONOCHROME2")),
+		DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, PrimitiveValue::from(frame_count.to_string())),
+	]);
+
+	obj.put(DataElement::new(
+		tags::PIXEL_DATA,
+		VR::OB,
+		PixelFragmentSequence::new_fragments(fragments),
+	));
+
+	let file_object = obj
+		.with_meta(
+			FileMetaTableBuilder::new()
+				.transfer_syntax(transfer_syntax_uid)
+				.media_storage_sop_class_uid(uids::DIGITAL_MAMMOGRAPHY_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION)
+				.media_storage_sop_instance_uid("2.25.123456789"),
+		)
+		.expect("build encapsulated file meta");
+
+	file_object.write_to_file(path).expect("write encapsulated DICOM fixture");
+}
+
+pub fn file_entry(path: PathBuf, transfer_syntax_uid: &str, frame_count: u32) -> FileEntry {
+	FileEntry {
+		index: 0,
+		path,
+		label: "fixture".to_string(),
+		has_pixels: true,
+		frame_count,
+		rows: 16,
+		columns: 16,
+		transfer_syntax_uid: transfer_syntax_uid.to_string(),
+		default_window: None,
+		offset_table: None,
+	}
+}

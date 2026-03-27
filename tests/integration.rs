@@ -1,4 +1,5 @@
 mod integration {
+	mod support;
 	mod loader_discovery;
 	mod pixels_jpeg_passthrough;
 	mod pixels_jp2_passthrough;

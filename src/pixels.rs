@@ -1,9 +1,16 @@
 use crate::types::{ErrorResponse, FileEntry, FrameCacheKey, ResolvedWindow, TransferSyntaxClass};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use dicom_object::collector::DicomCollector;
+use dicom_object::open_file;
+use dicom_pixeldata::PixelDecoder;
+use image::ImageFormat;
 use lru::LruCache;
+use std::io::Cursor;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tokio::task;
 
 pub const CACHE_CAPACITY: usize = 128;
 
@@ -33,7 +40,7 @@ pub async fn load_frame(
 	files: &[FileEntry],
 	cache: Arc<Mutex<LruCache<FrameCacheKey, Bytes>>>,
 	request: FrameRequest,
-) -> Result<FrameResponse> {
+ ) -> Result<FrameResponse> {
 	let file = files
 		.get(request.file_index)
 		.ok_or_else(|| anyhow!("file index out of range"))?;
@@ -45,6 +52,9 @@ pub async fn load_frame(
 		return Err(anyhow!("frame out of range"));
 	}
 
+	let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
+	let jp2_accept = accepts_jp2(request.accept_header.as_deref());
+	let cache_allowed = !matches!(syntax_class, TransferSyntaxClass::Jpeg2000) || jp2_accept;
 	let key = FrameCacheKey::new(
 		request.file_index,
 		request.frame,
@@ -52,62 +62,126 @@ pub async fn load_frame(
 		request.window_width,
 	);
 
-	if let Ok(mut lock) = cache.lock() {
-		if let Some(bytes) = lock.get(&key).cloned() {
-			return Ok(FrameResponse {
-				body: bytes,
-				content_type: classify_content_type(file, request.accept_header.as_deref())?,
-				cache_hit: true,
-			});
+	if cache_allowed {
+		if let Ok(mut lock) = cache.lock() {
+			if let Some(bytes) = lock.get(&key).cloned() {
+				return Ok(FrameResponse {
+					body: bytes,
+					content_type: content_type_for_class(syntax_class, jp2_accept),
+					cache_hit: true,
+				});
+			}
 		}
 	}
 
-	let bytes = placeholder_frame(file, &request)?;
-	let content_type = classify_content_type(file, request.accept_header.as_deref())?;
+	let (body, content_type) = match syntax_class {
+		TransferSyntaxClass::Jpeg => (
+			read_encapsulated_fragment(file.path.clone(), request.frame).await?,
+			"image/jpeg",
+		),
+		TransferSyntaxClass::Jpeg2000 => {
+			if jp2_accept {
+				(
+					read_encapsulated_fragment(file.path.clone(), request.frame).await?,
+					"image/jp2",
+				)
+			} else {
+				(
+					decode_frame_to_png(file.path.clone(), request.frame).await?,
+					"image/png",
+				)
+			}
+		}
+		TransferSyntaxClass::Uncompressed => {
+			return Err(anyhow!("frame decode failed: uncompressed decode not implemented yet"));
+		}
+		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported => {
+			return Err(anyhow!(
+				"unsupported transfer syntax: {}",
+				file.transfer_syntax_uid
+			));
+		}
+	};
 
-	if let Ok(mut lock) = cache.lock() {
-		lock.put(key, bytes.clone());
+	if cache_allowed {
+		if let Ok(mut lock) = cache.lock() {
+			lock.put(key, body.clone());
+		}
 	}
 
 	Ok(FrameResponse {
-		body: bytes,
+		body,
 		content_type,
 		cache_hit: false,
 	})
 }
 
-fn placeholder_frame(file: &FileEntry, _request: &FrameRequest) -> Result<Bytes> {
-	match classify_transfer_syntax(&file.transfer_syntax_uid) {
-		TransferSyntaxClass::Jpeg | TransferSyntaxClass::Jpeg2000 => {
-			Err(anyhow!("frame decode failed: passthrough not implemented yet"))
-		}
-		TransferSyntaxClass::Uncompressed => {
-			Err(anyhow!("frame decode failed: uncompressed decode not implemented yet"))
-		}
-		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle => {
-			Err(anyhow!("unsupported transfer syntax: {}", file.transfer_syntax_uid))
-		}
-		TransferSyntaxClass::Unsupported => {
-			Err(anyhow!("unsupported transfer syntax: {}", file.transfer_syntax_uid))
+fn content_type_for_class(class: TransferSyntaxClass, jp2_accept: bool) -> &'static str {
+	match class {
+		TransferSyntaxClass::Jpeg => "image/jpeg",
+		TransferSyntaxClass::Jpeg2000 if jp2_accept => "image/jp2",
+		TransferSyntaxClass::Jpeg2000 => "image/png",
+		TransferSyntaxClass::Uncompressed => "image/png",
+		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported => {
+			"application/octet-stream"
 		}
 	}
 }
 
-fn classify_content_type(file: &FileEntry, accept_header: Option<&str>) -> Result<&'static str> {
-	match classify_transfer_syntax(&file.transfer_syntax_uid) {
-		TransferSyntaxClass::Jpeg => Ok("image/jpeg"),
-		TransferSyntaxClass::Jpeg2000 => {
-			if accept_header.map(|value| value.contains("image/jp2")).unwrap_or(false) {
-				Ok("image/jp2")
-			} else {
-				Ok("image/png")
-			}
-		}
-		TransferSyntaxClass::Uncompressed => Ok("image/png"),
-		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported => {
-			Err(anyhow!("unsupported transfer syntax: {}", file.transfer_syntax_uid))
-		}
+fn accepts_jp2(accept_header: Option<&str>) -> bool {
+	accept_header
+		.map(|value| value.split(',').any(|part| part.trim().starts_with("image/jp2")))
+		.unwrap_or(false)
+}
+
+async fn read_encapsulated_fragment(path: PathBuf, frame: u32) -> Result<Bytes> {
+	task::spawn_blocking(move || read_encapsulated_fragment_blocking(&path, frame))
+		.await
+		.context("fragment reader task failed")?
+}
+
+fn read_encapsulated_fragment_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {
+	let mut collector = DicomCollector::open_file(path)
+		.with_context(|| format!("failed to open DICOM for collector access: {}", path.display()))?;
+
+	let mut offset_table = Vec::<u32>::new();
+	let _ = collector.read_basic_offset_table(&mut offset_table)?;
+	if offset_table.iter().all(|offset| *offset == 0) {
+		offset_table.clear();
 	}
+
+	let mut fragment = Vec::<u8>::new();
+	for _ in 0..=frame {
+		fragment.clear();
+		collector
+			.read_next_fragment(&mut fragment)?
+			.ok_or_else(|| anyhow!("frame out of range"))?;
+	}
+
+	Ok(Bytes::from(fragment))
+}
+
+async fn decode_frame_to_png(path: PathBuf, frame: u32) -> Result<Bytes> {
+	task::spawn_blocking(move || decode_frame_to_png_blocking(&path, frame))
+		.await
+		.context("jp2 fallback decode task failed")?
+}
+
+fn decode_frame_to_png_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {
+	let obj = open_file(path)
+		.with_context(|| format!("failed to open DICOM for decode fallback: {}", path.display()))?;
+	let decoded = obj
+		.decode_pixel_data()
+		.with_context(|| format!("unsupported transfer syntax: {}", obj.meta().transfer_syntax()))?;
+	let image = decoded.to_dynamic_image(frame).with_context(|| {
+		format!("unsupported transfer syntax: {}", obj.meta().transfer_syntax())
+	})?;
+
+	let mut buffer = Cursor::new(Vec::<u8>::new());
+	image
+		.write_to(&mut buffer, ImageFormat::Png)
+		.context("failed to encode PNG")?;
+	Ok(Bytes::from(buffer.into_inner()))
 }
 
 pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {

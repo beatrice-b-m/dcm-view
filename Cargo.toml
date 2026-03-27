@@ -13,7 +13,7 @@ debug-embed = ["rust-embed/debug-embed"]
 dicom-object = "0.9"
 dicom-core = "0.9"
 dicom-dictionary-std = "0.9"
-dicom-pixeldata = "0.9"
+dicom-pixeldata = { version = "0.9", features = ["image"] }
 
 # Web server
 axum = { version = "0.7", features = ["macros"] }
