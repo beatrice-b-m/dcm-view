@@ -1,0 +1,60 @@
+[package]
+name = "dcmview"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[features]
+default = []
+debug-embed = ["rust-embed/debug-embed"]
+
+[dependencies]
+# DICOM
+dicom-object = "0.9"
+dicom-core = "0.9"
+dicom-dictionary-std = "0.9"
+dicom-pixeldata = "0.9"
+
+# Web server
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Asset embedding
+rust-embed = { version = "8", features = ["axum"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Image encoding
+image = "0.25"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Cache
+lru = "0.12"
+
+# Parallel file discovery
+rayon = "1"
+walkdir = "2"
+
+# Browser open
+open = "5"
+
+# Utilities
+bytes = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["clock"] }
+futures = "0.3"
+urlencoding = "2"
+
+[dev-dependencies]
+tempfile = "3"
+axum-test = "14"
+reqwest = { version = "0.12", features = ["json"] }
