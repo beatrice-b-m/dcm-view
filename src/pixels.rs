@@ -4,7 +4,7 @@ use bytes::Bytes;
 use dicom_object::collector::DicomCollector;
 use dicom_object::open_file;
 use dicom_pixeldata::PixelDecoder;
-use image::ImageFormat;
+use image::{ImageBuffer, ImageFormat, Luma};
 use lru::LruCache;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
@@ -92,9 +92,17 @@ pub async fn load_frame(
 				)
 			}
 		}
-		TransferSyntaxClass::Uncompressed => {
-			return Err(anyhow!("frame decode failed: uncompressed decode not implemented yet"));
-		}
+		TransferSyntaxClass::Uncompressed => (
+			decode_uncompressed_to_png(
+				file.path.clone(),
+				request.frame,
+				request.window_center,
+				request.window_width,
+				file.default_window,
+			)
+			.await?,
+			"image/png",
+		),
 		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported => {
 			return Err(anyhow!(
 				"unsupported transfer syntax: {}",
@@ -182,6 +190,162 @@ fn decode_frame_to_png_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {
 		.write_to(&mut buffer, ImageFormat::Png)
 		.context("failed to encode PNG")?;
 	Ok(Bytes::from(buffer.into_inner()))
+}
+
+async fn decode_uncompressed_to_png(
+	path: PathBuf,
+	frame: u32,
+	requested_wc: Option<f64>,
+	requested_ww: Option<f64>,
+	default_window: Option<crate::types::WindowPreset>,
+) -> Result<Bytes> {
+	task::spawn_blocking(move || {
+		decode_uncompressed_to_png_blocking(
+			&path,
+			frame,
+			requested_wc,
+			requested_ww,
+			default_window,
+		)
+	})
+	.await
+	.context("uncompressed decode task failed")?
+}
+
+fn decode_uncompressed_to_png_blocking(
+	path: &PathBuf,
+	frame: u32,
+	requested_wc: Option<f64>,
+	requested_ww: Option<f64>,
+	default_window: Option<crate::types::WindowPreset>,
+) -> Result<Bytes> {
+	let object = open_file(path)
+		.with_context(|| format!("failed to open DICOM for uncompressed decode: {}", path.display()))?;
+
+	let rows = read_u32_tag(&object, "Rows").unwrap_or(0);
+	let columns = read_u32_tag(&object, "Columns").unwrap_or(0);
+	let samples_per_pixel = read_u32_tag(&object, "SamplesPerPixel").unwrap_or(1).max(1);
+	let bits_allocated = read_u32_tag(&object, "BitsAllocated").unwrap_or(8);
+	let pixel_representation = read_u32_tag(&object, "PixelRepresentation").unwrap_or(0);
+	let slope = read_f64_tag(&object, "RescaleSlope").unwrap_or(1.0);
+	let intercept = read_f64_tag(&object, "RescaleIntercept").unwrap_or(0.0);
+
+	let bytes_per_sample = (bits_allocated / 8) as usize;
+	if rows == 0 || columns == 0 || bytes_per_sample == 0 {
+		return Err(anyhow!("frame decode failed: invalid image geometry"));
+	}
+
+	let frame_size = rows as usize
+		* columns as usize
+		* samples_per_pixel as usize
+		* bytes_per_sample;
+	let offset = frame as usize * frame_size;
+
+	let pixel_bytes = object
+		.element_by_name("PixelData")
+		.context("frame decode failed: missing PixelData")?
+		.to_bytes()
+		.context("frame decode failed: pixel bytes unavailable")?
+		.into_owned();
+
+	if offset + frame_size > pixel_bytes.len() {
+		return Err(anyhow!("frame out of range"));
+	}
+
+	let frame_slice = &pixel_bytes[offset..offset + frame_size];
+	let signed = pixel_representation == 1;
+	// dicom-object normalizes primitive pixel bytes to host order for native pixel data.
+	// Decode from the normalized byte representation directly.
+	let raw_samples = decode_numeric_samples(frame_slice, bits_allocated, signed, false)?;
+	let rescaled: Vec<f64> = raw_samples
+		.into_iter()
+		.map(|value| value * slope + intercept)
+		.collect();
+
+	let luminance_samples = if samples_per_pixel > 1 {
+		rescaled
+			.chunks(samples_per_pixel as usize)
+			.map(|chunk| chunk[0])
+			.collect::<Vec<_>>()
+	} else {
+		rescaled
+	};
+
+	let resolved_window = resolve_window(requested_wc, requested_ww, default_window, &luminance_samples)
+		.ok_or_else(|| anyhow!("frame decode failed: could not resolve window"))?;
+	let windowed = apply_window(
+		&luminance_samples,
+		resolved_window.center,
+		resolved_window.width.max(1.0),
+	);
+
+	let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)
+		.ok_or_else(|| anyhow!("frame decode failed: windowed buffer size mismatch"))?;
+	let mut encoded = Cursor::new(Vec::<u8>::new());
+	image::DynamicImage::ImageLuma8(image)
+		.write_to(&mut encoded, ImageFormat::Png)
+		.context("frame decode failed: png encoding failed")?;
+
+	Ok(Bytes::from(encoded.into_inner()))
+}
+
+fn decode_numeric_samples(
+	frame_slice: &[u8],
+	bits_allocated: u32,
+	signed: bool,
+	big_endian: bool,
+) -> Result<Vec<f64>> {
+	match (bits_allocated, signed) {
+		(8, false) => Ok(frame_slice.iter().map(|value| *value as f64).collect()),
+		(8, true) => Ok(frame_slice.iter().map(|value| (*value as i8) as f64).collect()),
+		(16, false) => {
+			let mut out = Vec::with_capacity(frame_slice.len() / 2);
+			for chunk in frame_slice.chunks_exact(2) {
+				let value = if big_endian {
+					u16::from_be_bytes([chunk[0], chunk[1]])
+				} else {
+					u16::from_le_bytes([chunk[0], chunk[1]])
+				};
+				out.push(value as f64);
+			}
+			Ok(out)
+		}
+		(16, true) => {
+			let mut out = Vec::with_capacity(frame_slice.len() / 2);
+			for chunk in frame_slice.chunks_exact(2) {
+				let value = if big_endian {
+					i16::from_be_bytes([chunk[0], chunk[1]])
+				} else {
+					i16::from_le_bytes([chunk[0], chunk[1]])
+				};
+				out.push(value as f64);
+			}
+			Ok(out)
+		}
+		_ => Err(anyhow!(
+			"frame decode failed: unsupported BitsAllocated {bits_allocated} for uncompressed path"
+		)),
+	}
+}
+
+fn read_u32_tag(object: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {
+	object
+		.element_by_name(name)
+		.ok()?
+		.to_str()
+		.ok()
+		.and_then(|value| value.split('\\').next().map(str::trim).map(str::to_string))
+		.and_then(|value| value.parse::<u32>().ok())
+}
+
+fn read_f64_tag(object: &dicom_object::DefaultDicomObject, name: &str) -> Option<f64> {
+	object
+		.element_by_name(name)
+		.ok()?
+		.to_str()
+		.ok()
+		.and_then(|value| value.split('\\').next().map(str::trim).map(str::to_string))
+		.and_then(|value| value.parse::<f64>().ok())
 }
 
 pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
