@@ -100,7 +100,7 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
 	println!("dcmview: press Ctrl+C to stop");
 
 	if let Some(timeout) = config.timeout_seconds {
-		spawn_idle_timeout_watcher(timeout, state.last_request.clone());
+		spawn_idle_timeout_watcher(timeout, state.last_request.clone(), state.tunnel_handle.clone());
 	}
 
 	let tunnel_handle = state.tunnel_handle.clone();
@@ -376,13 +376,20 @@ fn touch_request(state: &AppState) {
 	state.last_request.store(now_unix_ms(), Ordering::Relaxed);
 }
 
-fn spawn_idle_timeout_watcher(timeout_seconds: u64, last_request: Arc<AtomicU64>) {
+fn spawn_idle_timeout_watcher(
+	timeout_seconds: u64,
+	last_request: Arc<AtomicU64>,
+	tunnel_handle: Option<Arc<TunnelHandle>>,
+) {
 	tokio::spawn(async move {
 		loop {
 			tokio::time::sleep(Duration::from_secs(1)).await;
 			let now = now_unix_ms();
 			let last = last_request.load(Ordering::Relaxed);
 			if last > 0 && now.saturating_sub(last) >= timeout_seconds * 1_000 {
+				if let Some(handle) = &tunnel_handle {
+					handle.shutdown();
+				}
 				println!("dcmview: shutting down...");
 				std::process::exit(0);
 			}
