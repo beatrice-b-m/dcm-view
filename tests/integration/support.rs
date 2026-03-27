@@ -1,9 +1,14 @@
+use dcmview::pixels;
+use dcmview::server::{now_unix_ms, AppState};
 use dcmview::types::FileEntry;
 use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use std::time::Instant;
 
 pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragments: Vec<Vec<u8>>) {
 	let frame_count = fragments.len().max(1) as u32;
@@ -54,5 +59,18 @@ pub fn file_entry(path: PathBuf, transfer_syntax_uid: &str, frame_count: u32) ->
 		transfer_syntax_uid: transfer_syntax_uid.to_string(),
 		default_window: None,
 		offset_table: None,
+	}
+}
+
+
+pub fn app_state(files: Vec<FileEntry>) -> AppState {
+	AppState {
+		files: Arc::new(files),
+		pixel_cache: pixels::new_cache(),
+		tunnel_info: None,
+		tunnel_handle: None,
+		server_start: Instant::now(),
+		server_start_ms: now_unix_ms(),
+		last_request: Arc::new(AtomicU64::new(now_unix_ms())),
 	}
 }

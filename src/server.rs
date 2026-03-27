@@ -1,5 +1,5 @@
 use crate::pixels::{self, FrameRequest};
-use crate::tunnel::TunnelHandle;
+use crate::tunnel::{self, TunnelHandle};
 use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TunnelInfo};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
@@ -28,10 +28,18 @@ pub struct AppState {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelConfig {
+	pub host: String,
+	pub port: u16,
+}
+
+#[derive(Debug, Clone)]
 pub struct ServerConfig {
 	pub host: String,
 	pub port: u16,
 	pub timeout_seconds: Option<u64>,
+	pub open_browser: bool,
+	pub tunnel: Option<TunnelConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,29 +52,56 @@ struct FrameQuery {
 #[folder = "frontend/dist"]
 struct FrontendAssets;
 
-pub async fn run(config: ServerConfig, state: AppState) -> Result<()> {
+pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
 	let bind_addr = format!("{}:{}", config.host, config.port);
 	let listener = TcpListener::bind(&bind_addr)
 		.await
 		.with_context(|| format!("failed to bind to {bind_addr}"))?;
 	let local_addr = listener.local_addr().context("failed to read local bind address")?;
+	let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
 
-	println!("dcmview: server running at http://{}:{}", local_addr.ip(), local_addr.port());
-	if state.tunnel_info.is_none() {
+	println!("dcmview: server running at {server_url}");
+
+	if let Some(tunnel_cfg) = config.tunnel {
+		let runtime = tunnel::start_tunnel(local_addr.port(), tunnel_cfg.host.clone(), tunnel_cfg.port)?;
+		if let Some(warning) = runtime.warning.as_deref() {
+			eprintln!("{warning}");
+			eprintln!("dcmview: to forward manually, run on your local machine:");
+			eprintln!(
+				"dcmview:   ssh -L {0}:localhost:{0} {1}",
+				runtime.info.tunnel_port, runtime.info.tunnel_host
+			);
+		} else {
+			println!(
+				"dcmview: SSH tunnel active — access at http://localhost:{} on your local machine",
+				runtime.info.tunnel_port
+			);
+		}
+		state.tunnel_info = Some(Arc::new(runtime.info));
+		state.tunnel_handle = runtime.handle.map(Arc::new);
+	} else {
 		println!(
 			"dcmview: (on a remote server? run on your local machine: ssh -L {0}:localhost:{0} user@host)",
 			local_addr.port()
 		);
 	}
+
+	if config.open_browser {
+		if let Err(error) = open::that(&server_url) {
+			eprintln!("dcmview: warning — failed to open browser: {error}");
+		}
+	}
+
 	println!("dcmview: press Ctrl+C to stop");
 
 	if let Some(timeout) = config.timeout_seconds {
 		spawn_idle_timeout_watcher(timeout, state.last_request.clone());
 	}
 
-	let app = app_router(state);
+	let tunnel_handle = state.tunnel_handle.clone();
+	let app = router(state);
 	axum::serve(listener, app)
-		.with_graceful_shutdown(shutdown_signal())
+		.with_graceful_shutdown(shutdown_signal(tunnel_handle))
 		.await
 		.context("server failed")
 }
@@ -78,7 +113,7 @@ pub fn now_unix_ms() -> u64 {
 		.as_millis() as u64
 }
 
-fn app_router(state: AppState) -> Router {
+pub fn router(state: AppState) -> Router {
 	Router::new()
 		.route("/", get(index_handler))
 		.route("/assets/*path", get(asset_handler))
@@ -232,7 +267,7 @@ fn spawn_idle_timeout_watcher(timeout_seconds: u64, last_request: Arc<AtomicU64>
 	});
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(tunnel_handle: Option<Arc<TunnelHandle>>) {
 	let ctrl_c = async {
 		tokio::signal::ctrl_c().await.expect("ctrl+c handler");
 	};
@@ -253,6 +288,9 @@ async fn shutdown_signal() {
 		_ = terminate => {},
 	}
 
+	if let Some(handle) = tunnel_handle {
+		handle.shutdown();
+	}
 	println!("dcmview: shutting down...");
 }
 

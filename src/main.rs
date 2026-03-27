@@ -2,8 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use dcmview::loader;
 use dcmview::pixels;
-use dcmview::server::{self, now_unix_ms, AppState, ServerConfig};
-use dcmview::tunnel;
+use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
 use dcmview::types;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -65,45 +64,55 @@ async fn run() -> Result<()> {
 
 	print_load_summary(&load_report, &cli.paths);
 
-	let mut tunnel_info = None;
-	let mut tunnel_handle = None;
-	if cli.tunnel {
-		let tunnel_host = cli
+	let tunnel = if cli.tunnel {
+		let host = cli
 			.tunnel_host
 			.clone()
 			.ok_or_else(|| anyhow::anyhow!("dcmview: --tunnel requires --tunnel-host"))?;
-		let runtime = tunnel::start_tunnel(cli.port, tunnel_host, cli.tunnel_port)?;
-		if let Some(warning) = runtime.warning.as_deref() {
-			eprintln!("{warning}");
-			eprintln!("dcmview: to forward manually, run on your local machine:");
-			eprintln!(
-				"dcmview:   ssh -L {0}:localhost:{0} {1}",
-				runtime.info.tunnel_port, runtime.info.tunnel_host
-			);
-		}
-		tunnel_info = Some(Arc::new(runtime.info));
-		tunnel_handle = runtime.handle.map(Arc::new);
-	}
+		Some(TunnelConfig {
+			host,
+			port: cli.tunnel_port,
+		})
+	} else {
+		None
+	};
 
 	let state = AppState {
 		files: Arc::new(load_report.files),
 		pixel_cache: pixels::new_cache(),
-		tunnel_info,
-		tunnel_handle,
+		tunnel_info: None,
+		tunnel_handle: None,
 		server_start: Instant::now(),
 		server_start_ms: now_unix_ms(),
 		last_request: Arc::new(AtomicU64::new(now_unix_ms())),
 	};
 
-	server::run(
+	let run_result = server::run(
 		ServerConfig {
 			host: cli.host,
 			port: cli.port,
 			timeout_seconds: cli.timeout,
+			open_browser: !cli.no_browser,
+			tunnel,
 		},
 		state,
 	)
-	.await
+	.await;
+
+	match run_result {
+		Ok(()) => Ok(()),
+		Err(error) => {
+			let message = error.to_string();
+			if cli.port != 0 && (message.contains("Address already in use") || message.contains("failed to bind")) {
+				Err(anyhow::anyhow!(
+					"dcmview: port {} is already in use — try --port 0 for auto-assign",
+					cli.port
+				))
+			} else {
+				Err(error)
+			}
+		}
+	}
 }
 
 fn print_load_summary(report: &types::LoadReport, input_paths: &[PathBuf]) {
