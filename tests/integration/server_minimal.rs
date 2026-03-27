@@ -63,3 +63,21 @@ async fn returns_not_found_for_out_of_range_frame() {
 	let response = test_server.get("/api/file/0/frame/3").await;
 	response.assert_status_not_found();
 }
+
+
+#[tokio::test]
+async fn serves_embedded_frontend_shell_at_root() {
+	let app = server::router(support::app_state(Vec::new()));
+	let test_server = TestServer::new(app).expect("test server");
+
+	let response = test_server.get("/").await;
+	response.assert_status_ok();
+	assert!(
+		response
+			.header(header::CONTENT_TYPE)
+			.to_str()
+			.expect("content-type header")
+			.starts_with("text/html"),
+		"root endpoint should return embedded index.html"
+	);
+}
