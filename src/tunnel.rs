@@ -28,18 +28,19 @@ pub struct TunnelRuntime {
 }
 
 pub fn start_tunnel(bind_port: u16, tunnel_host: String, tunnel_port: u16) -> Result<TunnelRuntime> {
+	let expose_port = if tunnel_port == 0 { bind_port } else { tunnel_port };
+
 	if !ssh_available() {
 		return Ok(TunnelRuntime {
 			info: TunnelInfo {
 				tunnel_host,
-				tunnel_port,
+				tunnel_port: expose_port,
 			},
 			handle: None,
 			warning: Some("dcmview: warning — ssh not found on PATH, cannot establish tunnel".to_string()),
 		});
 	}
 
-	let expose_port = if tunnel_port == 0 { bind_port } else { tunnel_port };
 	let mut child = Command::new("ssh")
 		.args([
 			"-N",
