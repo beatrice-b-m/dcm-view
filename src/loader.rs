@@ -20,6 +20,7 @@ pub async fn discover(paths: &[PathBuf], options: DiscoverOptions) -> Result<Loa
 
 fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<LoadReport> {
 	let mut candidates = Vec::new();
+	let mut skipped = 0_usize;
 
 	for path in paths {
 		if path.is_file() {
@@ -33,14 +34,26 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
 				walker = walker.max_depth(1);
 			}
 
-			for entry in walker.into_iter().filter_map(|entry| entry.ok()) {
-				let entry_path = entry.path();
-				if entry_path.is_file() {
-					candidates.push(entry_path.to_path_buf());
+			for entry in walker.into_iter() {
+				match entry {
+					Ok(dir_entry) if dir_entry.path().is_file() => {
+						candidates.push(dir_entry.path().to_path_buf());
+					}
+					Ok(_) => {}
+					Err(error) => {
+						skipped += 1;
+						eprintln!("dcmview: warning — could not read path entry: {error}");
+					}
 				}
 			}
 			continue;
 		}
+
+		skipped += 1;
+		eprintln!(
+			"dcmview: warning — input path does not exist or is unsupported: {}",
+			path.display()
+		);
 	}
 
 	let processed: Vec<_> = candidates
@@ -49,13 +62,15 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
 		.collect();
 
 	let mut files = Vec::new();
-	let mut skipped = 0_usize;
 
 	for item in processed {
 		match item {
 			Ok(Some(entry)) => files.push(entry),
 			Ok(None) => skipped += 1,
-			Err(_) => skipped += 1,
+			Err(error) => {
+				skipped += 1;
+				eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
+			}
 		}
 	}
 
@@ -81,7 +96,7 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
 		Err(_) => return Ok(None),
 	};
 
-	let transfer_syntax_uid = read_str(&obj, "TransferSyntaxUID").unwrap_or_else(|| "unknown".to_string());
+	let transfer_syntax_uid = obj.meta().transfer_syntax().to_string();
 	let patient_id = read_str(&obj, "PatientID").unwrap_or_default();
 	let modality = read_str(&obj, "Modality").unwrap_or_default();
 	let study_date = read_str(&obj, "StudyDate").unwrap_or_default();
@@ -119,7 +134,7 @@ fn read_str(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<String
 	obj.element_by_name(name)
 		.ok()
 		.and_then(|element| element.to_str().ok())
-		.map(|value| value.to_string())
+		.map(|value| value.split('\\').next().unwrap_or(value.as_ref()).trim().to_string())
 }
 
 fn read_u32(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {

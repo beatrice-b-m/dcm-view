@@ -1,12 +1,10 @@
-mod loader;
-mod pixels;
-mod server;
-mod tunnel;
-mod types;
-
 use anyhow::{Context, Result};
 use clap::Parser;
-use server::{now_unix_ms, AppState, ServerConfig};
+use dcmview::loader;
+use dcmview::pixels;
+use dcmview::server::{self, now_unix_ms, AppState, ServerConfig};
+use dcmview::tunnel;
+use dcmview::types;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
