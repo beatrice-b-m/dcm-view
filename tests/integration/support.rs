@@ -5,9 +5,10 @@ use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragments: Vec<Vec<u8>>) {
@@ -67,6 +68,7 @@ pub fn app_state(files: Vec<FileEntry>) -> AppState {
 	AppState {
 		files: Arc::new(files),
 		pixel_cache: pixels::new_cache(),
+		tag_cache: Arc::new(Mutex::new(HashMap::new())),
 		tunnel_info: None,
 		tunnel_handle: None,
 		server_start: Instant::now(),

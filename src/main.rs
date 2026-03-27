@@ -4,9 +4,10 @@ use dcmview::loader;
 use dcmview::pixels;
 use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
 use dcmview::types;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Debug, Parser)]
@@ -80,6 +81,7 @@ async fn run() -> Result<()> {
 	let state = AppState {
 		files: Arc::new(load_report.files),
 		pixel_cache: pixels::new_cache(),
+		tag_cache: Arc::new(Mutex::new(HashMap::new())),
 		tunnel_info: None,
 		tunnel_handle: None,
 		server_start: Instant::now(),

@@ -1,6 +1,6 @@
 use crate::pixels::{self, FrameRequest};
 use crate::tunnel::{self, TunnelHandle};
-use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TunnelInfo};
+use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -8,9 +8,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bytes::Bytes;
+use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
+use dicom_dictionary_std::StandardDataDictionary;
+use dicom_object::{open_file, InMemDicomObject};
 use lru::LruCache;
 use rust_embed::RustEmbed;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -20,6 +24,7 @@ use tokio::net::TcpListener;
 pub struct AppState {
 	pub files: Arc<Vec<FileEntry>>,
 	pub pixel_cache: Arc<Mutex<LruCache<crate::types::FrameCacheKey, Bytes>>>,
+	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
 	pub tunnel_info: Option<Arc<TunnelInfo>>,
 	pub tunnel_handle: Option<Arc<TunnelHandle>>,
 	pub server_start: Instant,
@@ -203,11 +208,129 @@ async fn frame_handler(
 
 async fn tags_handler(State(state): State<AppState>, Path(index): Path<usize>) -> Result<Json<Vec<TagNode>>, ApiError> {
 	touch_request(&state);
-	let _file = state
+	let file = state
 		.files
 		.get(index)
 		.ok_or_else(|| ApiError::not_found("file index out of range"))?;
-	Ok(Json(Vec::new()))
+
+	if let Ok(cache) = state.tag_cache.lock() {
+		if let Some(nodes) = cache.get(&index).cloned() {
+			return Ok(Json(nodes));
+		}
+	}
+
+	let nodes = build_tag_tree(&file.path)
+		.map_err(|error| ApiError::internal(format!("tag serialization failed: {error}")))?;
+
+	if let Ok(mut cache) = state.tag_cache.lock() {
+		cache.insert(index, nodes.clone());
+	}
+
+	Ok(Json(nodes))
+}
+
+fn build_tag_tree(path: &std::path::Path) -> Result<Vec<TagNode>> {
+	let object = open_file(path)
+		.with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
+		.into_inner();
+	Ok(serialize_object_tags(&object))
+}
+
+fn serialize_object_tags(object: &InMemDicomObject<StandardDataDictionary>) -> Vec<TagNode> {
+	object.iter().map(serialize_element).collect()
+}
+
+fn serialize_element(
+	element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
+) -> TagNode {
+	let tag = element.header().tag;
+	let tag_repr = format!("({:04X},{:04X})", tag.0, tag.1);
+	let vr_repr = format!("{}", element.header().vr());
+	let keyword = StandardDataDictionary
+		.by_tag(tag)
+		.map(|entry| entry.alias().to_string())
+		.unwrap_or_else(|| "Unknown".to_string());
+
+	let value = serialize_tag_value(element, tag_repr.as_str(), &vr_repr);
+
+	TagNode {
+		tag: tag_repr,
+		vr: vr_repr,
+		keyword,
+		value,
+	}
+}
+
+fn serialize_tag_value(
+	element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
+	tag_repr: &str,
+	vr_repr: &str,
+) -> TagValue {
+	if tag_repr == "(7FE0,0010)" {
+		return binary_value_from_element(element);
+	}
+
+	if vr_repr == "SQ" {
+		return match element.items() {
+			Some(items) => TagValue::Sequence {
+				items: items.iter().map(serialize_object_tags).collect(),
+			},
+			None => TagValue::Error {
+				message: "sequence item decoding failed".to_string(),
+			},
+		};
+	}
+
+	if matches!(vr_repr, "OB" | "OW" | "OD" | "OF" | "UN" | "OL") {
+		return binary_value_from_element(element);
+	}
+
+	let string_value = match element.to_str() {
+		Ok(value) => value.to_string(),
+		Err(error) => {
+			return TagValue::Error {
+				message: format!("value serialization failed: {error}"),
+			};
+		}
+	};
+
+	if is_numeric_vr(vr_repr) {
+		let numbers = string_value
+			.split('\\')
+			.filter_map(|part| part.trim().parse::<f64>().ok())
+			.collect::<Vec<_>>();
+		if numbers.is_empty() {
+			TagValue::Error {
+				message: "numeric conversion failed".to_string(),
+			}
+		} else if numbers.len() == 1 {
+			TagValue::Number { value: numbers[0] }
+		} else {
+			TagValue::Numbers { value: numbers }
+		}
+	} else {
+		let text = if string_value.len() > 256 {
+			format!("{}…", &string_value[..256])
+		} else {
+			string_value.replace('\\', "; ")
+		};
+		TagValue::String { value: text }
+	}
+}
+
+fn binary_value_from_element(element: &dicom_object::mem::InMemElement<StandardDataDictionary>) -> TagValue {
+	match element.to_bytes() {
+		Ok(bytes) => TagValue::Binary {
+			length: bytes.len(),
+		},
+		Err(error) => TagValue::Error {
+			message: format!("binary serialization failed: {error}"),
+		},
+	}
+}
+
+fn is_numeric_vr(vr_repr: &str) -> bool {
+	matches!(vr_repr, "US" | "SS" | "UL" | "SL" | "FL" | "FD" | "DS" | "IS")
 }
 
 async fn index_handler() -> impl IntoResponse {
