@@ -39,15 +39,21 @@
 		/>
 		<section class="content">
 			<ImageViewport
+				files={filesResponse.files}
+				activeFileIndex={activeFileIndex}
+				currentFrame={currentFrame}
+				bind:windowCenter
+				bind:windowWidth
+			/>
+			<TagPanel files={filesResponse.files} activeFileIndex={activeFileIndex} />
+		</section>
+		<FrameSlider
 			files={filesResponse.files}
 			activeFileIndex={activeFileIndex}
-			currentFrame={currentFrame}
+			bind:currentFrame
 			windowCenter={windowCenter}
 			windowWidth={windowWidth}
 		/>
-			<TagPanel files={filesResponse.files} activeFileIndex={activeFileIndex} />
-		</section>
-		<FrameSlider files={filesResponse.files} activeFileIndex={activeFileIndex} bind:currentFrame />
 		<StatusBar
 			serverStartMs={filesResponse.server_start_ms}
 			fileCount={filesResponse.files.length}
