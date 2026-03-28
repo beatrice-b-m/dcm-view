@@ -87,9 +87,28 @@
 		}
 		event.preventDefault();
 		const current = activeTransform;
-		const delta = event.deltaY < 0 ? 0.05 : -0.05;
-		const nextScale = Math.min(8, Math.max(0.2, current.scale + delta));
-		updateTransform(activeFile.index, { ...current, scale: nextScale });
+
+		// Pinch-to-zoom on trackpads fires wheel events with ctrlKey=true.
+		// Discrete mouse wheels use deltaMode=1 (line) or deltaMode=2 (page).
+		// deltaMode=0 (pixel) without ctrlKey is a trackpad two-finger scroll → pan.
+		const isPinchZoom = event.ctrlKey && event.deltaMode === 0;
+		const isDiscreteWheel = event.deltaMode !== 0;
+
+		if (isPinchZoom || isDiscreteWheel) {
+			// Zoom: pinch gesture or mouse wheel
+			const delta = isPinchZoom
+				? -event.deltaY * 0.01  // pinch: continuous, scale-proportional
+				: event.deltaY < 0 ? 0.05 : -0.05;  // wheel: fixed step per click
+			const nextScale = Math.min(8, Math.max(0.2, current.scale + delta));
+			updateTransform(activeFile.index, { ...current, scale: nextScale });
+		} else {
+			// Trackpad scroll: pan the image
+			updateTransform(activeFile.index, {
+				...current,
+				tx: current.tx - event.deltaX,
+				ty: current.ty - event.deltaY,
+			});
+		}
 	}
 
 	function onPointerDown(event: PointerEvent) {
