@@ -1,4 +1,4 @@
-use crate::types::{ErrorResponse, FileEntry, FrameCacheKey, ResolvedWindow, TransferSyntaxClass};
+use crate::types::{FileEntry, FrameCacheKey, ResolvedWindow, TransferSyntaxClass};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use dicom_object::collector::DicomCollector;
@@ -414,10 +414,4 @@ pub fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
 		.iter()
 		.map(|sample| (((sample.clamp(low, high) - low) / (high - low)) * 255.0).round() as u8)
 		.collect()
-}
-
-pub fn unsupported_ts_error(uid: &str) -> ErrorResponse {
-	ErrorResponse {
-		error: format!("unsupported transfer syntax: {uid}"),
-	}
 }

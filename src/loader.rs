@@ -126,7 +126,6 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
 		columns,
 		transfer_syntax_uid,
 		default_window,
-		offset_table: None,
 	}))
 }
 

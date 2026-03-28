@@ -59,7 +59,6 @@ pub fn file_entry(path: PathBuf, transfer_syntax_uid: &str, frame_count: u32) ->
 		columns: 16,
 		transfer_syntax_uid: transfer_syntax_uid.to_string(),
 		default_window: None,
-		offset_table: None,
 	}
 }
 

@@ -25,7 +25,6 @@ async fn serializes_sequences_and_binary_values_without_leaking_raw_pixel_data()
 		columns: 8,
 		transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
 		default_window: None,
-		offset_table: None,
 	};
 
 	let app = server::router(support::app_state(vec![file]));

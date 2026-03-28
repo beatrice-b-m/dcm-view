@@ -18,7 +18,6 @@ pub struct FileEntry {
 	pub columns: u32,
 	pub transfer_syntax_uid: String,
 	pub default_window: Option<WindowPreset>,
-	pub offset_table: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
