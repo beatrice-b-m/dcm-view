@@ -17,7 +17,7 @@ async fn exposes_files_info_and_frame_endpoints_with_cache_headers() {
 		"1.2.840.10008.1.2.4.50",
 		1,
 	)]));
-	let test_server = TestServer::new(app).expect("test server");
+	let test_server = TestServer::new(app);
 
 	let files_response = test_server.get("/api/files").await;
 	files_response.assert_status_ok();
@@ -58,7 +58,7 @@ async fn returns_not_found_for_out_of_range_frame() {
 		"1.2.840.10008.1.2.4.50",
 		1,
 	)]));
-	let test_server = TestServer::new(app).expect("test server");
+	let test_server = TestServer::new(app);
 
 	let response = test_server.get("/api/file/0/frame/3").await;
 	response.assert_status_not_found();
@@ -68,7 +68,7 @@ async fn returns_not_found_for_out_of_range_frame() {
 #[tokio::test]
 async fn serves_embedded_frontend_shell_at_root() {
 	let app = server::router(support::app_state(Vec::new()));
-	let test_server = TestServer::new(app).expect("test server");
+	let test_server = TestServer::new(app);
 
 	let response = test_server.get("/").await;
 	response.assert_status_ok();
@@ -85,7 +85,7 @@ async fn serves_embedded_frontend_shell_at_root() {
 #[tokio::test]
 async fn serves_js_and_css_assets_with_correct_mime_types() {
 	let app = server::router(support::app_state(Vec::new()));
-	let test_server = TestServer::new(app).expect("test server");
+	let test_server = TestServer::new(app);
 
 	// Discover actual asset filenames from the index.html body
 	let index_body = test_server.get("/").await.text();

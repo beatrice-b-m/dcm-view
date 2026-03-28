@@ -72,7 +72,7 @@ async fn decodes_jpeg_lossless_to_png_instead_of_passthrough() {
 		"1.2.840.10008.1.2.4.70",
 		1,
 	)]));
-	let test_server = TestServer::new(app).expect("test server");
+	let test_server = TestServer::new(app);
 
 	let response = test_server
 		.get("/api/file/0/frame/0")

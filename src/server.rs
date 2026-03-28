@@ -121,11 +121,11 @@ pub fn now_unix_ms() -> u64 {
 pub fn router(state: AppState) -> Router {
 	Router::new()
 		.route("/", get(index_handler))
-		.route("/assets/*path", get(asset_handler))
+		.route("/assets/{*path}", get(asset_handler))
 		.route("/api/files", get(files_handler))
-		.route("/api/file/:index/info", get(info_handler))
-		.route("/api/file/:index/frame/:frame", get(frame_handler))
-		.route("/api/file/:index/tags", get(tags_handler))
+		.route("/api/file/{index}/info", get(info_handler))
+		.route("/api/file/{index}/frame/{frame}", get(frame_handler))
+		.route("/api/file/{index}/tags", get(tags_handler))
 		.with_state(state)
 }
 

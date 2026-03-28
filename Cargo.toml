@@ -16,10 +16,10 @@ dicom-dictionary-std = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "native", "openjp2"] }
 
 # Web server
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Asset embedding
 rust-embed = { version = "8", features = ["axum"] }
@@ -36,7 +36,7 @@ jpeg2k = { version = "0.10", default-features = false, features = ["openjp2"] }
 clap = { version = "4", features = ["derive"] }
 
 # Cache
-lru = "0.12"
+lru = "0.16"
 
 # Parallel file discovery
 rayon = "1"
@@ -57,5 +57,5 @@ urlencoding = "2"
 
 [dev-dependencies]
 tempfile = "3"
-axum-test = "14"
+axum-test = "19"
 reqwest = { version = "0.12", features = ["json"] }

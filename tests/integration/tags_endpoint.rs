@@ -28,7 +28,7 @@ async fn serializes_sequences_and_binary_values_without_leaking_raw_pixel_data()
 	};
 
 	let app = server::router(support::app_state(vec![file]));
-	let test_server = TestServer::new(app).expect("test server");
+	let test_server = TestServer::new(app);
 
 	let response = test_server.get("/api/file/0/tags").await;
 	response.assert_status_ok();
