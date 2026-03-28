@@ -40,6 +40,8 @@
 	let liveWindowCenter = $state<number | null>(null);
 	let liveWindowWidth = $state<number | null>(null);
 	let wlDebounce: ReturnType<typeof setTimeout> | null = null;
+	let viewportEl: HTMLElement | undefined = $state();
+	let imgEl: HTMLImageElement | undefined = $state();
 
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
 	const activeFile = $derived(files[activeFileIndex]);
@@ -81,12 +83,34 @@
 		};
 	}
 
+	/**
+	 * Zoom to `newScale`, keeping the point under (`clientX`, `clientY`) fixed.
+	 * Coordinates are in client (page) space, not element-relative.
+	 */
+	function zoomAt(newScale: number, clientX: number, clientY: number) {
+		if (!activeFile || !imgEl) return;
+		const { scale, tx, ty } = activeTransform;
+		const clamped = Math.min(8, Math.max(0.2, newScale));
+		const imgRect = imgEl.getBoundingClientRect();
+		// Local image coords under the cursor (rendered pos = imgRect.left + lx * scale)
+		const lx = (clientX - imgRect.left) / scale;
+		const ly = (clientY - imgRect.top) / scale;
+		// Image's natural (un-transformed) position
+		const natX = imgRect.left - tx;
+		const natY = imgRect.top - ty;
+		// Solve for new tx/ty so the same local point stays under the cursor
+		updateTransform(activeFile.index, {
+			scale: clamped,
+			tx: clientX - natX - lx * clamped,
+			ty: clientY - natY - ly * clamped,
+		});
+	}
+
 	function onWheel(event: WheelEvent) {
 		if (!activeFile || !activeFile.has_pixels) {
 			return;
 		}
 		event.preventDefault();
-		const current = activeTransform;
 
 		// Pinch-to-zoom on trackpads fires wheel events with ctrlKey=true.
 		// Discrete mouse wheels use deltaMode=1 (line) or deltaMode=2 (page).
@@ -95,14 +119,13 @@
 		const isDiscreteWheel = event.deltaMode !== 0;
 
 		if (isPinchZoom || isDiscreteWheel) {
-			// Zoom: pinch gesture or mouse wheel
 			const delta = isPinchZoom
-				? -event.deltaY * 0.01  // pinch: continuous, scale-proportional
-				: event.deltaY < 0 ? 0.05 : -0.05;  // wheel: fixed step per click
-			const nextScale = Math.min(8, Math.max(0.2, current.scale + delta));
-			updateTransform(activeFile.index, { ...current, scale: nextScale });
+				? -event.deltaY * 0.01
+				: event.deltaY < 0 ? 0.05 : -0.05;
+			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
 		} else {
 			// Trackpad scroll: pan the image
+			const current = activeTransform;
 			updateTransform(activeFile.index, {
 				...current,
 				tx: current.tx - event.deltaX,
@@ -202,8 +225,11 @@
 
 	function zoomToLevel(level: number) {
 		if (!activeFile || !activeFile.has_pixels) return;
-		const current = activeTransform;
-		updateTransform(activeFile.index, { ...current, scale: level });
+		// Button-triggered: zoom around viewport center (in client coords)
+		const rect = viewportEl?.getBoundingClientRect();
+		const cx = rect ? rect.left + rect.width / 2 : 0;
+		const cy = rect ? rect.top + rect.height / 2 : 0;
+		zoomAt(level, cx, cy);
 	}
 
 	function stepZoom(direction: 1 | -1) {
@@ -220,6 +246,7 @@
 </script>
 
 <section
+	bind:this={viewportEl}
 	class="viewport"
 	role="application"
 	onwheel={onWheel}
@@ -241,6 +268,7 @@
 			<div class="loading">Loading frame…</div>
 		{/if}
 		<img
+			bind:this={imgEl}
 			src={src}
 			alt={`frame ${currentFrame + 1}`}
 			draggable="false"
@@ -262,7 +290,7 @@
 		</div>
 		<div class="zoom-controls">
 			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= ZOOM_STEPS[0]}>−</button>
-			<button type="button" class="zoom-level" onclick={() => zoomToLevel(1)}>{zoomPercent}%</button>
+			<button type="button" class="zoom-level" onclick={() => { if (activeFile) updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 }); }}>{zoomPercent}%</button>
 			<button type="button" onclick={() => stepZoom(1)} disabled={activeTransform.scale >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}>+</button>
 		</div>
 	{/if}
@@ -282,7 +310,7 @@
 		max-width: 100%;
 		max-height: 100%;
 		object-fit: contain;
-		transform-origin: center;
+		transform-origin: 0 0;
 		transition: transform 0.03s linear;
 	}
 	.placeholder,
