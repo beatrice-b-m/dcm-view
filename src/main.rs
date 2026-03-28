@@ -51,7 +51,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-	tracing_subscriber::fmt().with_env_filter("info").init();
+	tracing_subscriber::fmt().with_env_filter("info,jpeg2k=warn").init();
 	let cli = Cli::parse();
 
 	let load_report = loader::discover(

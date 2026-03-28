@@ -642,6 +642,7 @@ dependencies = [
  "dicom-pixeldata",
  "futures",
  "image",
+ "jpeg2k",
  "lru",
  "open",
  "rayon",

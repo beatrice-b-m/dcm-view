@@ -30,6 +30,7 @@ serde_json = "1"
 
 # Image encoding
 image = "0.25"
+jpeg2k = { version = "0.10", default-features = false, features = ["openjp2"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }

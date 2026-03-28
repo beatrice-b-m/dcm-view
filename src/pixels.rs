@@ -4,7 +4,7 @@ use bytes::Bytes;
 use dicom_object::collector::DicomCollector;
 use dicom_object::open_file;
 use dicom_pixeldata::PixelDecoder;
-use image::{ImageBuffer, ImageFormat, Luma};
+use image::{ImageBuffer, ImageFormat, Luma, Rgb};
 use lru::LruCache;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
@@ -54,7 +54,10 @@ pub async fn load_frame(
 
 	let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
 	let jp2_accept = accepts_jp2(request.accept_header.as_deref());
-	let cache_allowed = !matches!(syntax_class, TransferSyntaxClass::Jpeg2000) || jp2_accept;
+	// JP2 passthrough (raw fragment) is cheap and doesn't need caching.
+	// JP2 decoded PNG must be cached — decode is expensive.
+	// Caching both would cause key collisions (same key, different content types).
+	let cache_allowed = !matches!(syntax_class, TransferSyntaxClass::Jpeg2000) || !jp2_accept;
 	let key = FrameCacheKey::new(
 		request.file_index,
 		request.frame,
@@ -91,7 +94,14 @@ pub async fn load_frame(
 				)
 			} else {
 				(
-					decode_frame_to_png(file.path.clone(), request.frame).await?,
+					decode_jp2_fragment_to_png(
+						file.path.clone(),
+						request.frame,
+						request.window_center,
+						request.window_width,
+						file.default_window,
+					)
+					.await?,
 					"image/png",
 				)
 			}
@@ -172,6 +182,93 @@ fn read_encapsulated_fragment_blocking(path: &PathBuf, frame: u32) -> Result<Byt
 	}
 
 	Ok(Bytes::from(fragment))
+}
+
+async fn decode_jp2_fragment_to_png(
+	path: PathBuf,
+	frame: u32,
+	requested_wc: Option<f64>,
+	requested_ww: Option<f64>,
+	default_window: Option<crate::types::WindowPreset>,
+) -> Result<Bytes> {
+	task::spawn_blocking(move || {
+		decode_jp2_fragment_to_png_blocking(&path, frame, requested_wc, requested_ww, default_window)
+	})
+	.await
+	.context("jp2 fragment decode task failed")?
+}
+
+fn decode_jp2_fragment_to_png_blocking(
+	path: &PathBuf,
+	frame: u32,
+	requested_wc: Option<f64>,
+	requested_ww: Option<f64>,
+	default_window: Option<crate::types::WindowPreset>,
+) -> Result<Bytes> {
+	let fragment = read_encapsulated_fragment_blocking(path, frame)?;
+
+	let jp2_image = jpeg2k::Image::from_bytes(&fragment)
+		.map_err(anyhow::Error::from)
+		.context("failed to decode JP2 fragment")?;
+
+	let comps = jp2_image.components();
+	if comps.is_empty() {
+		return Err(anyhow!("JP2 image has no components"));
+	}
+
+	let mut buffer = Cursor::new(Vec::<u8>::new());
+
+	if comps.len() == 1 {
+		// Grayscale — the common medical imaging case
+		let width = comps[0].width();
+		let height = comps[0].height();
+		let raw_samples: Vec<f64> = comps[0].data().iter().map(|&v| v as f64).collect();
+		let resolved_window =
+			resolve_window(requested_wc, requested_ww, default_window, &raw_samples)
+				.ok_or_else(|| anyhow!("JP2 decode failed: could not resolve window"))?;
+		let windowed = apply_window(&raw_samples, resolved_window.center, resolved_window.width.max(1.0));
+		let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, windowed)
+			.ok_or_else(|| anyhow!("JP2 decoded buffer size mismatch"))?;
+		image::DynamicImage::ImageLuma8(image)
+			.write_to(&mut buffer, ImageFormat::Png)
+			.context("JP2 decode failed: png encoding failed")?;
+	} else if comps.len() == 3 {
+		// RGB — rare in medical imaging but handle it
+		let width = comps[0].width();
+		let height = comps[0].height();
+		let precision = comps[0].precision();
+		if precision <= 8 {
+			let r = comps[0].data_u8();
+			let g = comps[1].data_u8();
+			let b = comps[2].data_u8();
+			let interleaved: Vec<u8> = r.zip(g).zip(b)
+				.flat_map(|((rv, gv), bv)| [rv, gv, bv])
+				.collect();
+			let image = ImageBuffer::<Rgb<u8>, Vec<u8>>::from_raw(width, height, interleaved)
+				.ok_or_else(|| anyhow!("JP2 decoded buffer size mismatch"))?;
+			image::DynamicImage::ImageRgb8(image)
+				.write_to(&mut buffer, ImageFormat::Png)
+				.context("JP2 decode failed: png encoding failed")?;
+		} else if precision <= 16 {
+			let r = comps[0].data_u16();
+			let g = comps[1].data_u16();
+			let b = comps[2].data_u16();
+			let interleaved: Vec<u16> = r.zip(g).zip(b)
+				.flat_map(|((rv, gv), bv)| [rv, gv, bv])
+				.collect();
+			let image = ImageBuffer::<Rgb<u16>, Vec<u16>>::from_raw(width, height, interleaved)
+				.ok_or_else(|| anyhow!("JP2 decoded buffer size mismatch"))?;
+			image::DynamicImage::ImageRgb16(image)
+				.write_to(&mut buffer, ImageFormat::Png)
+				.context("JP2 decode failed: png encoding failed")?;
+		} else {
+			return Err(anyhow!("unsupported JP2 component layout"));
+		}
+	} else {
+		return Err(anyhow!("unsupported JP2 component layout"));
+	}
+
+	Ok(Bytes::from(buffer.into_inner()))
 }
 
 async fn decode_frame_to_png(path: PathBuf, frame: u32) -> Result<Bytes> {

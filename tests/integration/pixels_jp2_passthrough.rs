@@ -51,7 +51,7 @@ async fn falls_back_to_decode_when_accept_lacks_jp2_and_surfaces_error_on_invali
 	.expect_err("invalid JP2 payload should fail fallback decoding");
 
 	assert!(
-		error.to_string().contains("unsupported transfer syntax"),
-		"fallback path should map decode failure to unsupported TS style error"
+		error.to_string().contains("failed to decode JP2 fragment"),
+		"fallback path should surface JP2 decode failure: {error}"
 	);
 }
