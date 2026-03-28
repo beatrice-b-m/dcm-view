@@ -81,3 +81,46 @@ async fn serves_embedded_frontend_shell_at_root() {
 		"root endpoint should return embedded index.html"
 	);
 }
+
+#[tokio::test]
+async fn serves_js_and_css_assets_with_correct_mime_types() {
+	let app = server::router(support::app_state(Vec::new()));
+	let test_server = TestServer::new(app).expect("test server");
+
+	// Discover actual asset filenames from the index.html body
+	let index_body = test_server.get("/").await.text();
+
+	// Extract JS asset path from: src="/assets/index-XXXX.js"
+	let js_path = index_body
+		.split("src=\"/assets/")
+		.nth(1)
+		.and_then(|s| s.split('"').next())
+		.expect("JS asset referenced in index.html");
+
+	// Extract CSS asset path from: href="/assets/index-XXXX.css"
+	let css_path = index_body
+		.split("href=\"/assets/")
+		.nth(1)
+		.and_then(|s| s.split('"').next())
+		.expect("CSS asset referenced in index.html");
+
+	let js_response = test_server.get(&format!("/assets/{js_path}")).await;
+	js_response.assert_status_ok();
+	let js_ct_header = js_response.header(header::CONTENT_TYPE);
+	let js_ct = js_ct_header.to_str().expect("js content-type");
+	assert!(
+		js_ct.starts_with("text/javascript"),
+		"JS asset should be text/javascript, got: {js_ct}"
+	);
+	assert!(!js_response.as_bytes().is_empty(), "JS body should be non-empty");
+
+	let css_response = test_server.get(&format!("/assets/{css_path}")).await;
+	css_response.assert_status_ok();
+	let css_ct_header = css_response.header(header::CONTENT_TYPE);
+	let css_ct = css_ct_header.to_str().expect("css content-type");
+	assert!(
+		css_ct.starts_with("text/css"),
+		"CSS asset should be text/css, got: {css_ct}"
+	);
+	assert!(!css_response.as_bytes().is_empty(), "CSS body should be non-empty");
+}

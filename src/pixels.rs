@@ -79,6 +79,10 @@ pub async fn load_frame(
 			read_encapsulated_fragment(file.path.clone(), request.frame).await?,
 			"image/jpeg",
 		),
+		TransferSyntaxClass::JpegLossless => (
+			decode_frame_to_png(file.path.clone(), request.frame).await?,
+			"image/png",
+		),
 		TransferSyntaxClass::Jpeg2000 => {
 			if jp2_accept {
 				(
@@ -127,6 +131,7 @@ pub async fn load_frame(
 fn content_type_for_class(class: TransferSyntaxClass, jp2_accept: bool) -> &'static str {
 	match class {
 		TransferSyntaxClass::Jpeg => "image/jpeg",
+		TransferSyntaxClass::JpegLossless => "image/png",
 		TransferSyntaxClass::Jpeg2000 if jp2_accept => "image/jp2",
 		TransferSyntaxClass::Jpeg2000 => "image/png",
 		TransferSyntaxClass::Uncompressed => "image/png",
@@ -350,10 +355,12 @@ fn read_f64_tag(object: &dicom_object::DefaultDicomObject, name: &str) -> Option
 
 pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
 	match uid {
+		// Browser-renderable lossy JPEG: Baseline, Extended
 		"1.2.840.10008.1.2.4.50"
-		| "1.2.840.10008.1.2.4.51"
-		| "1.2.840.10008.1.2.4.57"
-		| "1.2.840.10008.1.2.4.70" => TransferSyntaxClass::Jpeg,
+		| "1.2.840.10008.1.2.4.51" => TransferSyntaxClass::Jpeg,
+		// JPEG Lossless: browsers cannot decode — must be decoded server-side
+		"1.2.840.10008.1.2.4.57"
+		| "1.2.840.10008.1.2.4.70" => TransferSyntaxClass::JpegLossless,
 		"1.2.840.10008.1.2.4.90" | "1.2.840.10008.1.2.4.91" => TransferSyntaxClass::Jpeg2000,
 		"1.2.840.10008.1.2" | "1.2.840.10008.1.2.1" | "1.2.840.10008.1.2.2" => {
 			TransferSyntaxClass::Uncompressed

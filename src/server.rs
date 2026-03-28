@@ -343,7 +343,8 @@ async fn index_handler() -> impl IntoResponse {
 }
 
 async fn asset_handler(Path(path): Path<String>) -> impl IntoResponse {
-	serve_asset(&path).unwrap_or_else(|| {
+	let full_path = format!("assets/{}", path.trim_start_matches('/'));
+	serve_asset(&full_path).unwrap_or_else(|| {
 		(StatusCode::NOT_FOUND, Json(ErrorResponse {
 			error: format!("asset not found: {path}"),
 		}))

@@ -122,6 +122,7 @@ pub struct TunnelInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferSyntaxClass {
 	Jpeg,
+	JpegLossless,
 	Jpeg2000,
 	Uncompressed,
 	JpegLs,
