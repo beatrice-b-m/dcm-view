@@ -149,20 +149,35 @@ dcmview --no-browser --timeout 300 ./study_dir
 
 ## Frontend behavior summary
 
-- File tabs for multi-file navigation
-- Frame slider for multi-frame objects (prev/next, keyboard, cine)
-- Zoom/pan via CSS transforms (no refetch)
-- Window/level drag with debounced fetch
-- Tag panel with filtering, SQ expansion, and click-to-copy
+**Toolbar (top of viewport):**
+- Tool selector: WL (Window/Level), Pan, Zoom, Scroll — determines left-drag behavior
+- W/L preset dropdown: Default, Full Dynamic, and standard CT presets (Abdomen, Angio, Bone, Brain, Chest, Lung)
+- Reset button: resets zoom/pan and W/L to DICOM default; keyboard shortcuts W/P/Z/S switch tools
 
+**Viewport mouse model:**
+- Left drag: routes by active tool (W/L / pan / zoom / scroll-through-frames)
+- Right drag: always zoom (hard-coded)
+- Middle drag: always pan (hard-coded)
+- Wheel (multi-frame): scrub frames; Ctrl/Cmd + wheel: zoom
+- Double-click: full reset (zoom, pan, W/L)
+
+**Cine controls (multi-frame files):**
+- Play/pause, selectable fps (1 / 5 / 10 / 15 / 24), Loop or Sweep mode
+- Keyboard: arrow keys or `[` / `]` for frame nav, Space for play/pause
+
+**Tag panel:** filtering, SQ expansion, click-to-copy
+
+**Zoom/pan:** CSS transforms only — no re-fetch unless W/L or window mode changes
 ## HTTP API
 
 - `GET /api/files`
 - `GET /api/file/:index/info`
-- `GET /api/file/:index/frame/:frame?wc=&ww=`
+- `GET /api/file/:index/frame/:frame?wc=&ww=&mode=`
+  - `?mode=full_dynamic`: window spans true min/max of frame samples, ignores DICOM default_window
+  - `?mode=default` (or absent): explicit wc/ww → DICOM default_window → percentile fallback
 - `GET /api/file/:index/tags`
 
-Frame responses include `X-Cache: HIT|MISS`.
+Frame responses include `X-Cache: HIT|MISS`. Cache is keyed on `(file_index, frame, wc, ww, mode)`.
 
 ## Development
 

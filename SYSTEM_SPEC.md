@@ -205,7 +205,7 @@ GET  /                              → serve index.html (rust-embed)
 GET  /assets/*path                  → serve Svelte build assets (rust-embed)
 GET  /api/files                     → JSON array of FileEntry summaries
 GET  /api/file/:index/tags          → full tag tree as JSON (lazy, built on first request)
-GET  /api/file/:index/frame/:n      → image bytes; ?wc=<f64>&ww=<f64> for window override
+GET  /api/file/:index/frame/:n      → image bytes; `?wc=<f64>&ww=<f64>` for explicit window override; `?mode=full_dynamic` for full dynamic range; `?mode=default` (default when absent)
 GET  /api/file/:index/info          → FrameInfo { frame_count, rows, columns, transfer_syntax, has_pixels, default_window }
 ```
 
@@ -307,15 +307,19 @@ fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
 }
 ```
 
-Window centre/width resolution order (first match wins):
-1. Query parameters `?wc=` and `?ww=` (user override from UI drag)
+**Window mode** (`?mode=` query param, `WindowMode` enum in `types.rs`):
+- `Default` (absent or `?mode=default`): use the resolution order below
+- `FullDynamic` (`?mode=full_dynamic`): ignore explicit params and DICOM tags; compute window from true min/max of current frame samples (no clipping)
+
+Window centre/width resolution order for `Default` mode (first match wins):
+1. Query parameters `?wc=` and `?ww=` (user override from UI drag or preset)
 2. DICOM tags `WindowCenter` (0028,1050) + `WindowWidth` (0028,1051) — first value if multi-valued
 3. Fallback: 1st/99th percentile of the current frame's sample values (compute inline, no pre-scan)
 
 ### 7.5 LRU Frame Cache
 
 - Capacity: 128 entries
-- Key: `FrameCacheKey` (file_index, frame, wc bits, ww bits)
+- Key: `FrameCacheKey` (file_index, frame, wc bits, ww bits, window_mode)
 - Value: `Bytes` — the fully encoded response body, ready to serve
 - For JPEG passthrough frames, cache the raw fragment bytes (they are the response body)
 - Lock (`Arc<Mutex<...>>`) held only during cache lookup and insert — not during decode/encode
@@ -489,29 +493,41 @@ dcmview: shutting down...
 ### 11.3 ImageViewport Component
 
 **Image display:**
-- Fetch frame from `/api/file/{index}/frame/{n}` with optional `?wc=&ww=` params
+- Fetch frame from `/api/file/{index}/frame/{n}` with optional `?wc=&ww=&mode=` params
 - Display in an `<img>` tag (not `<canvas>`) — native browser JPEG/PNG decode is fast and handles colour profiles correctly
 - Show a spinner overlay while fetching; show `No pixel data` placeholder if `has_pixels = false`
+- Overlay displays frame counter and current W/C values (or `W/L N/A` for JPEG passthrough files where windowing is not applied server-side)
 
-**Mouse interactions (all CSS-transform-based unless noted — no re-fetch unless W/L changes):**
-- **Zoom**: mouse wheel → `transform: scale(...)` on `<img>` — instant, no request
-- **Pan**: left-click drag → `transform: translate(...)` on `<img>` — instant, no request
-- **Window/Level**: right-click drag
-  - Horizontal drag → adjust window width (`ww`)
-  - Vertical drag → adjust window centre (`wc`)
-  - Update W/C display inputs live during drag
-  - Debounced re-fetch at **150ms** after drag movement stops (avoids request flooding)
-- **Reset**: double-click → restore default W/C from `FileEntry.default_window`; reset zoom/pan to identity
+**Viewer toolbar (ViewerToolbar component):**
+- Tool selector: **WL** (Window/Level), **Pan**, **Zoom**, **Scroll** — determines left-button drag behavior
+- W/L preset dropdown: Default | Full Dynamic | CT Abdomen | CT Angio | CT Bone | CT Brain | CT Chest | CT Lung
+- Reset button: resets zoom/pan to identity and W/L to DICOM default
+- Keyboard shortcuts: `W` / `P` / `Z` / `S` to switch active tool
+
+**Mouse interactions:**
+- **Left drag**: routes by active tool:
+  - `WL` tool — horizontal: adjust window width; vertical: adjust window centre; 150ms debounced re-fetch
+  - `Pan` tool — `transform: translate(...)` on `<img>` — instant, no request
+  - `Zoom` tool — drag up = zoom in, drag down = zoom out; pivot at initial click point; instant, no request
+  - `Scroll` tool — drag down = advance frame, drag up = retreat frame; 10px per frame step
+- **Right drag**: always zoom (hard-coded, ignores active tool)
+- **Middle drag**: always pan (hard-coded, ignores active tool)
+- **Wheel (multi-frame)**: scrub through frames by default; discrete wheel = 1 frame/event; trackpad pixel-mode = accumulate at 30px/frame threshold
+- **Ctrl/Cmd + wheel**: always zoom (regardless of frame count or active tool); trackpad pinch gesture also routes here
+- **Wheel (single-frame)**: discrete wheel = zoom; trackpad two-finger scroll = pan
+- **Reset**: double-click — restore default W/C, reset zoom/pan to identity
 - Zoom and pan state is **per file** (not per frame) — switching frames within a file preserves zoom; switching files resets
 
 ### 11.4 FrameSlider Component
 
 Rendered only when `frame_count > 1`.
 
-- **◀ / ▶ buttons** — previous/next frame
+- **◄ / ► buttons** — previous/next frame
 - **Frame counter** — `frame N / total` (1-indexed display, 0-indexed internally)
-- **▶ / ⏸ play-pause** — cine loop at 10 fps using `setInterval`; no fps control in v1.0
-- **Keyboard** — `←` / `→` arrow keys (or `[` / `]`) when viewport has focus
+- **► / ⏸ play-pause** — cine playback using `setInterval`
+- **FPS selector** — selectable speed: 1 / 5 / 10 / 15 / 24 fps (default: 10 fps)
+- **Loop / Sweep toggle** — loop: wraps to frame 0 at end; sweep: reverses direction at both boundaries (bounce playback)
+- **Keyboard** — `←` / `→` arrow keys (or `[` / `]`) for frame navigation; `Space` for play/pause
 - **Prefetch** — on navigation to frame N, fire background `fetch()` calls for frames N+1 and N+2; browser HTTP cache and Rust LRU cache serve repeat requests instantly
 
 ### 11.5 TagPanel Component
