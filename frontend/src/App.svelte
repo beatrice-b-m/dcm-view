@@ -105,9 +105,6 @@
 			files={filesResponse.files}
 			activeFileIndex={activeFileIndex}
 			bind:currentFrame
-			windowCenter={windowCenter}
-			windowWidth={windowWidth}
-			windowMode={windowMode}
 		/>
 		<StatusBar
 			serverStartMs={filesResponse.server_start_ms}

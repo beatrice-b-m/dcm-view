@@ -81,3 +81,47 @@ export function frameUrl(fileIndex: number, frame: number, wc?: number | null, w
 	}
 	return `${url.pathname}${url.search}`;
 }
+
+export interface RawFrameMetadata {
+	rows: number;
+	columns: number;
+	bitsAllocated: number;
+	pixelRepresentation: number;
+	samplesPerPixel: number;
+	photometricInterpretation: string;
+	rescaleSlope: number;
+	rescaleIntercept: number;
+	defaultWc: number | null;
+	defaultWw: number | null;
+}
+
+export interface RawFrame {
+	metadata: RawFrameMetadata;
+	buffer: ArrayBuffer;
+}
+
+export async function fetchRawFrame(
+	fileIndex: number,
+	frame: number,
+	signal?: AbortSignal,
+): Promise<RawFrame> {
+	const response = await fetch(`/api/file/${fileIndex}/frame/${frame}/raw`, { signal });
+	if (!response.ok) {
+		throw new Error(`HTTP ${response.status}: raw frame fetch failed`);
+	}
+	const buffer = await response.arrayBuffer();
+	const h = (name: string) => response.headers.get(name);
+	const metadata: RawFrameMetadata = {
+		rows: parseInt(h('X-Frame-Rows') ?? '0', 10),
+		columns: parseInt(h('X-Frame-Columns') ?? '0', 10),
+		bitsAllocated: parseInt(h('X-Frame-Bits-Allocated') ?? '8', 10),
+		pixelRepresentation: parseInt(h('X-Frame-Pixel-Representation') ?? '0', 10),
+		samplesPerPixel: parseInt(h('X-Frame-Samples-Per-Pixel') ?? '1', 10),
+		photometricInterpretation: h('X-Frame-Photometric-Interpretation') ?? 'MONOCHROME2',
+		rescaleSlope: parseFloat(h('X-Frame-Rescale-Slope') ?? '1'),
+		rescaleIntercept: parseFloat(h('X-Frame-Rescale-Intercept') ?? '0'),
+		defaultWc: h('X-Frame-Default-Wc') !== null ? parseFloat(h('X-Frame-Default-Wc')!) : null,
+		defaultWw: h('X-Frame-Default-Ww') !== null ? parseFloat(h('X-Frame-Default-Ww')!) : null,
+	};
+	return { metadata, buffer };
+}

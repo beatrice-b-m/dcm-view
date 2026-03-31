@@ -1,20 +1,14 @@
 <script lang="ts">
-	import { frameUrl, type FileSummary, type WindowMode } from "../api";
+	import type { FileSummary } from "../api";
 
 	let {
 		files,
 		activeFileIndex,
 		currentFrame = $bindable(),
-		windowCenter,
-		windowWidth,
-		windowMode,
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number;
 		currentFrame: number;
-		windowCenter: number | null;
-		windowWidth: number | null;
-		windowMode: WindowMode;
 	} = $props();
 
 	let isPlaying = $state(false);
@@ -91,19 +85,6 @@
 		};
 	});
 
-	$effect(() => {
-		if (!activeFile || activeFile.frame_count <= 1) {
-			return;
-		}
-		for (const step of [1, 2]) {
-			const targetFrame = currentFrame + step;
-			if (targetFrame >= activeFile.frame_count) {
-				continue;
-			}
-			const prefetchUrl = frameUrl(activeFile.index, targetFrame, windowCenter, windowWidth, windowMode);
-			void fetch(prefetchUrl).catch(() => {});
-		}
-	});
 
 	$effect(() => {
 		const handleKey = (event: KeyboardEvent) => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { frameUrl, type WindowMode, type FileSummary } from "../api";
+	import { fetchRawFrame, type RawFrame, type WindowMode, type FileSummary } from "../api";
 	import type { ActiveTool } from "./viewerTools";
 
 	type TransformState = { scale: number; tx: number; ty: number };
@@ -38,20 +38,16 @@
 	let loadError = $state<string | null>(null);
 	let liveWindowCenter = $state<number | null>(null);
 	let liveWindowWidth = $state<number | null>(null);
-	let displaySrc = $state('');
 	let viewportEl: HTMLElement | undefined = $state();
-	let imgEl: HTMLImageElement | undefined = $state();
+	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let wheelAccum = $state(0);
+	let currentRawFrame = $state<RawFrame | null>(null);
+	let fileScopeKey = $state('');
 
 	// Non-reactive: mutations must not trigger Svelte re-renders.
-	// AbortController for the currently in-flight frame fetch.
-	let pendingController: AbortController | null = null;
-	// Client-side frame cache: frame index → blob URL.
-	// Valid only for the current _frameCacheKey scope.
-	let frameCache = new Map<number, string>();
-	let _frameCacheKey = '';
-	// requestAnimationFrame handle for W/L drag throttle.
-	let wlRafId: number | null = null;
+	let pendingRawCtrl: AbortController | null = null;
+	let prefetchController: AbortController | null = null;
+	let rawFrameCache = new Map<number, RawFrame>();
 
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
@@ -59,130 +55,244 @@
 	const transformCss = $derived(
 		`translate(${activeTransform.tx}px, ${activeTransform.ty}px) scale(${activeTransform.scale})`,
 	);
-	const displayWindowCenter = $derived(
-		liveWindowCenter ?? windowCenter ?? activeFile?.default_window?.center ?? 0,
-	);
-	const displayWindowWidth = $derived(
-		liveWindowWidth ?? windowWidth ?? activeFile?.default_window?.width ?? 1,
-	);
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
 	const isDragging = $derived(dragState !== null);
-	const isJpegPassthrough = $derived(
-		activeFile?.transfer_syntax_uid === '1.2.840.10008.1.2.4.50' ||
-		activeFile?.transfer_syntax_uid === '1.2.840.10008.1.2.4.51'
+
+	const displayWindow = $derived(
+		currentRawFrame
+			? resolveDisplayWindow(
+					currentRawFrame,
+					liveWindowCenter,
+					liveWindowWidth,
+					windowCenter,
+					windowWidth,
+					windowMode,
+				)
+			: { wc: 0, ww: 1 },
 	);
 
-	// --- Cache management ---
+	// --- Windowing functions ---
 
-	function clearFrameCache() {
-		for (const url of frameCache.values()) URL.revokeObjectURL(url);
-		frameCache = new Map();
-	}
+	function buildLut(
+		bitsAllocated: number,
+		pixelRepresentation: number,
+		rescaleSlope: number,
+		rescaleIntercept: number,
+		wc: number,
+		ww: number,
+		invert: boolean,
+	): Uint8Array {
+		const low = wc - ww / 2;
+		const high = wc + ww / 2;
+		const range = Math.max(high - low, 1e-10);
 
-	/**
-	 * Revoke a blob URL if it is not currently held in the frame cache.
-	 * Call before replacing displaySrc with a new blob URL.
-	 */
-	function revokeIfOrphaned(blobUrl: string) {
-		if (!blobUrl.startsWith('blob:')) return;
-		for (const cached of frameCache.values()) {
-			if (cached === blobUrl) return; // still referenced by cache
+		let minRaw: number, size: number;
+		if (bitsAllocated === 8) { minRaw = 0; size = 256; }
+		else if (pixelRepresentation === 1) { minRaw = -32768; size = 65536; }
+		else { minRaw = 0; size = 65536; }
+
+		const lut = new Uint8Array(size);
+		for (let i = 0; i < size; i++) {
+			const raw = i + minRaw;
+			const modal = raw * rescaleSlope + rescaleIntercept;
+			let val = (modal - low) / range;
+			val = val < 0 ? 0 : val > 1 ? 1 : val;
+			if (invert) val = 1 - val;
+			lut[i] = Math.round(val * 255);
 		}
-		URL.revokeObjectURL(blobUrl);
+		return lut;
 	}
 
-	// --- Image loading ---
+	function renderRawFrame(
+		canvas: HTMLCanvasElement,
+		frame: RawFrame,
+		wc: number,
+		ww: number,
+	): void {
+		const { rows, columns, bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, photometricInterpretation } = frame.metadata;
+		canvas.width = columns;
+		canvas.height = rows;
+		const ctx = canvas.getContext('2d', { alpha: false })!;
+		const invert = photometricInterpretation === 'MONOCHROME1';
+		const lut = buildLut(bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, wc, Math.max(ww, 1), invert);
+		const numPixels = rows * columns;
+		const imageData = ctx.createImageData(columns, rows);
+		const rgba = imageData.data;
 
-	/**
-	 * Load a frame from `url` and update displaySrc.
-	 *
-	 * frameIndex: when non-null, the result is stored in frameCache (keyed by frame index) and
-	 *   the cache is checked before issuing a network request. Pass null for intermediate W/L
-	 *   drag values that should not pollute the cache.
-	 *
-	 * isDragFrame: when true, liveWindowCenter/Width are NOT cleared on successful load —
-	 *   the drag is still in progress and the user still needs to see live overlay values.
-	 *
-	 * Any currently in-flight request is aborted before this fetch begins. This prevents
-	 * race conditions where older responses overwrite newer ones.
-	 */
-	async function loadFrame(
-		url: string,
-		frameIndex: number | null,
-		isDragFrame = false,
-	): Promise<void> {
-		// Fast path: cache hit — no network round-trip, no loading indicator.
-		if (frameIndex !== null) {
-			const cached = frameCache.get(frameIndex);
-			if (cached) {
-				revokeIfOrphaned(displaySrc);
-				displaySrc = cached;
-				loading = false;
-				loadError = null;
-				if (!isDragFrame) {
-					liveWindowCenter = null;
-					liveWindowWidth = null;
-				}
-				return;
+		if (bitsAllocated === 8) {
+			const view = new Uint8Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) {
+				const g = lut[view[i]];
+				const o = i * 4;
+				rgba[o] = g; rgba[o+1] = g; rgba[o+2] = g; rgba[o+3] = 255;
+			}
+		} else if (pixelRepresentation === 1) {
+			const view = new Int16Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) {
+				const g = lut[view[i] + 32768];
+				const o = i * 4;
+				rgba[o] = g; rgba[o+1] = g; rgba[o+2] = g; rgba[o+3] = 255;
+			}
+		} else {
+			const view = new Uint16Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) {
+				const g = lut[view[i]];
+				const o = i * 4;
+				rgba[o] = g; rgba[o+1] = g; rgba[o+2] = g; rgba[o+3] = 255;
 			}
 		}
+		ctx.putImageData(imageData, 0, 0);
+	}
 
-		// Abort any stale in-flight request before starting a new one.
-		pendingController?.abort();
-		const controller = new AbortController();
-		pendingController = controller;
+	function resolveDisplayWindow(
+		frame: RawFrame,
+		liveWc: number | null,
+		liveWw: number | null,
+		wc: number | null,
+		ww: number | null,
+		mode: WindowMode,
+	): { wc: number; ww: number } {
+		if (mode === 'full_dynamic') {
+			return computeFullDynamicWindow(frame);
+		}
+		if (liveWc !== null && liveWw !== null) {
+			return { wc: liveWc, ww: liveWw };
+		}
+		if (wc !== null && ww !== null) {
+			return { wc, ww };
+		}
+		const { defaultWc, defaultWw } = frame.metadata;
+		if (defaultWc !== null && defaultWw !== null) {
+			return { wc: defaultWc!, ww: defaultWw! };
+		}
+		return computePercentileWindow(frame);
+	}
 
+	function computeFullDynamicWindow(frame: RawFrame): { wc: number; ww: number } {
+		const { bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, rows, columns } = frame.metadata;
+		const numPixels = rows * columns;
+		let min = Infinity, max = -Infinity;
+		if (bitsAllocated === 8) {
+			const view = new Uint8Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) {
+				const v = view[i] * rescaleSlope + rescaleIntercept;
+				if (v < min) min = v; if (v > max) max = v;
+			}
+		} else if (pixelRepresentation === 1) {
+			const view = new Int16Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) {
+				const v = view[i] * rescaleSlope + rescaleIntercept;
+				if (v < min) min = v; if (v > max) max = v;
+			}
+		} else {
+			const view = new Uint16Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) {
+				const v = view[i] * rescaleSlope + rescaleIntercept;
+				if (v < min) min = v; if (v > max) max = v;
+			}
+		}
+		if (!isFinite(min) || !isFinite(max)) return { wc: 128, ww: 256 };
+		const width = Math.max(max - min, 1);
+		return { wc: min + width / 2, ww: width };
+	}
+
+	function computePercentileWindow(frame: RawFrame): { wc: number; ww: number } {
+		const { bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, rows, columns } = frame.metadata;
+		const numPixels = rows * columns;
+		const values = new Float64Array(numPixels);
+		if (bitsAllocated === 8) {
+			const view = new Uint8Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) values[i] = view[i] * rescaleSlope + rescaleIntercept;
+		} else if (pixelRepresentation === 1) {
+			const view = new Int16Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) values[i] = view[i] * rescaleSlope + rescaleIntercept;
+		} else {
+			const view = new Uint16Array(frame.buffer);
+			for (let i = 0; i < numPixels; i++) values[i] = view[i] * rescaleSlope + rescaleIntercept;
+		}
+		values.sort();
+		const p1 = values[Math.floor(numPixels * 0.01)];
+		const p99 = values[Math.min(Math.ceil(numPixels * 0.99), numPixels - 1)];
+		const width = Math.max(p99 - p1, 1);
+		return { wc: p1 + width / 2, ww: width };
+	}
+
+	// --- Prefetch ---
+
+	function buildPriorityOrder(current: number, total: number): number[] {
+		const result: number[] = [];
+		for (let delta = 1; delta < total; delta++) {
+			const fwd = current + delta;
+			const bwd = current - delta;
+			if (fwd < total) result.push(fwd);
+			if (bwd >= 0) result.push(bwd);
+		}
+		return result;
+	}
+
+	function ensurePrefetchRunning(fileIndex: number, totalFrames: number, startFrame: number): void {
+		if (prefetchController || totalFrames <= 1) return;
+		prefetchController = new AbortController();
+		const ctrl = prefetchController;
+		runPrefetch(fileIndex, totalFrames, startFrame, ctrl.signal)
+			.catch(() => {})
+			.finally(() => { if (prefetchController === ctrl) prefetchController = null; });
+	}
+
+	async function runPrefetch(
+		fileIndex: number,
+		totalFrames: number,
+		startFrame: number,
+		signal: AbortSignal,
+	): Promise<void> {
+		const frames = buildPriorityOrder(startFrame, totalFrames);
+		const CONCURRENCY = 3;
+		for (let i = 0; i < frames.length && !signal.aborted; i += CONCURRENCY) {
+			const batch = frames.slice(i, i + CONCURRENCY).filter(f => !rawFrameCache.has(f));
+			if (batch.length === 0) continue;
+			await Promise.allSettled(
+				batch.map(async f => {
+					if (signal.aborted || rawFrameCache.has(f)) return;
+					try {
+						const raw = await fetchRawFrame(fileIndex, f, signal);
+						rawFrameCache.set(f, raw);
+					} catch { /* network errors are non-fatal during prefetch */ }
+				}),
+			);
+		}
+	}
+
+	// --- Frame loading ---
+
+	async function loadRawFrameAndRender(fileIndex: number, frameIndex: number): Promise<void> {
+		const cached = rawFrameCache.get(frameIndex);
+		if (cached) {
+			currentRawFrame = cached;
+			loading = false;
+			loadError = null;
+			ensurePrefetchRunning(fileIndex, activeFile?.frame_count ?? 1, frameIndex);
+			return;
+		}
+		pendingRawCtrl?.abort();
+		const ctrl = new AbortController();
+		pendingRawCtrl = ctrl;
 		loading = true;
 		loadError = null;
-
 		try {
-			const response = await fetch(url, { signal: controller.signal });
-			if (!response.ok) throw new Error(`HTTP ${response.status}`);
-			const blob = await response.blob();
-
-			// Another fetch superseded this one — do not update display.
-			if (controller.signal.aborted) return;
-
-			const blobUrl = URL.createObjectURL(blob);
-
-			revokeIfOrphaned(displaySrc);
-
-			if (frameIndex !== null) {
-				frameCache.set(frameIndex, blobUrl);
-			}
-
-			displaySrc = blobUrl;
-			// loading is cleared by <img onload> once the browser has painted the image.
+			const raw = await fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
+			if (ctrl.signal.aborted) return;
+			rawFrameCache.set(frameIndex, raw);
+			currentRawFrame = raw;
+			loading = false;
 			loadError = null;
-			if (!isDragFrame) {
-				liveWindowCenter = null;
-				liveWindowWidth = null;
-			}
+			ensurePrefetchRunning(fileIndex, activeFile?.frame_count ?? 1, frameIndex);
 		} catch (e) {
 			if ((e as Error).name === 'AbortError') return;
 			loading = false;
 			loadError = 'Failed to load frame';
 		} finally {
-			if (pendingController === controller) pendingController = null;
+			if (pendingRawCtrl === ctrl) pendingRawCtrl = null;
 		}
-	}
-
-	/**
-	 * Schedule a W/L preview fetch for the next animation frame.
-	 * At most one fetch is dispatched per animation frame — subsequent calls within the
-	 * same frame are no-ops. The fetch uses the current live W/L values and is not cached
-	 * (intermediate drag values are not useful to retain).
-	 */
-	function scheduleWLFetch() {
-		if (wlRafId !== null) return;
-		wlRafId = requestAnimationFrame(() => {
-			wlRafId = null;
-			if (!activeFile || !activeFile.has_pixels) return;
-			const url = frameUrl(
-				activeFile.index, currentFrame, liveWindowCenter, liveWindowWidth, windowMode,
-			);
-			void loadFrame(url, null, true);
-		});
 	}
 
 	// --- Effects ---
@@ -197,44 +307,46 @@
 		}
 	});
 
-	/**
-	 * Main image load effect. Runs when:
-	 *   - the active file changes (activeFileIndex)
-	 *   - the current frame changes
-	 *   - committed W/L values change (windowCenter, windowWidth, windowMode)
-	 *
-	 * The cache is invalidated whenever the scope (file + committed W/L) changes.
-	 * Intermediate W/L drag values do NOT flow through here — they go via scheduleWLFetch().
-	 */
+	// Effect 1: load raw frame when file or frame changes.
 	$effect(() => {
-		if (!activeFile || !activeFile.has_pixels) {
-			displaySrc = '';
+		if (!activeFile?.has_pixels) {
+			currentRawFrame = null;
 			loading = false;
 			return;
 		}
-
-		const key = `${activeFileIndex}|${windowCenter ?? ''}|${windowWidth ?? ''}|${windowMode}`;
-		if (key !== _frameCacheKey) {
-			// File or committed W/L changed: evict all cached blobs and clear displaySrc
-			// so the stale image from the previous scope is not briefly shown.
-			clearFrameCache();
-			_frameCacheKey = key;
-			revokeIfOrphaned(displaySrc);
-			displaySrc = '';
+		// Detect file change → evict cache, cancel prefetch.
+		const newScopeKey = String(activeFileIndex);
+		if (newScopeKey !== fileScopeKey) {
+			fileScopeKey = newScopeKey;
+			prefetchController?.abort();
+			prefetchController = null;
+			rawFrameCache.clear();
+			currentRawFrame = null;
 			loading = true;
 		}
-
-		const url = frameUrl(activeFile.index, currentFrame, windowCenter, windowWidth, windowMode);
-		void loadFrame(url, currentFrame);
+		void loadRawFrameAndRender(activeFile.index, currentFrame);
 	});
 
-	// Cleanup on component destroy: abort in-flight request, revoke all blob URLs.
+	// Effect 2: re-render when WL changes or frame loads.
+	$effect(() => {
+		if (!currentRawFrame || !canvasEl) return;
+		const win = resolveDisplayWindow(
+			currentRawFrame,
+			liveWindowCenter,
+			liveWindowWidth,
+			windowCenter,
+			windowWidth,
+			windowMode,
+		);
+		renderRawFrame(canvasEl, currentRawFrame, win.wc, win.ww);
+	});
+
+	// Cleanup on component destroy: abort in-flight requests, clear cache.
 	$effect(() => {
 		return () => {
-			if (wlRafId !== null) cancelAnimationFrame(wlRafId);
-			pendingController?.abort();
-			revokeIfOrphaned(displaySrc);
-			clearFrameCache();
+			prefetchController?.abort();
+			pendingRawCtrl?.abort();
+			rawFrameCache.clear();
 		};
 	});
 
@@ -267,14 +379,14 @@
 	 * Coordinates are in client (page) space, not element-relative.
 	 */
 	function zoomAt(newScale: number, clientX: number, clientY: number) {
-		if (!activeFile || !imgEl) return;
+		if (!activeFile || !canvasEl) return;
 		const { scale, tx, ty } = activeTransform;
 		const clamped = Math.min(8, Math.max(0.2, newScale));
-		const imgRect = imgEl.getBoundingClientRect();
-		const lx = (clientX - imgRect.left) / scale;
-		const ly = (clientY - imgRect.top) / scale;
-		const natX = imgRect.left - tx;
-		const natY = imgRect.top - ty;
+		const rect = canvasEl.getBoundingClientRect();
+		const lx = (clientX - rect.left) / scale;
+		const ly = (clientY - rect.top) / scale;
+		const natX = rect.left - tx;
+		const natY = rect.top - ty;
 		updateTransform(activeFile.index, {
 			scale: clamped,
 			tx: clientX - natX - lx * clamped,
@@ -368,8 +480,8 @@
 			// Left: route by active tool
 			switch (activeTool) {
 				case "window_level": {
-					const baseCenter = windowCenter ?? activeFile.default_window?.center ?? 0;
-					const baseWidth = windowWidth ?? activeFile.default_window?.width ?? 1;
+					const baseCenter = displayWindow.wc;
+					const baseWidth = displayWindow.ww;
 					dragState = {
 						mode: "wl",
 						startX: event.clientX,
@@ -434,9 +546,7 @@
 			const nextCenter = dragState.baseCenter - dy * 2;
 			liveWindowCenter = nextCenter;
 			liveWindowWidth = nextWidth;
-			// Throttle server requests to at most one per animation frame (~60/s).
-			// Each request aborts its predecessor, preventing out-of-order renders.
-			scheduleWLFetch();
+			// Re-render happens automatically via Effect 2 from cached raw data.
 			return;
 		}
 
@@ -458,13 +568,7 @@
 		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
 
 		if (dragState?.mode === 'wl') {
-			// Cancel any pending rAF — the main $effect fires the final fetch.
-			if (wlRafId !== null) {
-				cancelAnimationFrame(wlRafId);
-				wlRafId = null;
-			}
-			// Committing live values triggers the main $effect, which invalidates the
-			// frame cache (new W/L scope) and fetches+caches the frame at this W/L.
+			// Commit live values so they persist after drag ends.
 			windowCenter = liveWindowCenter;
 			windowWidth = liveWindowWidth;
 		}
@@ -473,10 +577,6 @@
 	}
 
 	function onPointerCancel() {
-		if (wlRafId !== null) {
-			cancelAnimationFrame(wlRafId);
-			wlRafId = null;
-		}
 		dragState = null;
 	}
 
@@ -538,20 +638,14 @@
 		{#if loading}
 			<div class="loading">Loading frame…</div>
 		{/if}
-		{#if displaySrc}
-			<img
-				bind:this={imgEl}
-				src={displaySrc}
-				alt={`frame ${currentFrame + 1}`}
-				draggable="false"
-				style={`transform:${transformCss}`}
-				onload={() => { loading = false; }}
-				onerror={() => { loading = false; loadError = 'Failed to load frame'; }}
-			/>
-		{/if}
+		<canvas
+			bind:this={canvasEl}
+			class="dicom-canvas"
+			style={`transform:${transformCss}`}
+		></canvas>
 		<div class="overlay">
 			<span>frame {currentFrame + 1} / {activeFile.frame_count}</span>
-			<span>{isJpegPassthrough ? 'W/L N/A' : `W: ${Math.round(displayWindowWidth)} · C: ${Math.round(displayWindowCenter)}`}</span>
+			<span>W: {Math.round(displayWindow.ww)} · C: {Math.round(displayWindow.wc)}</span>
 		</div>
 		<div class="zoom-controls">
 			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= ZOOM_STEPS[0]}>−</button>
@@ -577,12 +671,13 @@
 	.viewport[data-tool="zoom"] { cursor: zoom-in; }
 	.viewport[data-tool="scroll"] { cursor: ns-resize; }
 	.viewport.dragging { cursor: grabbing; }
-	img {
+	.dicom-canvas {
 		max-width: 100%;
 		max-height: 100%;
-		object-fit: contain;
 		transform-origin: 0 0;
 		transition: transform 0.03s linear;
+		image-rendering: pixelated;
+		display: block;
 	}
 	.placeholder,
 	.loading {
