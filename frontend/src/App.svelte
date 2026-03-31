@@ -139,6 +139,7 @@
 	.content {
 		display: grid;
 		grid-template-columns: 1fr minmax(320px, 420px);
+		grid-template-rows: 1fr;
 		min-height: 0;
 	}
 
