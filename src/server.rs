@@ -1,6 +1,6 @@
-use crate::pixels::{self, FrameRequest};
+use crate::pixels::{self, FrameRequest, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
-use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo, WindowMode};
+use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, RawFrameMetadata, TagNode, TagValue, TunnelInfo, WindowMode};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -24,6 +24,7 @@ use tokio::net::TcpListener;
 pub struct AppState {
 	pub files: Arc<Vec<FileEntry>>,
 	pub pixel_cache: Arc<Mutex<LruCache<crate::types::FrameCacheKey, Bytes>>>,
+	pub raw_cache: Arc<Mutex<LruCache<crate::types::RawFrameCacheKey, (Bytes, RawFrameMetadata)>>>,
 	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
 	pub tunnel_info: Option<Arc<TunnelInfo>>,
 	pub tunnel_handle: Option<Arc<TunnelHandle>>,
@@ -126,6 +127,7 @@ pub fn router(state: AppState) -> Router {
 		.route("/api/files", get(files_handler))
 		.route("/api/file/{index}/info", get(info_handler))
 		.route("/api/file/{index}/frame/{frame}", get(frame_handler))
+		.route("/api/file/{index}/frame/{frame}/raw", get(raw_frame_handler))
 		.route("/api/file/{index}/tags", get(tags_handler))
 		.with_state(state)
 }
@@ -205,6 +207,78 @@ async fn frame_handler(
 			.parse()
 			.expect("valid content type header"),
 	);
+	Ok(response)
+}
+
+async fn raw_frame_handler(
+	State(state): State<AppState>,
+	Path((index, frame)): Path<(usize, u32)>,
+) -> Result<Response, ApiError> {
+	touch_request(&state);
+
+	let raw_response = pixels::load_raw_frame(
+		state.files.as_slice(),
+		state.raw_cache.clone(),
+		RawFrameRequest {
+			file_index: index,
+			frame,
+		},
+	)
+	.await
+	.map_err(|err| {
+		let message = err.to_string();
+		if message.contains("unsupported transfer syntax") {
+			ApiError::unprocessable(message)
+		} else if message.contains("no pixel data") || message.contains("frame out of range") {
+			ApiError::not_found(message)
+		} else {
+			ApiError::internal(format!("raw frame decode failed: {message}"))
+		}
+	})?;
+
+	let meta = &raw_response.metadata;
+	let cache_header = if raw_response.cache_hit { "HIT" } else { "MISS" };
+
+	let mut response = Response::new(axum::body::Body::from(raw_response.body));
+	let headers = response.headers_mut();
+	headers.insert("X-Cache", cache_header.parse().expect("valid cache header value"));
+	headers.insert(
+		header::CONTENT_TYPE,
+		"application/octet-stream".parse().expect("valid content type"),
+	);
+	headers.insert("X-Frame-Rows", meta.rows.to_string().parse().expect("valid header"));
+	headers.insert("X-Frame-Columns", meta.columns.to_string().parse().expect("valid header"));
+	headers.insert(
+		"X-Frame-Bits-Allocated",
+		meta.bits_allocated.to_string().parse().expect("valid header"),
+	);
+	headers.insert(
+		"X-Frame-Pixel-Representation",
+		meta.pixel_representation.to_string().parse().expect("valid header"),
+	);
+	headers.insert(
+		"X-Frame-Samples-Per-Pixel",
+		meta.samples_per_pixel.to_string().parse().expect("valid header"),
+	);
+	headers.insert(
+		"X-Frame-Photometric-Interpretation",
+		meta.photometric_interpretation.parse().expect("valid header"),
+	);
+	headers.insert(
+		"X-Frame-Rescale-Slope",
+		meta.rescale_slope.to_string().parse().expect("valid header"),
+	);
+	headers.insert(
+		"X-Frame-Rescale-Intercept",
+		meta.rescale_intercept.to_string().parse().expect("valid header"),
+	);
+	if let Some(wc) = meta.default_wc {
+		headers.insert("X-Frame-Default-Wc", wc.to_string().parse().expect("valid header"));
+	}
+	if let Some(ww) = meta.default_ww {
+		headers.insert("X-Frame-Default-Ww", ww.to_string().parse().expect("valid header"));
+	}
+
 	Ok(response)
 }
 

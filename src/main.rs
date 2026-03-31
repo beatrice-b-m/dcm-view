@@ -81,6 +81,7 @@ async fn run() -> Result<()> {
 	let state = AppState {
 		files: Arc::new(load_report.files),
 		pixel_cache: pixels::new_cache(),
+		raw_cache: pixels::new_raw_cache(),
 		tag_cache: Arc::new(Mutex::new(HashMap::new())),
 		tunnel_info: None,
 		tunnel_handle: None,
