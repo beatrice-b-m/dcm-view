@@ -289,7 +289,7 @@
 		} catch (e) {
 			if ((e as Error).name === 'AbortError') return;
 			loading = false;
-			loadError = 'Failed to load frame';
+			loadError = (e as Error).message || 'Failed to load frame';
 		} finally {
 			if (pendingRawCtrl === ctrl) pendingRawCtrl = null;
 		}

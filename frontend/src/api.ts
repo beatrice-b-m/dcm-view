@@ -107,7 +107,14 @@ export async function fetchRawFrame(
 ): Promise<RawFrame> {
 	const response = await fetch(`/api/file/${fileIndex}/frame/${frame}/raw`, { signal });
 	if (!response.ok) {
-		throw new Error(`HTTP ${response.status}: raw frame fetch failed`);
+		// Attempt to surface the server's {"error":"..."} message.  Fall back to a
+		// generic string if the body is not JSON or lacks the field.
+		let serverMessage: string | undefined;
+		try {
+			const body = await response.json() as { error?: string };
+			serverMessage = body.error;
+		} catch { /* body is not JSON */ }
+		throw new Error(serverMessage ?? `HTTP ${response.status}: raw frame fetch failed`);
 	}
 	const buffer = await response.arrayBuffer();
 	const h = (name: string) => response.headers.get(name);
