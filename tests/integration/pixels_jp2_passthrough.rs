@@ -18,6 +18,7 @@ async fn returns_raw_jp2_when_accept_header_supports_it() {
 			frame: 0,
 			window_center: None,
 			window_width: None,
+			window_mode: dcmview::types::WindowMode::Default,
 			accept_header: Some("image/jp2,image/*;q=0.8".to_string()),
 		},
 	)
@@ -44,6 +45,7 @@ async fn falls_back_to_decode_when_accept_lacks_jp2_and_surfaces_error_on_invali
 			frame: 0,
 			window_center: None,
 			window_width: None,
+			window_mode: dcmview::types::WindowMode::Default,
 			accept_header: Some("image/png".to_string()),
 		},
 	)

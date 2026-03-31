@@ -28,6 +28,7 @@ async fn returns_raw_jpeg_fragment_and_sets_cache_hit_on_repeat() {
 			frame: 1,
 			window_center: None,
 			window_width: None,
+			window_mode: dcmview::types::WindowMode::Default,
 			accept_header: Some("image/jpeg".to_string()),
 		},
 	)
@@ -46,6 +47,7 @@ async fn returns_raw_jpeg_fragment_and_sets_cache_hit_on_repeat() {
 			frame: 1,
 			window_center: None,
 			window_width: None,
+			window_mode: dcmview::types::WindowMode::Default,
 			accept_header: Some("image/jpeg".to_string()),
 		},
 	)
