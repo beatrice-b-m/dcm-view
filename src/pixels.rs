@@ -1,4 +1,4 @@
-use crate::types::{FileEntry, FrameCacheKey, ResolvedWindow, TransferSyntaxClass};
+use crate::types::{FileEntry, FrameCacheKey, ResolvedWindow, TransferSyntaxClass, WindowMode};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use dicom_object::collector::DicomCollector;
@@ -26,6 +26,7 @@ pub struct FrameRequest {
 	pub frame: u32,
 	pub window_center: Option<f64>,
 	pub window_width: Option<f64>,
+	pub window_mode: WindowMode,
 	pub accept_header: Option<String>,
 }
 
@@ -63,6 +64,7 @@ pub async fn load_frame(
 		request.frame,
 		request.window_center,
 		request.window_width,
+		request.window_mode,
 	);
 
 	if cache_allowed {
@@ -100,6 +102,7 @@ pub async fn load_frame(
 						request.window_center,
 						request.window_width,
 						file.default_window,
+						request.window_mode,
 					)
 					.await?,
 					"image/png",
@@ -113,6 +116,7 @@ pub async fn load_frame(
 				request.window_center,
 				request.window_width,
 				file.default_window,
+				request.window_mode,
 			)
 			.await?,
 			"image/png",
@@ -190,9 +194,10 @@ async fn decode_jp2_fragment_to_png(
 	requested_wc: Option<f64>,
 	requested_ww: Option<f64>,
 	default_window: Option<crate::types::WindowPreset>,
+	window_mode: WindowMode,
 ) -> Result<Bytes> {
 	task::spawn_blocking(move || {
-		decode_jp2_fragment_to_png_blocking(&path, frame, requested_wc, requested_ww, default_window)
+		decode_jp2_fragment_to_png_blocking(&path, frame, requested_wc, requested_ww, default_window, window_mode)
 	})
 	.await
 	.context("jp2 fragment decode task failed")?
@@ -204,6 +209,7 @@ fn decode_jp2_fragment_to_png_blocking(
 	requested_wc: Option<f64>,
 	requested_ww: Option<f64>,
 	default_window: Option<crate::types::WindowPreset>,
+	window_mode: WindowMode,
 ) -> Result<Bytes> {
 	let fragment = read_encapsulated_fragment_blocking(path, frame)?;
 
@@ -224,7 +230,7 @@ fn decode_jp2_fragment_to_png_blocking(
 		let height = comps[0].height();
 		let raw_samples: Vec<f64> = comps[0].data().iter().map(|&v| v as f64).collect();
 		let resolved_window =
-			resolve_window(requested_wc, requested_ww, default_window, &raw_samples)
+			resolve_window_with_mode(window_mode, requested_wc, requested_ww, default_window, &raw_samples)
 				.ok_or_else(|| anyhow!("JP2 decode failed: could not resolve window"))?;
 		let windowed = apply_window(&raw_samples, resolved_window.center, resolved_window.width.max(1.0));
 		let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, windowed)
@@ -300,6 +306,7 @@ async fn decode_uncompressed_to_png(
 	requested_wc: Option<f64>,
 	requested_ww: Option<f64>,
 	default_window: Option<crate::types::WindowPreset>,
+	window_mode: WindowMode,
 ) -> Result<Bytes> {
 	task::spawn_blocking(move || {
 		decode_uncompressed_to_png_blocking(
@@ -308,6 +315,7 @@ async fn decode_uncompressed_to_png(
 			requested_wc,
 			requested_ww,
 			default_window,
+			window_mode,
 		)
 	})
 	.await
@@ -320,6 +328,7 @@ fn decode_uncompressed_to_png_blocking(
 	requested_wc: Option<f64>,
 	requested_ww: Option<f64>,
 	default_window: Option<crate::types::WindowPreset>,
+	window_mode: WindowMode,
 ) -> Result<Bytes> {
 	let object = open_file(path)
 		.with_context(|| format!("failed to open DICOM for uncompressed decode: {}", path.display()))?;
@@ -373,7 +382,7 @@ fn decode_uncompressed_to_png_blocking(
 		rescaled
 	};
 
-	let resolved_window = resolve_window(requested_wc, requested_ww, default_window, &luminance_samples)
+	let resolved_window = resolve_window_with_mode(window_mode, requested_wc, requested_ww, default_window, &luminance_samples)
 		.ok_or_else(|| anyhow!("frame decode failed: could not resolve window"))?;
 	let windowed = apply_window(
 		&luminance_samples,
@@ -486,6 +495,35 @@ pub fn resolve_window(
 	}
 
 	percentile_window(samples)
+}
+
+/// Computes window from the true min/max of frame samples (full dynamic range).
+/// Ignores explicit wc/ww params and DICOM default_window tags.
+fn full_dynamic_window(samples: &[f64]) -> Option<ResolvedWindow> {
+	if samples.is_empty() {
+		return None;
+	}
+	let min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
+	let max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+	let width = (max - min).max(1.0);
+	let center = min + width / 2.0;
+	Some(ResolvedWindow { center, width })
+}
+
+/// Resolves window using the specified mode.
+/// Default mode: explicit params -> DICOM default_window -> 1st/99th percentile.
+/// FullDynamic mode: true min/max of current frame samples, ignores all other inputs.
+pub fn resolve_window_with_mode(
+	mode: WindowMode,
+	requested_wc: Option<f64>,
+	requested_ww: Option<f64>,
+	default_window: Option<crate::types::WindowPreset>,
+	samples: &[f64],
+) -> Option<ResolvedWindow> {
+	match mode {
+		WindowMode::Default => resolve_window(requested_wc, requested_ww, default_window, samples),
+		WindowMode::FullDynamic => full_dynamic_window(samples),
+	}
 }
 
 fn percentile_window(samples: &[f64]) -> Option<ResolvedWindow> {
