@@ -124,3 +124,84 @@ async fn serves_js_and_css_assets_with_correct_mime_types() {
 	);
 	assert!(!css_response.as_bytes().is_empty(), "CSS body should be non-empty");
 }
+
+#[tokio::test]
+async fn full_dynamic_mode_query_param_accepted_and_returns_valid_image() {
+	let dir = tempdir().expect("temp dir");
+	let path = dir.path().join("server-uncompressed.dcm");
+	support::write_uncompressed_u16_dicom(
+		&path,
+		"1.2.840.10008.1.2.1",
+		2,
+		2,
+		vec![0, 1000, 2000, 3000],
+		None,
+		None,
+	);
+
+	let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+	entry.rows = 2;
+	entry.columns = 2;
+
+	let app = server::router(support::app_state(vec![entry]));
+	let test_server = TestServer::new(app);
+
+	// First request with mode=full_dynamic: MISS, valid PNG
+	let response = test_server
+		.get("/api/file/0/frame/0?mode=full_dynamic")
+		.await;
+	response.assert_status_ok();
+	assert_eq!(
+		response.header(header::CONTENT_TYPE).to_str().expect("content-type"),
+		"image/png",
+		"full_dynamic uncompressed frame should be PNG"
+	);
+	assert_eq!(response.header("X-Cache").to_str().expect("cache header"), "MISS");
+
+	// Second request with same params: HIT
+	let repeat = test_server
+		.get("/api/file/0/frame/0?mode=full_dynamic")
+		.await;
+	repeat.assert_status_ok();
+	assert_eq!(repeat.header("X-Cache").to_str().expect("cache header"), "HIT");
+}
+
+#[tokio::test]
+async fn default_and_full_dynamic_modes_occupy_independent_cache_slots() {
+	// Verifies that ?mode=full_dynamic and no-mode (default) produce separate cache entries,
+	// so switching mode always yields a MISS before the first HIT for that mode.
+	let dir = tempdir().expect("temp dir");
+	let path = dir.path().join("server-mode-cache.dcm");
+	support::write_uncompressed_u16_dicom(
+		&path,
+		"1.2.840.10008.1.2.1",
+		2,
+		2,
+		vec![0, 1000, 2000, 3000],
+		None,
+		None,
+	);
+
+	let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+	entry.rows = 2;
+	entry.columns = 2;
+
+	let app = server::router(support::app_state(vec![entry]));
+	let test_server = TestServer::new(app);
+
+	// Warm the cache for default mode.
+	let default_first = test_server.get("/api/file/0/frame/0").await;
+	default_first.assert_status_ok();
+	assert_eq!(default_first.header("X-Cache").to_str().expect("cache"), "MISS");
+
+	// Default mode is now cached — full_dynamic must still be a MISS.
+	let dynamic_first = test_server.get("/api/file/0/frame/0?mode=full_dynamic").await;
+	dynamic_first.assert_status_ok();
+	assert_eq!(dynamic_first.header("X-Cache").to_str().expect("cache"), "MISS",
+		"full_dynamic must be a MISS even after default mode was cached");
+
+	// Subsequent full_dynamic request: HIT.
+	let dynamic_second = test_server.get("/api/file/0/frame/0?mode=full_dynamic").await;
+	dynamic_second.assert_status_ok();
+	assert_eq!(dynamic_second.header("X-Cache").to_str().expect("cache"), "HIT");
+}
