@@ -149,3 +149,24 @@ pub struct ResolvedWindow {
 pub struct ErrorResponse {
 	pub error: String,
 }
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RawFrameCacheKey {
+	pub file_index: usize,
+	pub frame: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RawFrameMetadata {
+	pub rows: u32,
+	pub columns: u32,
+	pub bits_allocated: u32,
+	pub pixel_representation: u32,
+	pub samples_per_pixel: u32,
+	pub photometric_interpretation: String,
+	pub rescale_slope: f64,
+	pub rescale_intercept: f64,
+	pub default_wc: Option<f64>,
+	pub default_ww: Option<f64>,
+}
