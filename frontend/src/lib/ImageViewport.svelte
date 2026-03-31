@@ -1,36 +1,35 @@
 <script lang="ts">
-	import { frameUrl, type FileSummary } from "../api";
+	import { frameUrl, type WindowMode, type FileSummary } from "../api";
+	import type { ActiveTool } from "./viewerTools";
 
 	type TransformState = { scale: number; tx: number; ty: number };
 	type DragState =
-		| {
-				mode: "pan";
-				startX: number;
-				startY: number;
-				baseTx: number;
-				baseTy: number;
-		  }
-		| {
-				mode: "wl";
-				startX: number;
-				startY: number;
-				baseCenter: number;
-				baseWidth: number;
-		  }
+		| { mode: "pan"; startX: number; startY: number; baseTx: number; baseTy: number }
+		| { mode: "wl"; startX: number; startY: number; baseCenter: number; baseWidth: number }
+		| { mode: "zoom_drag"; startX: number; startY: number; baseScale: number; pivotX: number; pivotY: number }
+		| { mode: "scroll_drag"; startY: number; baseFrame: number }
 		| null;
 
 	let {
 		files,
 		activeFileIndex,
-		currentFrame,
+		currentFrame = $bindable(),
 		windowCenter = $bindable(),
 		windowWidth = $bindable(),
+		activeTool,
+		windowMode,
+		resetCount,
+		onreset,
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number;
 		currentFrame: number;
 		windowCenter: number | null;
 		windowWidth: number | null;
+		activeTool: ActiveTool;
+		windowMode: WindowMode;
+		resetCount: number;
+		onreset?: () => void;
 	} = $props();
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
@@ -42,6 +41,7 @@
 	let wlDebounce: ReturnType<typeof setTimeout> | null = null;
 	let viewportEl: HTMLElement | undefined = $state();
 	let imgEl: HTMLImageElement | undefined = $state();
+	let wheelAccum = $state(0);
 
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
 	const activeFile = $derived(files[activeFileIndex]);
@@ -50,7 +50,7 @@
 		`translate(${activeTransform.tx}px, ${activeTransform.ty}px) scale(${activeTransform.scale})`,
 	);
 	const src = $derived(
-		activeFile ? frameUrl(activeFile.index, currentFrame, windowCenter, windowWidth) : "",
+		activeFile ? frameUrl(activeFile.index, currentFrame, windowCenter, windowWidth, windowMode) : "",
 	);
 	const displayWindowCenter = $derived(
 		liveWindowCenter ?? windowCenter ?? activeFile?.default_window?.center ?? 0,
@@ -59,6 +59,11 @@
 		liveWindowWidth ?? windowWidth ?? activeFile?.default_window?.width ?? 1,
 	);
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
+	const isDragging = $derived(dragState !== null);
+	const isJpegPassthrough = $derived(
+		activeFile?.transfer_syntax_uid === '1.2.840.10008.1.2.4.50' ||
+		activeFile?.transfer_syntax_uid === '1.2.840.10008.1.2.4.51'
+	);
 
 	$effect(() => {
 		if (activeFile && !transformsByFile[activeFile.index]) {
@@ -74,6 +79,23 @@
 			loading = true;
 			loadError = null;
 		}
+	});
+
+	// Reset transform when toolbar Reset is clicked (resetCount incremented by parent)
+	$effect(() => {
+		if (resetCount > 0) {
+			if (activeFile) {
+				updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
+			}
+			liveWindowCenter = null;
+			liveWindowWidth = null;
+		}
+	});
+
+	// Reset wheel accumulator when file changes
+	$effect(() => {
+		activeFileIndex; // dependency
+		wheelAccum = 0;
 	});
 
 	function updateTransform(index: number, transform: TransformState) {
@@ -92,13 +114,10 @@
 		const { scale, tx, ty } = activeTransform;
 		const clamped = Math.min(8, Math.max(0.2, newScale));
 		const imgRect = imgEl.getBoundingClientRect();
-		// Local image coords under the cursor (rendered pos = imgRect.left + lx * scale)
 		const lx = (clientX - imgRect.left) / scale;
 		const ly = (clientY - imgRect.top) / scale;
-		// Image's natural (un-transformed) position
 		const natX = imgRect.left - tx;
 		const natY = imgRect.top - ty;
-		// Solve for new tx/ty so the same local point stays under the cursor
 		updateTransform(activeFile.index, {
 			scale: clamped,
 			tx: clientX - natX - lx * clamped,
@@ -107,40 +126,63 @@
 	}
 
 	function onWheel(event: WheelEvent) {
-		if (!activeFile || !activeFile.has_pixels) {
-			return;
-		}
+		if (!activeFile || !activeFile.has_pixels) return;
 		event.preventDefault();
 
-		// Pinch-to-zoom on trackpads fires wheel events with ctrlKey=true.
-		// Discrete mouse wheels use deltaMode=1 (line) or deltaMode=2 (page).
-		// deltaMode=0 (pixel) without ctrlKey is a trackpad two-finger scroll → pan.
-		const isPinchZoom = event.ctrlKey && event.deltaMode === 0;
-		const isDiscreteWheel = event.deltaMode !== 0;
+		const isModifiedZoom = event.ctrlKey || event.metaKey;
 
-		if (isPinchZoom || isDiscreteWheel) {
-			const delta = isPinchZoom
+		if (isModifiedZoom) {
+			// Ctrl/Cmd + wheel: always zoom (includes trackpad pinch which fires as ctrlKey+pixel)
+			const delta = event.deltaMode === 0
 				? -event.deltaY * 0.01
 				: event.deltaY < 0 ? 0.05 : -0.05;
 			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
+			return;
+		}
+
+		if (activeFile.frame_count > 1) {
+			// Multi-frame: scrub through stack
+			if (event.deltaMode !== 0) {
+				// Discrete mouse wheel: 1 frame per click
+				if (event.deltaY > 0) currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
+				else if (event.deltaY < 0) currentFrame = Math.max(0, currentFrame - 1);
+			} else {
+				// Pixel mode trackpad: accumulate to avoid over-scrubbing
+				wheelAccum += event.deltaY;
+				const threshold = 30;
+				while (wheelAccum >= threshold) {
+					currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
+					wheelAccum -= threshold;
+				}
+				while (wheelAccum <= -threshold) {
+					currentFrame = Math.max(0, currentFrame - 1);
+					wheelAccum += threshold;
+				}
+			}
+			return;
+		}
+
+		// Single-frame: original zoom/pan behavior
+		if (event.deltaMode !== 0) {
+			const delta = event.deltaY < 0 ? 0.05 : -0.05;
+			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
 		} else {
-			// Trackpad scroll: pan the image
-			const current = activeTransform;
+			// Trackpad two-finger scroll: pan
 			updateTransform(activeFile.index, {
-				...current,
-				tx: current.tx - event.deltaX,
-				ty: current.ty - event.deltaY,
+				...activeTransform,
+				tx: activeTransform.tx - event.deltaX,
+				ty: activeTransform.ty - event.deltaY,
 			});
 		}
 	}
 
 	function onPointerDown(event: PointerEvent) {
-		if (!activeFile || !activeFile.has_pixels) {
-			return;
-		}
+		if (!activeFile || !activeFile.has_pixels) return;
 		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 
-		if (event.button === 0) {
+		if (event.button === 1) {
+			// Middle: always pan
+			event.preventDefault();
 			dragState = {
 				mode: "pan",
 				startX: event.clientX,
@@ -152,25 +194,70 @@
 		}
 
 		if (event.button === 2) {
+			// Right: always zoom
 			event.preventDefault();
-			const baseCenter = windowCenter ?? activeFile.default_window?.center ?? 0;
-			const baseWidth = windowWidth ?? activeFile.default_window?.width ?? 1;
 			dragState = {
-				mode: "wl",
+				mode: "zoom_drag",
 				startX: event.clientX,
 				startY: event.clientY,
-				baseCenter,
-				baseWidth,
+				baseScale: activeTransform.scale,
+				pivotX: event.clientX,
+				pivotY: event.clientY,
 			};
-			liveWindowCenter = baseCenter;
-			liveWindowWidth = baseWidth;
+			return;
+		}
+
+		if (event.button === 0) {
+			// Left: route by active tool
+			switch (activeTool) {
+				case "window_level": {
+					const baseCenter = windowCenter ?? activeFile.default_window?.center ?? 0;
+					const baseWidth = windowWidth ?? activeFile.default_window?.width ?? 1;
+					dragState = {
+						mode: "wl",
+						startX: event.clientX,
+						startY: event.clientY,
+						baseCenter,
+						baseWidth,
+					};
+					liveWindowCenter = baseCenter;
+					liveWindowWidth = baseWidth;
+					break;
+				}
+				case "pan":
+					dragState = {
+						mode: "pan",
+						startX: event.clientX,
+						startY: event.clientY,
+						baseTx: activeTransform.tx,
+						baseTy: activeTransform.ty,
+					};
+					break;
+				case "zoom":
+					dragState = {
+						mode: "zoom_drag",
+						startX: event.clientX,
+						startY: event.clientY,
+						baseScale: activeTransform.scale,
+						pivotX: event.clientX,
+						pivotY: event.clientY,
+					};
+					break;
+				case "scroll":
+					if (activeFile.frame_count > 1) {
+						dragState = {
+							mode: "scroll_drag",
+							startY: event.clientY,
+							baseFrame: currentFrame,
+						};
+					}
+					break;
+			}
 		}
 	}
 
 	function onPointerMove(event: PointerEvent) {
-		if (!activeFile || !dragState) {
-			return;
-		}
+		if (!activeFile || !dragState) return;
 
 		if (dragState.mode === "pan") {
 			const dx = event.clientX - dragState.startX;
@@ -183,20 +270,33 @@
 			return;
 		}
 
-		const dx = event.clientX - dragState.startX;
-		const dy = event.clientY - dragState.startY;
-		const nextWidth = Math.max(1, dragState.baseWidth + dx * 4);
-		const nextCenter = dragState.baseCenter - dy * 2;
-		liveWindowCenter = nextCenter;
-		liveWindowWidth = nextWidth;
-
-		if (wlDebounce) {
-			clearTimeout(wlDebounce);
+		if (dragState.mode === "wl") {
+			const dx = event.clientX - dragState.startX;
+			const dy = event.clientY - dragState.startY;
+			const nextWidth = Math.max(1, dragState.baseWidth + dx * 4);
+			const nextCenter = dragState.baseCenter - dy * 2;
+			liveWindowCenter = nextCenter;
+			liveWindowWidth = nextWidth;
+			if (wlDebounce) clearTimeout(wlDebounce);
+			wlDebounce = setTimeout(() => {
+				windowCenter = nextCenter;
+				windowWidth = nextWidth;
+			}, 150);
+			return;
 		}
-		wlDebounce = setTimeout(() => {
-			windowCenter = nextCenter;
-			windowWidth = nextWidth;
-		}, 150);
+
+		if (dragState.mode === "zoom_drag") {
+			const dy = event.clientY - dragState.startY;
+			const newScale = Math.min(8, Math.max(0.2, dragState.baseScale * Math.exp(-dy * 0.005)));
+			zoomAt(newScale, dragState.pivotX, dragState.pivotY);
+			return;
+		}
+
+		if (dragState.mode === "scroll_drag" && activeFile.frame_count > 1) {
+			const dy = event.clientY - dragState.startY;
+			const frameDelta = Math.round(dy / 10);
+			currentFrame = Math.max(0, Math.min(activeFile.frame_count - 1, dragState.baseFrame + frameDelta));
+		}
 	}
 
 	function onPointerUp(event: PointerEvent) {
@@ -213,9 +313,7 @@
 	}
 
 	function resetViewport() {
-		if (!activeFile) {
-			return;
-		}
+		if (!activeFile) return;
 		updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
 		windowCenter = activeFile.default_window?.center ?? null;
 		windowWidth = activeFile.default_window?.width ?? null;
@@ -225,7 +323,6 @@
 
 	function zoomToLevel(level: number) {
 		if (!activeFile || !activeFile.has_pixels) return;
-		// Button-triggered: zoom around viewport center (in client coords)
 		const rect = viewportEl?.getBoundingClientRect();
 		const cx = rect ? rect.left + rect.width / 2 : 0;
 		const cy = rect ? rect.top + rect.height / 2 : 0;
@@ -248,6 +345,8 @@
 <section
 	bind:this={viewportEl}
 	class="viewport"
+	class:dragging={isDragging}
+	data-tool={activeTool}
 	role="application"
 	onwheel={onWheel}
 	onpointerdown={onPointerDown}
@@ -255,7 +354,7 @@
 	onpointerup={onPointerUp}
 	onpointercancel={onPointerCancel}
 	oncontextmenu={onContextMenu}
-	ondblclick={resetViewport}
+	ondblclick={() => { if (onreset) { onreset(); } else { resetViewport(); } }}
 >
 	{#if !activeFile}
 		<div class="placeholder">No file selected</div>
@@ -286,7 +385,7 @@
 		/>
 		<div class="overlay">
 			<span>frame {currentFrame + 1} / {activeFile.frame_count}</span>
-			<span>W: {Math.round(displayWindowWidth)} · C: {Math.round(displayWindowCenter)}</span>
+			<span>{isJpegPassthrough ? 'W/L N/A' : `W: ${Math.round(displayWindowWidth)} · C: ${Math.round(displayWindowCenter)}`}</span>
 		</div>
 		<div class="zoom-controls">
 			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= ZOOM_STEPS[0]}>−</button>
@@ -306,6 +405,12 @@
 		overflow: hidden;
 		user-select: none;
 	}
+	.viewport[data-tool="window_level"] { cursor: crosshair; }
+	.viewport[data-tool="pan"] { cursor: grab; }
+	.viewport[data-tool="pan"]:active { cursor: grabbing; }
+	.viewport[data-tool="zoom"] { cursor: zoom-in; }
+	.viewport[data-tool="scroll"] { cursor: ns-resize; }
+	.viewport.dragging { cursor: grabbing; }
 	img {
 		max-width: 100%;
 		max-height: 100%;
