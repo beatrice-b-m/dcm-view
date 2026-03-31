@@ -1,0 +1,86 @@
+<script lang="ts">
+	import type { ActiveTool } from './viewerTools';
+	import { WL_PRESETS, TOOL_LABELS, TOOL_SHORTCUTS } from './viewerTools';
+
+	let {
+		activeTool = $bindable(),
+		selectedPresetId = $bindable(),
+		onreset,
+	}: {
+		activeTool: ActiveTool;
+		selectedPresetId: string;
+		onreset: () => void;
+	} = $props();
+
+	const tools: ActiveTool[] = ['window_level', 'pan', 'zoom', 'scroll'];
+</script>
+
+<div class="toolbar">
+	<div class="tool-group">
+		{#each tools as tool}
+			<button
+				type="button"
+				class:active={activeTool === tool}
+				onclick={() => { activeTool = tool; }}
+				title="{TOOL_LABELS[tool]} ({TOOL_SHORTCUTS[tool]})"
+			>
+				{TOOL_LABELS[tool]}
+			</button>
+		{/each}
+	</div>
+	<span class="sep"></span>
+	<select bind:value={selectedPresetId}>
+		{#each WL_PRESETS as preset}
+			<option value={preset.id}>{preset.label}</option>
+		{/each}
+	</select>
+	<span class="sep"></span>
+	<button type="button" onclick={onreset} title="Reset viewport (double-click)">Reset</button>
+</div>
+
+<style>
+	.toolbar {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.4rem 0.75rem;
+		background: #242424;
+		border-bottom: 1px solid #333;
+	}
+	.tool-group {
+		display: flex;
+		gap: 2px;
+	}
+	button {
+		background: #1b1b1b;
+		border: 1px solid #3a3a3a;
+		color: #e0e0e0;
+		padding: 0.25rem 0.65rem;
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 0.85rem;
+	}
+	button:hover {
+		background: #2a2a2a;
+	}
+	button.active {
+		border-color: #4a9eff;
+		color: #4a9eff;
+		background: rgba(74, 158, 255, 0.1);
+	}
+	select {
+		background: #1b1b1b;
+		border: 1px solid #3a3a3a;
+		color: #e0e0e0;
+		padding: 0.25rem 0.65rem;
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 0.85rem;
+	}
+	.sep {
+		width: 1px;
+		height: 1.2rem;
+		background: #3a3a3a;
+		margin: 0 0.25rem;
+	}
+</style>
