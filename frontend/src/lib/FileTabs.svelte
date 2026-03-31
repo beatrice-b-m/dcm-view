@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { FileSummary } from "../api";
+	import type { WindowMode } from "../api";
 
 	let {
 		files,
@@ -7,12 +8,16 @@
 		currentFrame = $bindable(),
 		windowCenter = $bindable(),
 		windowWidth = $bindable(),
+		windowMode = $bindable<WindowMode>(),
+		selectedPresetId = $bindable<string>(),
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number;
 		currentFrame: number;
 		windowCenter: number | null;
 		windowWidth: number | null;
+		windowMode: WindowMode;
+		selectedPresetId: string;
 	} = $props();
 
 	function activate(index: number) {
@@ -20,6 +25,8 @@
 		currentFrame = 0;
 		windowCenter = null;
 		windowWidth = null;
+		windowMode = 'default';
+		selectedPresetId = 'default';
 	}
 </script>
 
