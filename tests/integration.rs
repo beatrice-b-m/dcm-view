@@ -7,4 +7,5 @@ mod integration {
 	mod server_minimal;
 	mod tags_endpoint;
 	mod tunnel_lifecycle;
+	mod pixels_raw_endpoint;
 }
