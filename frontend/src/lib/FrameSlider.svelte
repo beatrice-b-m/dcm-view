@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { frameUrl, type FileSummary } from "../api";
+	import { frameUrl, type FileSummary, type WindowMode } from "../api";
 
 	let {
 		files,
@@ -7,16 +7,23 @@
 		currentFrame = $bindable(),
 		windowCenter,
 		windowWidth,
+		windowMode,
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number;
 		currentFrame: number;
 		windowCenter: number | null;
 		windowWidth: number | null;
+		windowMode: WindowMode;
 	} = $props();
 
 	let isPlaying = $state(false);
 	let playTimer: ReturnType<typeof setInterval> | null = null;
+
+	const FPS_OPTIONS = [1, 5, 10, 15, 24];
+	let fps = $state(10);
+	let sweepMode = $state(false);
+	let playDirection: 1 | -1 = 1;
 
 	const activeFile = $derived(files[activeFileIndex]);
 
@@ -35,8 +42,9 @@
 	}
 
 	function togglePlay() {
-		if (!activeFile || activeFile.frame_count <= 1) {
-			return;
+		if (!activeFile || activeFile.frame_count <= 1) return;
+		if (!isPlaying) {
+			playDirection = 1;
 		}
 		isPlaying = !isPlaying;
 	}
@@ -60,9 +68,20 @@
 			return;
 		}
 
+		const intervalMs = 1000 / fps;
 		playTimer = setInterval(() => {
-			currentFrame = (currentFrame + 1) % activeFile.frame_count;
-		}, 100);
+			if (!activeFile) return;
+			if (sweepMode) {
+				const next = currentFrame + playDirection;
+				if (next >= activeFile.frame_count || next < 0) {
+					playDirection = playDirection === 1 ? -1 : 1;
+				} else {
+					currentFrame = next;
+				}
+			} else {
+				currentFrame = (currentFrame + 1) % activeFile.frame_count;
+			}
+		}, intervalMs);
 
 		return () => {
 			if (playTimer) {
@@ -81,7 +100,7 @@
 			if (targetFrame >= activeFile.frame_count) {
 				continue;
 			}
-			const prefetchUrl = frameUrl(activeFile.index, targetFrame, windowCenter, windowWidth);
+			const prefetchUrl = frameUrl(activeFile.index, targetFrame, windowCenter, windowWidth, windowMode);
 			void fetch(prefetchUrl).catch(() => {});
 		}
 	});
@@ -105,6 +124,10 @@
 				event.preventDefault();
 				next();
 			}
+			if (event.key === ' ') {
+				event.preventDefault();
+				togglePlay();
+			}
 		};
 
 		window.addEventListener("keydown", handleKey);
@@ -119,6 +142,14 @@
 		<button type="button" onclick={next}>▶</button>
 		<button type="button" class="play" onclick={togglePlay}>
 			{isPlaying ? "⏸" : "▶"}
+		</button>
+		<select class="fps-select" bind:value={fps}>
+			{#each FPS_OPTIONS as f}
+				<option value={f}>{f} fps</option>
+			{/each}
+		</select>
+		<button type="button" class="mode-toggle" onclick={() => sweepMode = !sweepMode}>
+			{sweepMode ? 'Sweep' : 'Loop'}
 		</button>
 	</div>
 {/if}
@@ -142,5 +173,16 @@
 	.play {
 		margin-left: 0.25rem;
 		border-color: #4a9eff;
+	}
+	.fps-select {
+		background: #1b1b1b;
+		border: 1px solid #3a3a3a;
+		color: #e0e0e0;
+		padding: 0.25rem 0.4rem;
+		border-radius: 6px;
+		font-size: inherit;
+	}
+	.mode-toggle {
+		font-size: 0.85em;
 	}
 </style>
