@@ -65,7 +65,23 @@ pub fn start_tunnel(bind_port: u16, tunnel_host: String, tunnel_port: u16) -> Re
 		});
 	}
 
-	wait_for_local_port(expose_port).context("tunnel readiness probe failed")?;
+	if let Err(e) = wait_for_local_port(expose_port) {
+		// The SSH process started but the port never became reachable.
+		// Kill it (best-effort) and degrade gracefully: caller prints manual
+		// forwarding instructions the same way it does for ssh_not_found.
+		let _ = child.kill();
+		let _ = child.wait();
+		return Ok(TunnelRuntime {
+			info: TunnelInfo {
+				tunnel_host,
+				tunnel_port: expose_port,
+			},
+			handle: None,
+			warning: Some(format!(
+				"dcmview: warning — SSH tunnel readiness probe timed out ({e}), continuing without tunnel",
+			)),
+		});
+	}
 
 	let handle = TunnelHandle {
 		child: Arc::new(Mutex::new(child)),
