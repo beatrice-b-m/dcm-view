@@ -34,23 +34,30 @@
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
 	let dragState = $state<DragState>(null);
-	let loading = $state(true);
+	let loading = $state(false);
 	let loadError = $state<string | null>(null);
 	let liveWindowCenter = $state<number | null>(null);
 	let liveWindowWidth = $state<number | null>(null);
-	let wlDebounce: ReturnType<typeof setTimeout> | null = null;
+	let displaySrc = $state('');
 	let viewportEl: HTMLElement | undefined = $state();
 	let imgEl: HTMLImageElement | undefined = $state();
 	let wheelAccum = $state(0);
 
+	// Non-reactive: mutations must not trigger Svelte re-renders.
+	// AbortController for the currently in-flight frame fetch.
+	let pendingController: AbortController | null = null;
+	// Client-side frame cache: frame index → blob URL.
+	// Valid only for the current _frameCacheKey scope.
+	let frameCache = new Map<number, string>();
+	let _frameCacheKey = '';
+	// requestAnimationFrame handle for W/L drag throttle.
+	let wlRafId: number | null = null;
+
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
-	const activeFile = $derived(files[activeFileIndex]);
+	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
 	const transformCss = $derived(
 		`translate(${activeTransform.tx}px, ${activeTransform.ty}px) scale(${activeTransform.scale})`,
-	);
-	const src = $derived(
-		activeFile ? frameUrl(activeFile.index, currentFrame, windowCenter, windowWidth, windowMode) : "",
 	);
 	const displayWindowCenter = $derived(
 		liveWindowCenter ?? windowCenter ?? activeFile?.default_window?.center ?? 0,
@@ -65,6 +72,122 @@
 		activeFile?.transfer_syntax_uid === '1.2.840.10008.1.2.4.51'
 	);
 
+	// --- Cache management ---
+
+	function clearFrameCache() {
+		for (const url of frameCache.values()) URL.revokeObjectURL(url);
+		frameCache = new Map();
+	}
+
+	/**
+	 * Revoke a blob URL if it is not currently held in the frame cache.
+	 * Call before replacing displaySrc with a new blob URL.
+	 */
+	function revokeIfOrphaned(blobUrl: string) {
+		if (!blobUrl.startsWith('blob:')) return;
+		for (const cached of frameCache.values()) {
+			if (cached === blobUrl) return; // still referenced by cache
+		}
+		URL.revokeObjectURL(blobUrl);
+	}
+
+	// --- Image loading ---
+
+	/**
+	 * Load a frame from `url` and update displaySrc.
+	 *
+	 * frameIndex: when non-null, the result is stored in frameCache (keyed by frame index) and
+	 *   the cache is checked before issuing a network request. Pass null for intermediate W/L
+	 *   drag values that should not pollute the cache.
+	 *
+	 * isDragFrame: when true, liveWindowCenter/Width are NOT cleared on successful load —
+	 *   the drag is still in progress and the user still needs to see live overlay values.
+	 *
+	 * Any currently in-flight request is aborted before this fetch begins. This prevents
+	 * race conditions where older responses overwrite newer ones.
+	 */
+	async function loadFrame(
+		url: string,
+		frameIndex: number | null,
+		isDragFrame = false,
+	): Promise<void> {
+		// Fast path: cache hit — no network round-trip, no loading indicator.
+		if (frameIndex !== null) {
+			const cached = frameCache.get(frameIndex);
+			if (cached) {
+				revokeIfOrphaned(displaySrc);
+				displaySrc = cached;
+				loading = false;
+				loadError = null;
+				if (!isDragFrame) {
+					liveWindowCenter = null;
+					liveWindowWidth = null;
+				}
+				return;
+			}
+		}
+
+		// Abort any stale in-flight request before starting a new one.
+		pendingController?.abort();
+		const controller = new AbortController();
+		pendingController = controller;
+
+		loading = true;
+		loadError = null;
+
+		try {
+			const response = await fetch(url, { signal: controller.signal });
+			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			const blob = await response.blob();
+
+			// Another fetch superseded this one — do not update display.
+			if (controller.signal.aborted) return;
+
+			const blobUrl = URL.createObjectURL(blob);
+
+			revokeIfOrphaned(displaySrc);
+
+			if (frameIndex !== null) {
+				frameCache.set(frameIndex, blobUrl);
+			}
+
+			displaySrc = blobUrl;
+			// loading is cleared by <img onload> once the browser has painted the image.
+			loadError = null;
+			if (!isDragFrame) {
+				liveWindowCenter = null;
+				liveWindowWidth = null;
+			}
+		} catch (e) {
+			if ((e as Error).name === 'AbortError') return;
+			loading = false;
+			loadError = 'Failed to load frame';
+		} finally {
+			if (pendingController === controller) pendingController = null;
+		}
+	}
+
+	/**
+	 * Schedule a W/L preview fetch for the next animation frame.
+	 * At most one fetch is dispatched per animation frame — subsequent calls within the
+	 * same frame are no-ops. The fetch uses the current live W/L values and is not cached
+	 * (intermediate drag values are not useful to retain).
+	 */
+	function scheduleWLFetch() {
+		if (wlRafId !== null) return;
+		wlRafId = requestAnimationFrame(() => {
+			wlRafId = null;
+			if (!activeFile || !activeFile.has_pixels) return;
+			const url = frameUrl(
+				activeFile.index, currentFrame, liveWindowCenter, liveWindowWidth, windowMode,
+			);
+			void loadFrame(url, null, true);
+		});
+	}
+
+	// --- Effects ---
+
+	// Initialise per-file transform state on first access.
 	$effect(() => {
 		if (activeFile && !transformsByFile[activeFile.index]) {
 			transformsByFile = {
@@ -74,14 +197,48 @@
 		}
 	});
 
+	/**
+	 * Main image load effect. Runs when:
+	 *   - the active file changes (activeFileIndex)
+	 *   - the current frame changes
+	 *   - committed W/L values change (windowCenter, windowWidth, windowMode)
+	 *
+	 * The cache is invalidated whenever the scope (file + committed W/L) changes.
+	 * Intermediate W/L drag values do NOT flow through here — they go via scheduleWLFetch().
+	 */
 	$effect(() => {
-		if (src) {
-			loading = true;
-			loadError = null;
+		if (!activeFile || !activeFile.has_pixels) {
+			displaySrc = '';
+			loading = false;
+			return;
 		}
+
+		const key = `${activeFileIndex}|${windowCenter ?? ''}|${windowWidth ?? ''}|${windowMode}`;
+		if (key !== _frameCacheKey) {
+			// File or committed W/L changed: evict all cached blobs and clear displaySrc
+			// so the stale image from the previous scope is not briefly shown.
+			clearFrameCache();
+			_frameCacheKey = key;
+			revokeIfOrphaned(displaySrc);
+			displaySrc = '';
+			loading = true;
+		}
+
+		const url = frameUrl(activeFile.index, currentFrame, windowCenter, windowWidth, windowMode);
+		void loadFrame(url, currentFrame);
 	});
 
-	// Reset transform when toolbar Reset is clicked (resetCount incremented by parent)
+	// Cleanup on component destroy: abort in-flight request, revoke all blob URLs.
+	$effect(() => {
+		return () => {
+			if (wlRafId !== null) cancelAnimationFrame(wlRafId);
+			pendingController?.abort();
+			revokeIfOrphaned(displaySrc);
+			clearFrameCache();
+		};
+	});
+
+	// Reset transform when toolbar Reset is clicked (resetCount incremented by parent).
 	$effect(() => {
 		if (resetCount > 0) {
 			if (activeFile) {
@@ -92,7 +249,7 @@
 		}
 	});
 
-	// Reset wheel accumulator when file changes
+	// Reset wheel accumulator when file changes.
 	$effect(() => {
 		activeFileIndex; // dependency
 		wheelAccum = 0;
@@ -277,11 +434,9 @@
 			const nextCenter = dragState.baseCenter - dy * 2;
 			liveWindowCenter = nextCenter;
 			liveWindowWidth = nextWidth;
-			if (wlDebounce) clearTimeout(wlDebounce);
-			wlDebounce = setTimeout(() => {
-				windowCenter = nextCenter;
-				windowWidth = nextWidth;
-			}, 150);
+			// Throttle server requests to at most one per animation frame (~60/s).
+			// Each request aborts its predecessor, preventing out-of-order renders.
+			scheduleWLFetch();
 			return;
 		}
 
@@ -301,10 +456,27 @@
 
 	function onPointerUp(event: PointerEvent) {
 		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+
+		if (dragState?.mode === 'wl') {
+			// Cancel any pending rAF — the main $effect fires the final fetch.
+			if (wlRafId !== null) {
+				cancelAnimationFrame(wlRafId);
+				wlRafId = null;
+			}
+			// Committing live values triggers the main $effect, which invalidates the
+			// frame cache (new W/L scope) and fetches+caches the frame at this W/L.
+			windowCenter = liveWindowCenter;
+			windowWidth = liveWindowWidth;
+		}
+
 		dragState = null;
 	}
 
 	function onPointerCancel() {
+		if (wlRafId !== null) {
+			cancelAnimationFrame(wlRafId);
+			wlRafId = null;
+		}
 		dragState = null;
 	}
 
@@ -366,23 +538,17 @@
 		{#if loading}
 			<div class="loading">Loading frame…</div>
 		{/if}
-		<img
-			bind:this={imgEl}
-			src={src}
-			alt={`frame ${currentFrame + 1}`}
-			draggable="false"
-			style={`transform:${transformCss}`}
-			onload={() => {
-				loading = false;
-				loadError = null;
-				liveWindowCenter = null;
-				liveWindowWidth = null;
-			}}
-			onerror={() => {
-				loading = false;
-				loadError = "Failed to load frame";
-			}}
-		/>
+		{#if displaySrc}
+			<img
+				bind:this={imgEl}
+				src={displaySrc}
+				alt={`frame ${currentFrame + 1}`}
+				draggable="false"
+				style={`transform:${transformCss}`}
+				onload={() => { loading = false; }}
+				onerror={() => { loading = false; loadError = 'Failed to load frame'; }}
+			/>
+		{/if}
 		<div class="overlay">
 			<span>frame {currentFrame + 1} / {activeFile.frame_count}</span>
 			<span>{isJpegPassthrough ? 'W/L N/A' : `W: ${Math.round(displayWindowWidth)} · C: ${Math.round(displayWindowCenter)}`}</span>
