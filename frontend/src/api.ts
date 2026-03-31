@@ -1,3 +1,5 @@
+export type WindowMode = 'default' | 'full_dynamic';
+
 export interface WindowPreset {
 	center: number;
 	width: number;
@@ -66,13 +68,16 @@ export function fetchTags(fileIndex: number): Promise<TagNode[]> {
 	return requestJson<TagNode[]>(`/api/file/${fileIndex}/tags`);
 }
 
-export function frameUrl(fileIndex: number, frame: number, wc?: number | null, ww?: number | null): string {
+export function frameUrl(fileIndex: number, frame: number, wc?: number | null, ww?: number | null, windowMode?: WindowMode | null): string {
 	const url = new URL(`/api/file/${fileIndex}/frame/${frame}`, window.location.origin);
 	if (wc !== undefined && wc !== null) {
 		url.searchParams.set("wc", String(wc));
 	}
 	if (ww !== undefined && ww !== null) {
 		url.searchParams.set("ww", String(ww));
+	}
+	if (windowMode === 'full_dynamic') {
+		url.searchParams.set("mode", "full_dynamic");
 	}
 	return `${url.pathname}${url.search}`;
 }
