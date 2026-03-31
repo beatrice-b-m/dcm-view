@@ -1,6 +1,6 @@
 use crate::pixels::{self, FrameRequest};
 use crate::tunnel::{self, TunnelHandle};
-use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo};
+use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo, WindowMode};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -51,6 +51,7 @@ pub struct ServerConfig {
 struct FrameQuery {
 	wc: Option<f64>,
 	ww: Option<f64>,
+	mode: Option<WindowMode>,
 }
 
 #[derive(RustEmbed)]
@@ -176,6 +177,7 @@ async fn frame_handler(
 			frame,
 			window_center: query.wc,
 			window_width: query.ww,
+			window_mode: query.mode.unwrap_or_default(),
 			accept_header,
 		},
 	)
