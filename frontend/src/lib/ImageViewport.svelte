@@ -48,6 +48,9 @@
 	let pendingRawCtrl: AbortController | null = null;
 	let prefetchController: AbortController | null = null;
 	let rawFrameCache = new Map<number, RawFrame>();
+	// lastHandledResetCount is non-reactive: only the effect reads/writes it,
+	// so mutations here must not trigger Svelte dependency tracking.
+	let lastHandledResetCount = 0;
 
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
@@ -350,15 +353,23 @@
 		};
 	});
 
-	// Reset transform when toolbar Reset is clicked (resetCount incremented by parent).
+	// Reset transform/window when toolbar Reset is clicked.
+	// Edge-triggered on resetCount: acts only when the counter increments,
+	// never while it merely stays > 0 (which would snap every user interaction).
 	$effect(() => {
-		if (resetCount > 0) {
-			if (activeFile) {
-				updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
-			}
-			liveWindowCenter = null;
-			liveWindowWidth = null;
+		if (resetCount === lastHandledResetCount) return;
+		lastHandledResetCount = resetCount;
+		// Guard against the initial render (count is 0, no reset has occurred).
+		if (resetCount === 0) return;
+		if (activeFile) {
+			updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
 		}
+		liveWindowCenter = null;
+		liveWindowWidth = null;
+		// Clear transient interaction state so in-progress gestures don't
+		// resurrect stale drag / scroll context after the reset.
+		dragState = null;
+		wheelAccum = 0;
 	});
 
 	// Reset wheel accumulator when file changes.
