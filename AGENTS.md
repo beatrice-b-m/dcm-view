@@ -4,7 +4,7 @@
 
 `dcmview` is an ephemeral, CLI-invoked DICOM inspection tool for developers and data scientists. It starts a temporary local web server exposing an interactive browser-based viewer, then exits cleanly when the user is done. The primary use case is **multi-frame DICOM inspection** (DBT, cine MR) — workloads that are impractical in a Jupyter notebook due to Python interpreter overhead. Single-frame inspection is a convenience.
 
-**Status:** Pre-implementation. `SYSTEM_SPEC.md` is the authoritative source of truth; no source files exist yet. Implementation order is defined in §17 of the spec.
+**Status:** Core implementation complete. `SYSTEM_SPEC.md` is the authoritative source of truth; implementation order was defined in §17 of the spec.
 
 **Design axioms** (non-negotiable):
 - **Ephemeral** — no persistent state, no config files, no database
@@ -12,6 +12,25 @@
 - **Single binary** — `cargo install dcmview` produces one self-contained executable with the frontend baked in
 
 ---
+
+---
+
+## Git Commit Policy
+
+Every completed task **MUST** be tracked in a descriptive, granular git commit. This requirement is **absolutely critical** and must be followed under all circumstances — no exceptions.
+
+**Rules:**
+- Commit after every distinct logical unit of work, not at the end of a session.
+- Each commit covers exactly one coherent change (one module, one component, one test suite, one docs section). Do not batch unrelated changes into a single commit.
+- Commit messages must be informative: use `type(scope): subject` format, include a blank line, then a body describing *what* changed and *why*.
+  - Types: `feat`, `fix`, `test`, `docs`, `refactor`, `chore`
+  - Scope: the module, file, or subsystem affected (e.g. `backend`, `frontend`, `pixels`, `server`, `types`, `tests`)
+  - Subject: imperative mood, ≤72 characters
+  - Body: explain the design decision, the invariant being established, or the behaviour being changed — not a restatement of the diff
+- Stage files selectively (`git add <file>`) rather than `git add -A`. Only commit files that belong to the current logical unit.
+- Never amend or force-push commits that have been logged here.
+
+**Verification:** After each task, run `git log --oneline -3` to confirm the commit was recorded before moving to the next task.
 
 ## Architecture & Data Flow
 
