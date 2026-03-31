@@ -67,21 +67,31 @@ pub struct FrameInfo {
 	pub default_window: Option<WindowPreset>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowMode {
+	#[default]
+	Default,
+	FullDynamic,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FrameCacheKey {
 	pub file_index: usize,
 	pub frame: u32,
 	pub window_center_bits: u64,
 	pub window_width_bits: u64,
+	pub window_mode: WindowMode,
 }
 
 impl FrameCacheKey {
-	pub fn new(file_index: usize, frame: u32, window_center: Option<f64>, window_width: Option<f64>) -> Self {
+	pub fn new(file_index: usize, frame: u32, window_center: Option<f64>, window_width: Option<f64>, window_mode: WindowMode) -> Self {
 		Self {
 			file_index,
 			frame,
 			window_center_bits: window_center.map(f64::to_bits).unwrap_or(0),
 			window_width_bits: window_width.map(f64::to_bits).unwrap_or(0),
+			window_mode,
 		}
 	}
 }
