@@ -29,6 +29,15 @@ pub struct TunnelRuntime {
 
 pub fn start_tunnel(bind_port: u16, tunnel_host: String, tunnel_port: u16) -> Result<TunnelRuntime> {
 	let expose_port = if tunnel_port == 0 { bind_port } else { tunnel_port };
+	let tunnel_host = tunnel_host.trim().to_string();
+	if tunnel_host.is_empty() {
+		return Err(anyhow!("dcmview: --tunnel-host must not be empty"));
+	}
+	if tunnel_host.starts_with('-') {
+		return Err(anyhow!(
+			"dcmview: --tunnel-host must not start with '-' (rejecting ssh option-like value)"
+		));
+	}
 
 	if !ssh_available() {
 		return Ok(TunnelRuntime {
@@ -41,17 +50,17 @@ pub fn start_tunnel(bind_port: u16, tunnel_host: String, tunnel_port: u16) -> Re
 		});
 	}
 
+	let port_forward = format!("{expose_port}:127.0.0.1:{bind_port}");
 	let mut child = Command::new("ssh")
-		.args([
-			"-N",
-			"-o",
-			"ExitOnForwardFailure=yes",
-			"-o",
-			"ServerAliveInterval=10",
-			"-L",
-			&format!("{expose_port}:127.0.0.1:{bind_port}"),
-			&tunnel_host,
-		])
+		.arg("-N")
+		.arg("-o")
+		.arg("ExitOnForwardFailure=yes")
+		.arg("-o")
+		.arg("ServerAliveInterval=10")
+		.arg("-L")
+		.arg(&port_forward)
+		.arg("--")
+		.arg(&tunnel_host)
 		.stderr(Stdio::piped())
 		.spawn()
 		.context("failed to spawn ssh tunnel")?;

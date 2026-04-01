@@ -3,12 +3,13 @@ use crate::tunnel::{self, TunnelHandle};
 use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, RawFrameMetadata, TagNode, TagValue, TunnelInfo, WindowMode};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bytes::Bytes;
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
+use dicom_core::header::HasLength;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_object::{open_file, InMemDicomObject};
 use lru::LruCache;
@@ -199,14 +200,10 @@ async fn frame_handler(
 	let cache_header = if frame_response.cache_hit { "HIT" } else { "MISS" };
 	response
 		.headers_mut()
-		.insert("X-Cache", cache_header.parse().expect("valid cache header"));
-	response.headers_mut().insert(
-		header::CONTENT_TYPE,
-		frame_response
-			.content_type
-			.parse()
-			.expect("valid content type header"),
-	);
+		.insert("X-Cache", HeaderValue::from_static(cache_header));
+	response
+		.headers_mut()
+		.insert(header::CONTENT_TYPE, HeaderValue::from_static(frame_response.content_type));
 	Ok(response)
 }
 
@@ -241,42 +238,33 @@ async fn raw_frame_handler(
 
 	let mut response = Response::new(axum::body::Body::from(raw_response.body));
 	let headers = response.headers_mut();
-	headers.insert("X-Cache", cache_header.parse().expect("valid cache header value"));
-	headers.insert(
-		header::CONTENT_TYPE,
-		"application/octet-stream".parse().expect("valid content type"),
-	);
-	headers.insert("X-Frame-Rows", meta.rows.to_string().parse().expect("valid header"));
-	headers.insert("X-Frame-Columns", meta.columns.to_string().parse().expect("valid header"));
-	headers.insert(
-		"X-Frame-Bits-Allocated",
-		meta.bits_allocated.to_string().parse().expect("valid header"),
-	);
-	headers.insert(
+	headers.insert("X-Cache", HeaderValue::from_static(cache_header));
+	headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+	insert_header_if_valid(headers, "X-Frame-Rows", meta.rows.to_string());
+	insert_header_if_valid(headers, "X-Frame-Columns", meta.columns.to_string());
+	insert_header_if_valid(headers, "X-Frame-Bits-Allocated", meta.bits_allocated.to_string());
+	insert_header_if_valid(
+		headers,
 		"X-Frame-Pixel-Representation",
-		meta.pixel_representation.to_string().parse().expect("valid header"),
+		meta.pixel_representation.to_string(),
 	);
-	headers.insert(
-		"X-Frame-Samples-Per-Pixel",
-		meta.samples_per_pixel.to_string().parse().expect("valid header"),
-	);
-	headers.insert(
+	insert_header_if_valid(headers, "X-Frame-Samples-Per-Pixel", meta.samples_per_pixel.to_string());
+	insert_header_if_valid(
+		headers,
 		"X-Frame-Photometric-Interpretation",
-		meta.photometric_interpretation.parse().expect("valid header"),
+		meta.photometric_interpretation.clone(),
 	);
-	headers.insert(
-		"X-Frame-Rescale-Slope",
-		meta.rescale_slope.to_string().parse().expect("valid header"),
-	);
-	headers.insert(
+	insert_header_if_valid(headers, "X-Frame-Rescale-Slope", meta.rescale_slope.to_string());
+	insert_header_if_valid(
+		headers,
 		"X-Frame-Rescale-Intercept",
-		meta.rescale_intercept.to_string().parse().expect("valid header"),
+		meta.rescale_intercept.to_string(),
 	);
 	if let Some(wc) = meta.default_wc {
-		headers.insert("X-Frame-Default-Wc", wc.to_string().parse().expect("valid header"));
+		insert_header_if_valid(headers, "X-Frame-Default-Wc", wc.to_string());
 	}
 	if let Some(ww) = meta.default_ww {
-		headers.insert("X-Frame-Default-Ww", ww.to_string().parse().expect("valid header"));
+		insert_header_if_valid(headers, "X-Frame-Default-Ww", ww.to_string());
 	}
 
 	Ok(response)
@@ -337,6 +325,8 @@ fn serialize_element(
 	}
 }
 
+const TAG_TEXT_PREVIEW_LIMIT: usize = 256;
+
 fn serialize_tag_value(
 	element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
 	tag_repr: &str,
@@ -385,16 +375,35 @@ fn serialize_tag_value(
 			TagValue::Numbers { value: numbers }
 		}
 	} else {
-		let text = if string_value.len() > 256 {
-			format!("{}…", &string_value[..256])
-		} else {
-			string_value.replace('\\', "; ")
-		};
-		TagValue::String { value: text }
+		TagValue::String {
+			value: format_tag_text_preview(&string_value),
+		}
+	}
+}
+
+fn format_tag_text_preview(raw: &str) -> String {
+	let normalized = raw.replace('\\', "; ");
+	let mut chars = normalized.chars();
+	let preview: String = chars.by_ref().take(TAG_TEXT_PREVIEW_LIMIT).collect();
+	if chars.next().is_some() {
+		format!("{preview}…")
+	} else {
+		preview
 	}
 }
 
 fn binary_value_from_element(element: &dicom_object::mem::InMemElement<StandardDataDictionary>) -> TagValue {
+	if let Some(length) = element.header().length().get() {
+		return TagValue::Binary {
+			length: length as usize,
+		};
+	}
+
+	if let Some(fragments) = element.fragments() {
+		let length = fragments.iter().map(|fragment| fragment.len()).sum();
+		return TagValue::Binary { length };
+	}
+
 	match element.to_bytes() {
 		Ok(bytes) => TagValue::Binary {
 			length: bytes.len(),
@@ -443,10 +452,15 @@ fn serve_asset(path: &str) -> Option<Response> {
 	};
 
 	let mut response = Response::new(axum::body::Body::from(asset.data));
-	response
-		.headers_mut()
-		.insert(header::CONTENT_TYPE, mime.parse().expect("valid mime"));
+	response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
 	Some(response)
+
+}
+
+fn insert_header_if_valid(headers: &mut HeaderMap, name: &'static str, value: String) {
+	if let Ok(parsed) = HeaderValue::from_str(&value) {
+		headers.insert(name, parsed);
+	}
 }
 
 fn touch_request(state: &AppState) {

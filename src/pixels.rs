@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 use tokio::task;
 
 pub const CACHE_CAPACITY: usize = 128;
+pub const FRAME_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
+pub const RAW_CACHE_CAPACITY: usize = 512;
+pub const RAW_CACHE_MAX_BYTES: usize = 384 * 1024 * 1024; // 384 MiB
 
 pub fn new_cache() -> Arc<Mutex<LruCache<FrameCacheKey, Bytes>>> {
 	Arc::new(Mutex::new(LruCache::new(
@@ -20,12 +23,74 @@ pub fn new_cache() -> Arc<Mutex<LruCache<FrameCacheKey, Bytes>>> {
 	)))
 }
 
-pub const RAW_CACHE_CAPACITY: usize = 512;
-
 pub fn new_raw_cache() -> Arc<Mutex<LruCache<RawFrameCacheKey, (Bytes, RawFrameMetadata)>>> {
 	Arc::new(Mutex::new(LruCache::new(
 		NonZeroUsize::new(RAW_CACHE_CAPACITY).expect("non-zero raw cache capacity"),
 	)))
+}
+
+fn frame_cache_bytes(cache: &LruCache<FrameCacheKey, Bytes>) -> usize {
+	cache.iter().map(|(_, body)| body.len()).sum()
+}
+
+fn raw_cache_bytes(cache: &LruCache<RawFrameCacheKey, (Bytes, RawFrameMetadata)>) -> usize {
+	cache.iter().map(|(_, (body, _))| body.len()).sum()
+}
+
+fn cache_frame_with_budget(cache: &mut LruCache<FrameCacheKey, Bytes>, key: FrameCacheKey, body: Bytes) {
+	cache_frame_with_budget_limit(cache, key, body, FRAME_CACHE_MAX_BYTES);
+}
+
+fn cache_frame_with_budget_limit(
+	cache: &mut LruCache<FrameCacheKey, Bytes>,
+	key: FrameCacheKey,
+	body: Bytes,
+	max_bytes: usize,
+) {
+	let incoming = body.len();
+	if incoming > max_bytes {
+		return;
+	}
+
+	cache.pop(&key);
+	while frame_cache_bytes(cache).saturating_add(incoming) > max_bytes {
+		if cache.pop_lru().is_none() {
+			return;
+		}
+	}
+
+	cache.put(key, body);
+}
+
+fn cache_raw_with_budget(
+	cache: &mut LruCache<RawFrameCacheKey, (Bytes, RawFrameMetadata)>,
+	key: RawFrameCacheKey,
+	body: Bytes,
+	metadata: RawFrameMetadata,
+) {
+	cache_raw_with_budget_limit(cache, key, body, metadata, RAW_CACHE_MAX_BYTES);
+}
+
+fn cache_raw_with_budget_limit(
+	cache: &mut LruCache<RawFrameCacheKey, (Bytes, RawFrameMetadata)>,
+	key: RawFrameCacheKey,
+	body: Bytes,
+	metadata: RawFrameMetadata,
+	max_bytes: usize,
+) {
+	let incoming = body.len();
+	if incoming > max_bytes {
+		return;
+	}
+
+	cache.pop(&key);
+	while raw_cache_bytes(cache).saturating_add(incoming) > max_bytes {
+		if cache.pop_lru().is_none() {
+			return;
+		}
+	}
+
+	cache.put(key, (body, metadata));
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +162,7 @@ pub async fn load_raw_frame(
 	};
 
 	if let Ok(mut lock) = cache.lock() {
-		lock.put(key, (body.clone(), metadata.clone()));
+		cache_raw_with_budget(&mut lock, key, body.clone(), metadata.clone());
 	}
 
 	Ok(RawFrameResponse {
@@ -218,7 +283,7 @@ pub async fn load_frame(
 
 	if cache_allowed {
 		if let Ok(mut lock) = cache.lock() {
-			lock.put(key, body.clone());
+			cache_frame_with_budget(&mut lock, key, body.clone());
 		}
 	}
 
@@ -888,4 +953,83 @@ pub fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
 		.iter()
 		.map(|sample| (((sample.clamp(low, high) - low) / (high - low)) * 255.0).round() as u8)
 		.collect()
+}
+
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn frame_key(frame: u32) -> FrameCacheKey {
+		FrameCacheKey::new(0, frame, None, None, WindowMode::Default)
+	}
+
+	fn raw_key(frame: u32) -> RawFrameCacheKey {
+		RawFrameCacheKey { file_index: 0, frame }
+	}
+
+	fn raw_meta() -> RawFrameMetadata {
+		RawFrameMetadata {
+			rows: 1,
+			columns: 1,
+			bits_allocated: 8,
+			pixel_representation: 0,
+			samples_per_pixel: 1,
+			photometric_interpretation: "MONOCHROME2".to_string(),
+			rescale_slope: 1.0,
+			rescale_intercept: 0.0,
+			default_wc: None,
+			default_ww: None,
+		}
+	}
+
+	fn frame_cache_contains(cache: &LruCache<FrameCacheKey, Bytes>, key: &FrameCacheKey) -> bool {
+		cache.iter().any(|(cached_key, _)| cached_key == key)
+	}
+
+	fn raw_cache_contains(cache: &LruCache<RawFrameCacheKey, (Bytes, RawFrameMetadata)>, key: &RawFrameCacheKey) -> bool {
+		cache.iter().any(|(cached_key, _)| cached_key == key)
+	}
+
+	#[test]
+	fn frame_cache_budget_evicts_lru_entries() {
+		let mut cache = LruCache::new(NonZeroUsize::new(4).expect("non-zero cache size"));
+		let key0 = frame_key(0);
+		let key1 = frame_key(1);
+		let key2 = frame_key(2);
+
+		cache_frame_with_budget_limit(&mut cache, key0.clone(), Bytes::from(vec![0_u8; 4]), 8);
+		cache_frame_with_budget_limit(&mut cache, key1.clone(), Bytes::from(vec![1_u8; 4]), 8);
+		cache_frame_with_budget_limit(&mut cache, key2.clone(), Bytes::from(vec![2_u8; 4]), 8);
+
+		assert!(!frame_cache_contains(&cache, &key0), "least-recently-used entry should be evicted");
+		assert!(frame_cache_contains(&cache, &key1), "second entry should still be cached");
+		assert!(frame_cache_contains(&cache, &key2), "new entry should be cached");
+	}
+
+	#[test]
+	fn frame_cache_budget_skips_oversized_entries() {
+		let mut cache = LruCache::new(NonZeroUsize::new(4).expect("non-zero cache size"));
+		let key0 = frame_key(0);
+
+		cache_frame_with_budget_limit(&mut cache, key0.clone(), Bytes::from(vec![0_u8; 9]), 8);
+
+		assert!(!frame_cache_contains(&cache, &key0), "oversized entry should be skipped");
+	}
+
+	#[test]
+	fn raw_cache_budget_evicts_lru_entries() {
+		let mut cache = LruCache::new(NonZeroUsize::new(4).expect("non-zero cache size"));
+		let key0 = raw_key(0);
+		let key1 = raw_key(1);
+		let key2 = raw_key(2);
+
+		cache_raw_with_budget_limit(&mut cache, key0.clone(), Bytes::from(vec![0_u8; 4]), raw_meta(), 8);
+		cache_raw_with_budget_limit(&mut cache, key1.clone(), Bytes::from(vec![1_u8; 4]), raw_meta(), 8);
+		cache_raw_with_budget_limit(&mut cache, key2.clone(), Bytes::from(vec![2_u8; 4]), raw_meta(), 8);
+
+		assert!(!raw_cache_contains(&cache, &key0), "least-recently-used raw entry should be evicted");
+		assert!(raw_cache_contains(&cache, &key1), "second raw entry should still be cached");
+		assert!(raw_cache_contains(&cache, &key2), "new raw entry should be cached");
+	}
 }
