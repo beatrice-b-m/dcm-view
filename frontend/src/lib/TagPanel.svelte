@@ -393,6 +393,7 @@
 		background: #242424;
 		display: grid;
 		grid-template-rows: auto 1fr;
+		height: 100%;
 		min-height: 0;
 	}
 
@@ -418,6 +419,7 @@
 	.table {
 		overflow: auto;
 		min-width: 0;
+		min-height: 0;
 		font-family: "JetBrains Mono", ui-monospace, monospace;
 		font-size: 0.82rem;
 	}
