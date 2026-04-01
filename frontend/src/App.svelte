@@ -9,6 +9,17 @@
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
 	import { WL_PRESETS, type ActiveTool } from "./lib/viewerTools";
 
+	const SIDEBAR_DEFAULT_WIDTH_PX = 360;
+	const SIDEBAR_MIN_WIDTH_PX = 260;
+	const SIDEBAR_MAX_WIDTH_PX = 720;
+	const SIDEBAR_COLLAPSED_WIDTH_PX = 44;
+
+	type SidebarResizeState = {
+		pointerId: number;
+		startX: number;
+		startWidth: number;
+	};
+
 	let filesResponse = $state<FilesResponse | null>(null);
 	let loadError = $state<string | null>(null);
 
@@ -20,6 +31,17 @@
 	let windowMode = $state<WindowMode>('default');
 	let selectedPresetId = $state('default');
 	let resetCount = $state(0);
+	let tagPanelWidthPx = $state(clampSidebarWidth(SIDEBAR_DEFAULT_WIDTH_PX));
+	let tagPanelCollapsed = $state(false);
+	let sidebarResizeState = $state<SidebarResizeState | null>(null);
+
+	const sidebarWidthPx = $derived(
+		tagPanelCollapsed ? SIDEBAR_COLLAPSED_WIDTH_PX : tagPanelWidthPx,
+	);
+
+	function clampSidebarWidth(width: number): number {
+		return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
+	}
 
 	function resetViewport() {
 		windowCenter = null;
@@ -27,6 +49,49 @@
 		windowMode = 'default';
 		selectedPresetId = 'default';
 		resetCount += 1;
+	}
+
+	function toggleTagPanel() {
+		tagPanelCollapsed = !tagPanelCollapsed;
+	}
+
+	function startTagPanelResize(event: PointerEvent) {
+		if (tagPanelCollapsed || event.button !== 0) {
+			return;
+		}
+
+		const handle = event.currentTarget as HTMLElement;
+		handle.setPointerCapture(event.pointerId);
+		sidebarResizeState = {
+			pointerId: event.pointerId,
+			startX: event.clientX,
+			startWidth: tagPanelWidthPx,
+		};
+		event.preventDefault();
+	}
+
+	function moveTagPanelResize(event: PointerEvent) {
+		if (!sidebarResizeState || sidebarResizeState.pointerId !== event.pointerId) {
+			return;
+		}
+
+		const delta = sidebarResizeState.startX - event.clientX;
+		tagPanelWidthPx = clampSidebarWidth(sidebarResizeState.startWidth + delta);
+	}
+
+	function endTagPanelResize(event: PointerEvent) {
+		const handle = event.currentTarget as HTMLElement;
+		if (handle.hasPointerCapture(event.pointerId)) {
+			handle.releasePointerCapture(event.pointerId);
+		}
+
+		if (sidebarResizeState?.pointerId === event.pointerId) {
+			sidebarResizeState = null;
+		}
+	}
+
+	function cancelTagPanelResize() {
+		sidebarResizeState = null;
 	}
 
 	$effect(() => {
@@ -87,7 +152,7 @@
 			bind:selectedPresetId
 			onreset={resetViewport}
 		/>
-		<section class="content">
+		<section class="content" style={`--tag-panel-width:${sidebarWidthPx}px;`}>
 			<ImageViewport
 				files={filesResponse.files}
 				activeFileIndex={activeFileIndex}
@@ -99,7 +164,35 @@
 				resetCount={resetCount}
 				onreset={resetViewport}
 			/>
-			<TagPanel files={filesResponse.files} activeFileIndex={activeFileIndex} />
+			<aside class="tag-panel-shell" class:collapsed={tagPanelCollapsed}>
+				<div
+					class="sidebar-handle"
+					class:dragging={sidebarResizeState !== null}
+					class:disabled={tagPanelCollapsed}
+					role="separator"
+					aria-label="Resize DICOM tag panel"
+					aria-orientation="vertical"
+					aria-valuemin={SIDEBAR_MIN_WIDTH_PX}
+					aria-valuemax={SIDEBAR_MAX_WIDTH_PX}
+					aria-valuenow={tagPanelWidthPx}
+					onpointerdown={startTagPanelResize}
+					onpointermove={moveTagPanelResize}
+					onpointerup={endTagPanelResize}
+					onpointercancel={cancelTagPanelResize}
+				></div>
+				<button
+					type="button"
+					class="panel-toggle"
+					onclick={toggleTagPanel}
+					aria-label={tagPanelCollapsed ? "Expand DICOM tag panel" : "Collapse DICOM tag panel"}
+					aria-expanded={!tagPanelCollapsed}
+				>
+					{tagPanelCollapsed ? "◀" : "▶"}
+				</button>
+				{#if !tagPanelCollapsed}
+					<TagPanel files={filesResponse.files} activeFileIndex={activeFileIndex} />
+				{/if}
+			</aside>
 		</section>
 		<FrameSlider
 			files={filesResponse.files}
@@ -138,9 +231,74 @@
 
 	.content {
 		display: grid;
-		grid-template-columns: 1fr minmax(320px, 420px);
+		grid-template-columns: minmax(0, 1fr) var(--tag-panel-width);
 		grid-template-rows: 1fr;
 		min-height: 0;
+	}
+
+	.tag-panel-shell {
+		position: relative;
+		background: #242424;
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.tag-panel-shell.collapsed {
+		background: #202020;
+	}
+
+	.sidebar-handle {
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: 10px;
+		transform: translateX(-50%);
+		cursor: col-resize;
+		touch-action: none;
+		z-index: 5;
+	}
+
+	.sidebar-handle::after {
+		content: "";
+		position: absolute;
+		left: 50%;
+		top: 0;
+		bottom: 0;
+		width: 1px;
+		background: #3a3a3a;
+		transform: translateX(-50%);
+	}
+
+	.sidebar-handle.dragging::after {
+		background: #4a9eff;
+	}
+
+	.sidebar-handle.disabled {
+		cursor: default;
+		pointer-events: none;
+	}
+
+	.panel-toggle {
+		position: absolute;
+		top: 0.6rem;
+		right: 0.45rem;
+		display: grid;
+		place-items: center;
+		width: 1.5rem;
+		height: 1.5rem;
+		border: 1px solid #3b3b3b;
+		border-radius: 4px;
+		background: #1b1b1b;
+		color: #e0e0e0;
+		cursor: pointer;
+		z-index: 6;
+	}
+
+	.panel-toggle:hover {
+		border-color: #4a9eff;
+		color: #4a9eff;
 	}
 
 	.loading,
