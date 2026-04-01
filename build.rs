@@ -1,30 +1,45 @@
-use std::path::Path;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
 	// Emit cargo:rerun-if-changed for every file in frontend/src/ recursively,
-	// plus the config and lock files.  Cargo's directory-level watch does not
+	// plus the config and lock files. Cargo's directory-level watch does not
 	// recurse into subdirectories, so we walk the tree ourselves.
 	emit_src_fingerprints(Path::new("frontend/src"));
 	println!("cargo:rerun-if-changed=frontend/package.json");
 	println!("cargo:rerun-if-changed=frontend/package-lock.json");
 	println!("cargo:rerun-if-changed=frontend/svelte.config.js");
 	println!("cargo:rerun-if-changed=frontend/vite.config.ts");
+	println!("cargo:rerun-if-env-changed=DCMVIEW_NODE_PATH");
+	println!("cargo:rerun-if-env-changed=DCMVIEW_NPM_PATH");
 
-	if !tool_exists("node") || !tool_exists("npm") {
-		println!("cargo:error=Node.js and npm are required to build dcmview");
-		std::process::exit(1);
+	let node_bin = match resolve_tool_path("node", "DCMVIEW_NODE_PATH") {
+		Ok(path) => path,
+		Err(error) => fatal(&error),
+	};
+	let npm_bin = match resolve_tool_path("npm", "DCMVIEW_NPM_PATH") {
+		Ok(path) => path,
+		Err(error) => fatal(&error),
+	};
+
+	if !tool_exists(&node_bin) || !tool_exists(&npm_bin) {
+		fatal("Node.js and npm are required to build dcmview");
 	}
 
-	// Only run `npm ci` when package-lock.json has changed since the last
-	// successful install.  We persist a stamp file in OUT_DIR whose content
-	// is a fingerprint (size + mtime) of package-lock.json.
+	// Only run `npm ci` when package-lock.json content has changed since the last
+	// successful install. Persist a SHA-256 digest in OUT_DIR.
 	if needs_npm_install() {
-		run_npm(["ci"]);
+		run_npm(&npm_bin, ["ci"]);
 		write_install_stamp();
 	}
 
-	run_npm(["run", "build"]);
+	run_npm(&npm_bin, ["run", "build"]);
+}
+
+fn fatal(message: &str) -> ! {
+	println!("cargo:error={message}");
+	std::process::exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -57,38 +72,46 @@ fn needs_npm_install() -> bool {
 	}
 }
 
-/// Persist the current package-lock.json fingerprint so the next build can
-/// skip `npm ci` if nothing changed.
+/// Persist the current package-lock.json digest so the next build can skip
+/// `npm ci` if nothing changed.
 fn write_install_stamp() {
-	if let Ok(out_dir) = std::env::var("OUT_DIR") {
+	if std::env::var("OUT_DIR").is_ok() {
 		let _ = std::fs::write(stamp_file_path(), lock_fingerprint());
-		let _ = out_dir; // suppress unused-variable lint on older toolchains
 	}
 }
 
 /// Returns the path to the npm-ci stamp file inside Cargo's OUT_DIR.
-fn stamp_file_path() -> std::path::PathBuf {
+fn stamp_file_path() -> PathBuf {
 	let out_dir = std::env::var("OUT_DIR").unwrap_or_else(|_| ".".to_string());
-	std::path::PathBuf::from(out_dir).join("npm-ci.stamp")
+	PathBuf::from(out_dir).join("npm-ci.stamp")
 }
 
-/// A cheap fingerprint for package-lock.json: "size-mtime_secs".
-/// Changing any byte changes the file size or mtime, so this is reliable.
+/// SHA-256 digest of package-lock.json content.
 fn lock_fingerprint() -> String {
-	let meta = std::fs::metadata("frontend/package-lock.json")
+	let bytes = std::fs::read("frontend/package-lock.json")
 		.expect("frontend/package-lock.json must exist");
-	let mtime = meta
-		.modified()
-		.ok()
-		.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-		.map(|d| d.as_secs())
-		.unwrap_or(0);
-	format!("{}-{}", meta.len(), mtime)
+	let digest = Sha256::digest(bytes);
+	format!("{digest:x}")
 }
 
 // ---------------------------------------------------------------------------
 // npm helpers
 // ---------------------------------------------------------------------------
+
+fn resolve_tool_path(default_tool: &str, env_var: &str) -> Result<String, String> {
+	if let Ok(raw) = std::env::var(env_var) {
+		let configured = raw.trim();
+		if configured.is_empty() {
+			return Err(format!("{env_var} is set but empty"));
+		}
+		let candidate = PathBuf::from(configured);
+		if !candidate.is_absolute() {
+			return Err(format!("{env_var} must be an absolute path when provided"));
+		}
+		return Ok(candidate.to_string_lossy().to_string());
+	}
+	Ok(default_tool.to_string())
+}
 
 fn tool_exists(tool: &str) -> bool {
 	Command::new(tool)
@@ -98,8 +121,8 @@ fn tool_exists(tool: &str) -> bool {
 		.unwrap_or(false)
 }
 
-fn run_npm(args: impl IntoIterator<Item = &'static str>) {
-	let status = Command::new("npm")
+fn run_npm<'a>(npm_bin: &str, args: impl IntoIterator<Item = &'a str>) {
+	let status = Command::new(npm_bin)
 		.args(args)
 		.current_dir("frontend")
 		.status()
