@@ -69,6 +69,14 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
 	let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
 
 	println!("dcmview: server running at {server_url}");
+	if is_non_loopback_bind(local_addr.ip()) {
+		eprintln!(
+			"dcmview: warning — server bound to non-loopback address {}; endpoints are unauthenticated and may expose sensitive DICOM data",
+			local_addr.ip()
+		);
+		eprintln!("dcmview: warning — prefer --host 127.0.0.1 (or ::1) and use --tunnel for remote access");
+	}
+
 
 	if let Some(tunnel_cfg) = config.tunnel {
 		let runtime = tunnel::start_tunnel(local_addr.port(), tunnel_cfg.host.clone(), tunnel_cfg.port)?;
@@ -120,6 +128,11 @@ pub fn now_unix_ms() -> u64 {
 		.unwrap_or(Duration::from_secs(0))
 		.as_millis() as u64
 }
+
+fn is_non_loopback_bind(ip: std::net::IpAddr) -> bool {
+	!ip.is_loopback()
+}
+
 
 pub fn router(state: AppState) -> Router {
 	Router::new()
@@ -547,5 +560,21 @@ impl ApiError {
 impl IntoResponse for ApiError {
 	fn into_response(self) -> Response {
 		(self.status, Json(ErrorResponse { error: self.message })).into_response()
+	}
+}
+
+
+#[cfg(test)]
+mod tests {
+	use super::is_non_loopback_bind;
+	use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+	#[test]
+	fn detects_loopback_and_non_loopback_bind_addresses() {
+		assert!(!is_non_loopback_bind(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+		assert!(!is_non_loopback_bind(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+		assert!(is_non_loopback_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+		assert!(is_non_loopback_bind(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+		assert!(is_non_loopback_bind(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 24))));
 	}
 }
