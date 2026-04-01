@@ -7,6 +7,26 @@
 		depth: number;
 	};
 
+	type ColumnKey = "tag" | "keyword" | "vr";
+
+	type ColumnResizeState = {
+		pointerId: number;
+		column: ColumnKey;
+		startX: number;
+		startWidth: number;
+	};
+
+	const TAG_COLUMN_DEFAULT_PX = 128;
+	const KEYWORD_COLUMN_DEFAULT_PX = 136;
+	const VR_COLUMN_DEFAULT_PX = 64;
+
+	const TAG_COLUMN_MIN_PX = 88;
+	const TAG_COLUMN_MAX_PX = 260;
+	const KEYWORD_COLUMN_MIN_PX = 100;
+	const KEYWORD_COLUMN_MAX_PX = 320;
+	const VR_COLUMN_MIN_PX = 52;
+	const VR_COLUMN_MAX_PX = 140;
+
 	let { files, activeFileIndex }: { files: FileSummary[]; activeFileIndex: number } = $props();
 
 	let filter = $state("");
@@ -16,6 +36,14 @@
 	let expandedSequences = $state<Set<string>>(new Set());
 	let expandedLongValues = $state<Set<string>>(new Set());
 	let copiedKey = $state<string | null>(null);
+	let tagColumnWidthPx = $state(TAG_COLUMN_DEFAULT_PX);
+	let keywordColumnWidthPx = $state(KEYWORD_COLUMN_DEFAULT_PX);
+	let vrColumnWidthPx = $state(VR_COLUMN_DEFAULT_PX);
+	let columnResizeState = $state<ColumnResizeState | null>(null);
+
+	const tableColumns = $derived(
+		`${tagColumnWidthPx}px ${keywordColumnWidthPx}px ${vrColumnWidthPx}px minmax(0, 1fr)`,
+	);
 
 	$effect(() => {
 		void ensureTags(activeFileIndex);
@@ -54,6 +82,84 @@
 			next.add(key);
 		}
 		expandedLongValues = next;
+	}
+
+	function getColumnWidth(column: ColumnKey): number {
+		switch (column) {
+			case "tag":
+				return tagColumnWidthPx;
+			case "keyword":
+				return keywordColumnWidthPx;
+			case "vr":
+				return vrColumnWidthPx;
+		}
+	}
+
+	function clampColumnWidth(column: ColumnKey, width: number): number {
+		switch (column) {
+			case "tag":
+				return Math.min(TAG_COLUMN_MAX_PX, Math.max(TAG_COLUMN_MIN_PX, width));
+			case "keyword":
+				return Math.min(KEYWORD_COLUMN_MAX_PX, Math.max(KEYWORD_COLUMN_MIN_PX, width));
+			case "vr":
+				return Math.min(VR_COLUMN_MAX_PX, Math.max(VR_COLUMN_MIN_PX, width));
+		}
+	}
+
+	function setColumnWidth(column: ColumnKey, width: number) {
+		if (column === "tag") {
+			tagColumnWidthPx = width;
+			return;
+		}
+		if (column === "keyword") {
+			keywordColumnWidthPx = width;
+			return;
+		}
+		vrColumnWidthPx = width;
+	}
+
+	function startColumnResize(column: ColumnKey, event: PointerEvent) {
+		if (event.button !== 0) {
+			return;
+		}
+
+		const handle = event.currentTarget as HTMLElement;
+		handle.setPointerCapture(event.pointerId);
+		columnResizeState = {
+			pointerId: event.pointerId,
+			column,
+			startX: event.clientX,
+			startWidth: getColumnWidth(column),
+		};
+		event.preventDefault();
+	}
+
+	function moveColumnResize(event: PointerEvent) {
+		if (!columnResizeState || columnResizeState.pointerId !== event.pointerId) {
+			return;
+		}
+
+		const delta = event.clientX - columnResizeState.startX;
+		const nextWidth = clampColumnWidth(
+			columnResizeState.column,
+			columnResizeState.startWidth + delta,
+		);
+		setColumnWidth(columnResizeState.column, nextWidth);
+	}
+
+	function endColumnResize(event: PointerEvent) {
+		const handle = event.currentTarget as HTMLElement;
+		if (handle.hasPointerCapture(event.pointerId)) {
+			handle.releasePointerCapture(event.pointerId);
+		}
+
+		if (columnResizeState?.pointerId === event.pointerId) {
+			columnResizeState = null;
+		}
+	}
+
+	function cancelColumnResize() {
+		columnResizeState = null;
 	}
 
 	async function copyRow(row: FlatRow) {
@@ -189,11 +295,52 @@
 	{:else if loading}
 		<p class="loading">Loading tags…</p>
 	{:else}
-		<div class="table">
+		<div class="table" style={`--tag-grid-columns:${tableColumns};`}>
+			<div class="header-row row-grid" role="row">
+				<div class="header-cell resizable">
+					<span>Tag</span>
+					<button
+						type="button"
+						class="column-resizer"
+						class:dragging={columnResizeState?.column === "tag"}
+						aria-label="Resize tag column"
+						onpointerdown={(event) => startColumnResize("tag", event)}
+						onpointermove={moveColumnResize}
+						onpointerup={endColumnResize}
+						onpointercancel={cancelColumnResize}
+					></button>
+				</div>
+				<div class="header-cell resizable">
+					<span>Keyword</span>
+					<button
+						type="button"
+						class="column-resizer"
+						class:dragging={columnResizeState?.column === "keyword"}
+						aria-label="Resize keyword column"
+						onpointerdown={(event) => startColumnResize("keyword", event)}
+						onpointermove={moveColumnResize}
+						onpointerup={endColumnResize}
+						onpointercancel={cancelColumnResize}
+					></button>
+				</div>
+				<div class="header-cell resizable">
+					<span>VR</span>
+					<button
+						type="button"
+						class="column-resizer"
+						class:dragging={columnResizeState?.column === "vr"}
+						aria-label="Resize VR column"
+						onpointerdown={(event) => startColumnResize("vr", event)}
+						onpointermove={moveColumnResize}
+						onpointerup={endColumnResize}
+						onpointercancel={cancelColumnResize}
+					></button>
+				</div>
+				<div class="header-cell">Value</div>
+			</div>
 			{#each visibleRows as row}
 				<div
-					class="row"
-					style={`--depth:${row.depth}`}
+					class="row row-grid"
 					role="button"
 					tabindex="0"
 					onclick={() => copyRow(row)}
@@ -204,7 +351,7 @@
 						}
 					}}
 				>
-					<div class="tag-cell">
+					<div class="tag-cell" style={`--depth:${row.depth}`}>
 						{#if isSequence(row.node)}
 							<button
 								type="button"
@@ -216,8 +363,8 @@
 						{/if}
 						<span>{row.node.tag}</span>
 					</div>
-					<div>{row.node.keyword}</div>
-					<div>{row.node.vr}</div>
+					<div class="keyword-cell">{row.node.keyword}</div>
+					<div class="vr-cell">{row.node.vr}</div>
 					<div class:binary={row.node.value.type === "binary"} class="value-cell">
 						<button
 							type="button"
@@ -244,19 +391,21 @@
 <style>
 	.panel {
 		background: #242424;
-		border-left: 1px solid #333;
 		display: grid;
 		grid-template-rows: auto 1fr;
 		min-height: 0;
 	}
+
 	header {
 		padding: 0.75rem;
 		border-bottom: 1px solid #333;
 	}
+
 	h2 {
 		margin: 0 0 0.5rem 0;
 		font-size: 1rem;
 	}
+
 	input {
 		width: 100%;
 		background: #1b1b1b;
@@ -265,31 +414,105 @@
 		padding: 0.4rem 0.6rem;
 		border-radius: 6px;
 	}
+
 	.table {
 		overflow: auto;
+		min-width: 0;
 		font-family: "JetBrains Mono", ui-monospace, monospace;
 		font-size: 0.82rem;
 	}
-	.row {
+
+	.row-grid {
 		display: grid;
-		grid-template-columns: 8rem 8.5rem 4rem 1fr;
+		grid-template-columns: var(--tag-grid-columns);
 		gap: 0.5rem;
+		align-items: center;
+		min-width: 0;
+	}
+
+	.header-row {
+		position: sticky;
+		top: 0;
+		z-index: 2;
 		padding: 0.35rem 0.75rem;
+		background: #242424;
+		border-bottom: 1px solid #333;
+	}
+
+	.header-cell {
+		position: relative;
+		min-width: 0;
+		color: #9ca3af;
+		font-size: 0.72rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		user-select: none;
+	}
+
+	.header-cell.resizable {
+		padding-right: 0.45rem;
+	}
+
+	.column-resizer {
+		position: absolute;
+		right: -0.35rem;
+		top: -0.35rem;
+		bottom: -0.35rem;
+		width: 0.75rem;
 		border: 0;
-		border-bottom: 1px solid #2e2e2e;
+		padding: 0;
+		margin: 0;
 		background: transparent;
+		cursor: col-resize;
+		touch-action: none;
+	}
+
+	.column-resizer::after {
+		content: "";
+		position: absolute;
+		left: 50%;
+		top: 0.2rem;
+		bottom: 0.2rem;
+		width: 1px;
+		background: #3f3f3f;
+		transform: translateX(-50%);
+	}
+
+	.column-resizer.dragging::after {
+		background: #4a9eff;
+	}
+
+	.row {
+		padding: 0.35rem 0.75rem;
+		border-bottom: 1px solid #2e2e2e;
 		color: inherit;
 		text-align: left;
-		padding-left: calc(0.75rem + var(--depth) * 0.9rem);
 	}
+
 	.row:hover {
 		background: #2d2d2d;
 	}
+
+	.row > div {
+		min-width: 0;
+	}
+
 	.tag-cell {
 		display: flex;
 		gap: 0.35rem;
 		align-items: center;
+		padding-left: calc(var(--depth) * 0.9rem);
 	}
+
+	.tag-cell span,
+	.keyword-cell,
+	.vr-cell {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
 	.chevron {
 		cursor: pointer;
 		color: #4a9eff;
@@ -298,13 +521,17 @@
 		padding: 0;
 		background: transparent;
 	}
+
 	.value-cell {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		overflow: hidden;
+		position: relative;
+		min-width: 0;
+		padding-right: 4.4rem;
 	}
+
 	.value-toggle {
+		display: block;
+		width: 100%;
+		min-width: 0;
 		border: 0;
 		background: transparent;
 		padding: 0;
@@ -316,14 +543,25 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+
 	.binary {
 		color: #9ca3af;
 	}
+
 	.copied {
+		position: absolute;
+		right: 0;
+		top: 50%;
+		transform: translateY(-50%);
 		color: #4a9eff;
-		font-size: 0.75rem;
+		font-size: 0.72rem;
 		white-space: nowrap;
+		max-width: 4rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		pointer-events: none;
 	}
+
 	.error,
 	.loading {
 		padding: 0.75rem;
