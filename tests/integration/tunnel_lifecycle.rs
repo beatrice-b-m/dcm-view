@@ -26,3 +26,16 @@ fn warns_and_continues_when_ssh_is_missing() {
 		"warning text should explain missing ssh"
 	);
 }
+
+
+#[test]
+fn rejects_option_like_tunnel_host_values() {
+	let error = match tunnel::start_tunnel(4312, "-oProxyCommand=echo-pwned".to_string(), 0) {
+		Ok(_) => panic!("option-like tunnel host should be rejected"),
+		Err(error) => error,
+	};
+	assert!(
+		error.to_string().contains("must not start with '-'"),
+		"error should explain why the host value is rejected"
+	);
+}

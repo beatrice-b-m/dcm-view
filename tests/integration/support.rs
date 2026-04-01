@@ -86,6 +86,28 @@ pub fn write_uncompressed_u16_dicom(
 	window_center: Option<&str>,
 	window_width: Option<&str>,
 ) {
+	write_uncompressed_u16_dicom_with_photometric(
+		path,
+		transfer_syntax_uid,
+		rows,
+		columns,
+		frames,
+		"MONOCHROME2",
+		window_center,
+		window_width,
+	);
+}
+
+pub fn write_uncompressed_u16_dicom_with_photometric(
+	path: &Path,
+	transfer_syntax_uid: &str,
+	rows: u16,
+	columns: u16,
+	frames: Vec<u16>,
+	photometric_interpretation: &str,
+	window_center: Option<&str>,
+	window_width: Option<&str>,
+) {
 	let pixels_per_frame = rows as usize * columns as usize;
 	let frame_count = (frames.len() / pixels_per_frame).max(1) as u32;
 
@@ -112,7 +134,11 @@ pub fn write_uncompressed_u16_dicom(
 		DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(15_u16)),
 		DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, PrimitiveValue::from(0_u16)),
 		DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
-		DataElement::new(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, PrimitiveValue::from("MONOCHROME2")),
+		DataElement::new(
+			tags::PHOTOMETRIC_INTERPRETATION,
+			VR::CS,
+			PrimitiveValue::from(photometric_interpretation),
+		),
 		DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, PrimitiveValue::from(frame_count.to_string())),
 		DataElement::new(tags::PIXEL_DATA, VR::OW, PrimitiveValue::from(pixel_bytes)),
 	]);

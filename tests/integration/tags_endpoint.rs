@@ -62,6 +62,65 @@ async fn serializes_sequences_and_binary_values_without_leaking_raw_pixel_data()
 	assert_eq!(tags, sorted, "tags must be ordered by ascending tag number");
 }
 
+
+#[tokio::test]
+async fn truncates_long_multibyte_tag_values_without_panicking() {
+	let dir = tempdir().expect("temp dir");
+	let path = dir.path().join("tags-multibyte.dcm");
+	write_multibyte_tag_fixture(&path);
+
+	let file = FileEntry {
+		index: 0,
+		path: path.clone(),
+		label: "multibyte fixture".to_string(),
+		has_pixels: false,
+		frame_count: 1,
+		rows: 0,
+		columns: 0,
+		transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
+		default_window: None,
+	};
+
+	let app = server::router(support::app_state(vec![file]));
+	let test_server = TestServer::new(app);
+	let response = test_server.get("/api/file/0/tags").await;
+	response.assert_status_ok();
+
+	let payload: Value = response.json();
+	let rows = payload.as_array().expect("tag list array");
+	let study_description_row = rows
+		.iter()
+		.find(|row| row["tag"] == "(0008,1030)")
+		.expect("StudyDescription row");
+	assert_eq!(study_description_row["value"]["type"], "string");
+	let preview = study_description_row["value"]["value"]
+		.as_str()
+		.expect("string preview");
+	assert!(preview.ends_with('…'), "long previews should be safely truncated");
+	assert!(!preview.is_empty(), "truncated preview should keep visible content");
+}
+
+fn write_multibyte_tag_fixture(path: &std::path::Path) {
+	let long_text = "é".repeat(300);
+	let obj = InMemDicomObject::from_element_iter([
+		DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
+		DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, PrimitiveValue::from("2.25.333333333")),
+		DataElement::new(tags::STUDY_DESCRIPTION, VR::LO, PrimitiveValue::from(long_text)),
+	]);
+
+	let file_object = obj
+		.with_meta(
+			FileMetaTableBuilder::new()
+				.transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+				.media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
+				.media_storage_sop_instance_uid("2.25.333333333"),
+		)
+		.expect("build multibyte meta table");
+	file_object
+		.write_to_file(path)
+		.expect("write multibyte tag fixture");
+}
+
 fn write_tag_fixture(path: &std::path::Path) {
 	let sequence_item = InMemDicomObject::from_element_iter([
 		DataElement::new(tags::CODE_VALUE, VR::SH, PrimitiveValue::from("T-04000")),
