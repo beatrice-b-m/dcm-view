@@ -48,11 +48,16 @@
 	let pendingRawCtrl: AbortController | null = null;
 	let prefetchController: AbortController | null = null;
 	let rawFrameCache = new Map<number, RawFrame>();
+	let rawCacheBytes = 0;
 	// lastHandledResetCount is non-reactive: only the effect reads/writes it,
 	// so mutations here must not trigger Svelte dependency tracking.
 	let lastHandledResetCount = 0;
 
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
+	const MAX_RENDER_PIXELS = 20_000_000;
+	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
+	const FULL_PREFETCH_STACK_BYTE_LIMIT = 256 * 1024 * 1024;
+	const PARTIAL_PREFETCH_DISTANCE = 40;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
 	const transformCss = $derived(
@@ -220,11 +225,84 @@
 		return { wc: p1 + width / 2, ww: width };
 	}
 
+	function estimateRawFrameBytes(frame: RawFrame): number {
+		return frame.buffer.byteLength;
+	}
+
+	function clearRawFrameCache(): void {
+		rawFrameCache.clear();
+		rawCacheBytes = 0;
+	}
+
+	function getCachedRawFrame(frameIndex: number): RawFrame | undefined {
+		const cached = rawFrameCache.get(frameIndex);
+		if (!cached) return undefined;
+		rawFrameCache.delete(frameIndex);
+		rawFrameCache.set(frameIndex, cached);
+		return cached;
+	}
+
+	function cacheRawFrame(frameIndex: number, frame: RawFrame): void {
+		const incoming = estimateRawFrameBytes(frame);
+		if (incoming > RAW_CACHE_BYTE_BUDGET) return;
+
+		const existing = rawFrameCache.get(frameIndex);
+		if (existing) {
+			rawFrameCache.delete(frameIndex);
+			rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(existing));
+		}
+
+		while (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) {
+			const oldestKey = rawFrameCache.keys().next().value as number | undefined;
+			if (oldestKey === undefined) break;
+			const oldest = rawFrameCache.get(oldestKey);
+			rawFrameCache.delete(oldestKey);
+			if (oldest) {
+				rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(oldest));
+			}
+		}
+
+		if (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) return;
+		rawFrameCache.set(frameIndex, frame);
+		rawCacheBytes += incoming;
+	}
+
+	function validateRenderableRawFrame(frame: RawFrame): string | null {
+		const { rows, columns, bitsAllocated, samplesPerPixel } = frame.metadata;
+		if (rows <= 0 || columns <= 0) {
+			return 'Invalid raw frame dimensions';
+		}
+		if (samplesPerPixel !== 1) {
+			return `Unsupported SamplesPerPixel: ${samplesPerPixel}`;
+		}
+		if (bitsAllocated !== 8 && bitsAllocated !== 16) {
+			return `Unsupported BitsAllocated for viewport: ${bitsAllocated}`;
+		}
+		const numPixels = rows * columns;
+		if (!Number.isFinite(numPixels) || numPixels <= 0) {
+			return 'Invalid raw frame pixel count';
+		}
+		if (numPixels > MAX_RENDER_PIXELS) {
+			return `Frame too large to render safely (${rows}×${columns})`;
+		}
+		const minExpectedBytes = numPixels * (bitsAllocated / 8);
+		if (frame.buffer.byteLength < minExpectedBytes) {
+			return 'Raw frame buffer is shorter than expected for declared metadata';
+		}
+		return null;
+	}
+
+	function shouldPrefetchWholeStack(totalFrames: number, frameBytes: number): boolean {
+		if (totalFrames <= 1 || frameBytes <= 0) return false;
+		return frameBytes * totalFrames <= FULL_PREFETCH_STACK_BYTE_LIMIT;
+	}
+
 	// --- Prefetch ---
 
-	function buildPriorityOrder(current: number, total: number): number[] {
+	function buildPriorityOrder(current: number, total: number, maxDistance: number): number[] {
 		const result: number[] = [];
-		for (let delta = 1; delta < total; delta++) {
+		const distanceCap = Math.min(total - 1, maxDistance);
+		for (let delta = 1; delta <= distanceCap; delta++) {
 			const fwd = current + delta;
 			const bwd = current - delta;
 			if (fwd < total) result.push(fwd);
@@ -234,10 +312,12 @@
 	}
 
 	function ensurePrefetchRunning(fileIndex: number, totalFrames: number, startFrame: number): void {
-		if (prefetchController || totalFrames <= 1) return;
+		if (prefetchController || totalFrames <= 1 || !currentRawFrame) return;
+		const fullPrefetch = shouldPrefetchWholeStack(totalFrames, estimateRawFrameBytes(currentRawFrame));
+		const maxDistance = fullPrefetch ? totalFrames - 1 : PARTIAL_PREFETCH_DISTANCE;
 		prefetchController = new AbortController();
 		const ctrl = prefetchController;
-		runPrefetch(fileIndex, totalFrames, startFrame, ctrl.signal)
+		runPrefetch(fileIndex, totalFrames, startFrame, maxDistance, ctrl.signal)
 			.catch(() => {})
 			.finally(() => { if (prefetchController === ctrl) prefetchController = null; });
 	}
@@ -246,9 +326,10 @@
 		fileIndex: number,
 		totalFrames: number,
 		startFrame: number,
+		maxDistance: number,
 		signal: AbortSignal,
 	): Promise<void> {
-		const frames = buildPriorityOrder(startFrame, totalFrames);
+		const frames = buildPriorityOrder(startFrame, totalFrames, maxDistance);
 		const CONCURRENCY = 3;
 		for (let i = 0; i < frames.length && !signal.aborted; i += CONCURRENCY) {
 			const batch = frames.slice(i, i + CONCURRENCY).filter(f => !rawFrameCache.has(f));
@@ -258,7 +339,9 @@
 					if (signal.aborted || rawFrameCache.has(f)) return;
 					try {
 						const raw = await fetchRawFrame(fileIndex, f, signal);
-						rawFrameCache.set(f, raw);
+						if (validateRenderableRawFrame(raw) === null) {
+							cacheRawFrame(f, raw);
+						}
 					} catch { /* network errors are non-fatal during prefetch */ }
 				}),
 			);
@@ -268,7 +351,7 @@
 	// --- Frame loading ---
 
 	async function loadRawFrameAndRender(fileIndex: number, frameIndex: number): Promise<void> {
-		const cached = rawFrameCache.get(frameIndex);
+		const cached = getCachedRawFrame(frameIndex);
 		if (cached) {
 			currentRawFrame = cached;
 			loading = false;
@@ -284,7 +367,14 @@
 		try {
 			const raw = await fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
 			if (ctrl.signal.aborted) return;
-			rawFrameCache.set(frameIndex, raw);
+			const validationError = validateRenderableRawFrame(raw);
+			if (validationError) {
+				currentRawFrame = null;
+				loading = false;
+				loadError = validationError;
+				return;
+			}
+			cacheRawFrame(frameIndex, raw);
 			currentRawFrame = raw;
 			loading = false;
 			loadError = null;
@@ -323,7 +413,7 @@
 			fileScopeKey = newScopeKey;
 			prefetchController?.abort();
 			prefetchController = null;
-			rawFrameCache.clear();
+			clearRawFrameCache();
 			currentRawFrame = null;
 			loading = true;
 		}
@@ -349,7 +439,7 @@
 		return () => {
 			prefetchController?.abort();
 			pendingRawCtrl?.abort();
-			rawFrameCache.clear();
+			clearRawFrameCache();
 		};
 	});
 
