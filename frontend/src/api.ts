@@ -82,6 +82,44 @@ export function frameUrl(fileIndex: number, frame: number, wc?: number | null, w
 	return `${url.pathname}${url.search}`;
 }
 
+export interface DisplayFrameWindowOptions {
+	wc?: number | null;
+	ww?: number | null;
+	windowMode?: WindowMode | null;
+}
+
+export function displayFrameCacheKey(
+	fileIndex: number,
+	frame: number,
+	options: DisplayFrameWindowOptions = {},
+): string {
+	const wc = options.wc === null || options.wc === undefined ? 'none' : options.wc.toFixed(4);
+	const ww = options.ww === null || options.ww === undefined ? 'none' : options.ww.toFixed(4);
+	const mode = options.windowMode ?? 'default';
+	return `${fileIndex}:${frame}:${mode}:${wc}:${ww}`;
+}
+
+export async function fetchDisplayFrameBlob(
+	fileIndex: number,
+	frame: number,
+	options: DisplayFrameWindowOptions = {},
+	signal?: AbortSignal,
+): Promise<Blob> {
+	const response = await fetch(
+		frameUrl(fileIndex, frame, options.wc, options.ww, options.windowMode),
+		{ signal },
+	);
+	if (!response.ok) {
+		let serverMessage: string | undefined;
+		try {
+			const body = await response.json() as { error?: string };
+			serverMessage = body.error;
+		} catch { /* body is not JSON */ }
+		throw new Error(serverMessage ?? `HTTP ${response.status}: display frame fetch failed`);
+	}
+	return response.blob();
+}
+
 export interface RawFrameMetadata {
 	rows: number;
 	columns: number;

@@ -1,7 +1,16 @@
 <script lang="ts">
-	import { fetchRawFrame, type RawFrame, type WindowMode, type FileSummary } from "../api";
+	import {
+		displayFrameCacheKey,
+		fetchDisplayFrameBlob,
+		fetchRawFrame,
+		type DisplayFrameWindowOptions,
+		type FileSummary,
+		type RawFrame,
+		type WindowMode,
+	} from "../api";
 	import type { ActiveTool } from "./viewerTools";
 
+	type PipelineMode = "cine" | "diagnostic_wl";
 	type TransformState = { scale: number; tx: number; ty: number };
 	type DragState =
 		| { mode: "pan"; startX: number; startY: number; baseTx: number; baseTy: number }
@@ -9,6 +18,13 @@
 		| { mode: "zoom_drag"; startX: number; startY: number; baseScale: number; pivotX: number; pivotY: number }
 		| { mode: "scroll_drag"; startY: number; baseFrame: number }
 		| null;
+
+	interface DisplayFrameCacheEntry {
+		blob: Blob;
+		bytes: number;
+		bitmap: ImageBitmap | null;
+		decodePromise: Promise<ImageBitmap> | null;
+	}
 
 	let {
 		files,
@@ -18,6 +34,7 @@
 		windowWidth = $bindable(),
 		activeTool,
 		windowMode,
+		selectedPresetId,
 		resetCount,
 		onreset,
 	}: {
@@ -28,6 +45,7 @@
 		windowWidth: number | null;
 		activeTool: ActiveTool;
 		windowMode: WindowMode;
+		selectedPresetId: string;
 		resetCount: number;
 		onreset?: () => void;
 	} = $props();
@@ -42,22 +60,41 @@
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let wheelAccum = $state(0);
 	let currentRawFrame = $state<RawFrame | null>(null);
-	let fileScopeKey = $state('');
+	let currentDisplayCacheKey = $state<string | null>(null);
 
-	// Non-reactive: mutations must not trigger Svelte re-renders.
-	let pendingRawCtrl: AbortController | null = null;
-	let prefetchController: AbortController | null = null;
+	let rawRequestCtrl: AbortController | null = null;
+	let rawPrefetchCtrl: AbortController | null = null;
+	let displayRequestCtrl: AbortController | null = null;
+	let displayPrefetchCtrl: AbortController | null = null;
 	let rawFrameCache = new Map<number, RawFrame>();
 	let rawCacheBytes = 0;
-	// lastHandledResetCount is non-reactive: only the effect reads/writes it,
-	// so mutations here must not trigger Svelte dependency tracking.
+	let displayFrameCache = new Map<string, DisplayFrameCacheEntry>();
+	let displayCacheBytes = 0;
+	let fileScopeKey = "";
 	let lastHandledResetCount = 0;
+	let requestGeneration = 0;
+	let lastFrameForDirection = 0;
+	let frameDirection: 1 | -1 = 1;
+	let wlRenderGeneration = 0;
+
+	let wlWorker: Worker | null = null;
+	let workerInitAttempted = false;
+	let workerAvailable = false;
+	let workerMessageId = 0;
+	let pendingWorkerResponses = new Map<number, {
+		resolve: (value: { width: number; height: number; rgba: ArrayBuffer }) => void;
+		reject: (error: Error) => void;
+	}>();
 
 	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
 	const MAX_RENDER_PIXELS = 20_000_000;
 	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
-	const FULL_PREFETCH_STACK_BYTE_LIMIT = 256 * 1024 * 1024;
-	const PARTIAL_PREFETCH_DISTANCE = 40;
+	const RAW_RING_RADIUS = 10;
+	const DISPLAY_CACHE_BYTE_BUDGET = 320 * 1024 * 1024;
+	const DISPLAY_FULL_PREFETCH_BUDGET_BYTES = 320 * 1024 * 1024;
+	const DISPLAY_NEAR_PREFETCH_DISTANCE = 48;
+	const WORKER_MIN_PIXEL_THRESHOLD = 300_000;
+	const PREFETCH_CONCURRENCY = 3;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
 	const transformCss = $derived(
@@ -65,21 +102,234 @@
 	);
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
 	const isDragging = $derived(dragState !== null);
-
-	const displayWindow = $derived(
-		currentRawFrame
-			? resolveDisplayWindow(
-					currentRawFrame,
-					liveWindowCenter,
-					liveWindowWidth,
-					windowCenter,
-					windowWidth,
-					windowMode,
-				)
-			: { wc: 0, ww: 1 },
+	const pipelineMode = $derived<PipelineMode>(
+		activeTool === "window_level" ? "diagnostic_wl" : "cine",
 	);
 
-	// --- Windowing functions ---
+	const displayWindow = $derived(() => {
+		if (pipelineMode === "diagnostic_wl" && currentRawFrame) {
+			return resolveDisplayWindow(
+				currentRawFrame,
+				liveWindowCenter,
+				liveWindowWidth,
+				windowCenter,
+				windowWidth,
+				windowMode,
+			);
+		}
+		if (windowCenter !== null && windowWidth !== null) {
+			return { wc: windowCenter, ww: windowWidth };
+		}
+		if (activeFile?.default_window) {
+			return { wc: activeFile.default_window.center, ww: activeFile.default_window.width };
+		}
+		return { wc: 0, ww: 1 };
+	});
+
+	function ensureWlWorker(): boolean {
+		if (workerInitAttempted) {
+			return workerAvailable;
+		}
+		workerInitAttempted = true;
+		try {
+			wlWorker = new Worker(new URL("./workers/wlRenderer.worker.ts", import.meta.url), { type: "module" });
+			wlWorker.onmessage = (event: MessageEvent) => {
+				const payload = event.data as
+					| { type: "rendered"; id: number; width: number; height: number; rgba: ArrayBuffer }
+					| { type: "error"; id: number; message: string };
+				if (payload.type === "error") {
+					const pending = pendingWorkerResponses.get(payload.id);
+					if (!pending) return;
+					pendingWorkerResponses.delete(payload.id);
+					pending.reject(new Error(payload.message));
+					return;
+				}
+				const pending = pendingWorkerResponses.get(payload.id);
+				if (!pending) return;
+				pendingWorkerResponses.delete(payload.id);
+				pending.resolve({ width: payload.width, height: payload.height, rgba: payload.rgba });
+			};
+			wlWorker.onerror = () => {
+				workerAvailable = false;
+			};
+			workerAvailable = true;
+			return true;
+		} catch {
+			workerAvailable = false;
+			wlWorker = null;
+			return false;
+		}
+	}
+
+	function shouldUseWorker(frame: RawFrame): boolean {
+		const pixels = frame.metadata.rows * frame.metadata.columns;
+		return pixels >= WORKER_MIN_PIXEL_THRESHOLD && ensureWlWorker();
+	}
+
+	async function renderWithWorker(frame: RawFrame, wc: number, ww: number): Promise<ImageData> {
+		if (!wlWorker || !workerAvailable) {
+			throw new Error("worker unavailable");
+		}
+		const id = ++workerMessageId;
+		const copiedBuffer = frame.buffer.slice(0);
+		const pending = new Promise<{ width: number; height: number; rgba: ArrayBuffer }>((resolve, reject) => {
+			pendingWorkerResponses.set(id, { resolve, reject });
+		});
+		wlWorker.postMessage(
+			{
+				type: "render",
+				id,
+				metadata: frame.metadata,
+				wc,
+				ww,
+				buffer: copiedBuffer,
+			},
+			[copiedBuffer],
+		);
+		const result = await pending;
+		return new ImageData(new Uint8ClampedArray(result.rgba), result.width, result.height);
+	}
+
+	function clearCanvas(): void {
+		if (!canvasEl) return;
+		const ctx = canvasEl.getContext("2d", { alpha: false });
+		if (!ctx) return;
+		ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+	}
+
+	function estimateRawFrameBytes(frame: RawFrame): number {
+		return frame.buffer.byteLength;
+	}
+
+	function clearRawFrameCache(): void {
+		rawFrameCache.clear();
+		rawCacheBytes = 0;
+	}
+
+	function getCachedRawFrame(frameIndex: number): RawFrame | undefined {
+		const cached = rawFrameCache.get(frameIndex);
+		if (!cached) return undefined;
+		rawFrameCache.delete(frameIndex);
+		rawFrameCache.set(frameIndex, cached);
+		return cached;
+	}
+
+	function deleteCachedRawFrame(frameIndex: number): void {
+		const cached = rawFrameCache.get(frameIndex);
+		if (!cached) return;
+		rawFrameCache.delete(frameIndex);
+		rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(cached));
+	}
+
+	function cacheRawFrame(frameIndex: number, frame: RawFrame): void {
+		const incoming = estimateRawFrameBytes(frame);
+		if (incoming > RAW_CACHE_BYTE_BUDGET) return;
+
+		deleteCachedRawFrame(frameIndex);
+
+		while (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) {
+			const oldestKey = rawFrameCache.keys().next().value as number | undefined;
+			if (oldestKey === undefined) break;
+			deleteCachedRawFrame(oldestKey);
+		}
+
+		if (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) return;
+		rawFrameCache.set(frameIndex, frame);
+		rawCacheBytes += incoming;
+	}
+
+	function releaseDisplayEntry(entry: DisplayFrameCacheEntry): void {
+		entry.bitmap?.close();
+		entry.bitmap = null;
+		entry.decodePromise = null;
+	}
+
+	function clearDisplayCache(): void {
+		for (const entry of displayFrameCache.values()) {
+			releaseDisplayEntry(entry);
+		}
+		displayFrameCache.clear();
+		displayCacheBytes = 0;
+	}
+
+	function getCachedDisplayFrame(key: string): DisplayFrameCacheEntry | undefined {
+		const cached = displayFrameCache.get(key);
+		if (!cached) return undefined;
+		displayFrameCache.delete(key);
+		displayFrameCache.set(key, cached);
+		return cached;
+	}
+
+	function deleteCachedDisplayFrame(key: string): void {
+		const cached = displayFrameCache.get(key);
+		if (!cached) return;
+		displayFrameCache.delete(key);
+		displayCacheBytes = Math.max(0, displayCacheBytes - cached.bytes);
+		releaseDisplayEntry(cached);
+	}
+
+	function cacheDisplayFrame(key: string, blob: Blob): DisplayFrameCacheEntry | null {
+		const incoming = blob.size;
+		if (incoming > DISPLAY_CACHE_BYTE_BUDGET) return null;
+
+		deleteCachedDisplayFrame(key);
+
+		while (displayCacheBytes + incoming > DISPLAY_CACHE_BYTE_BUDGET) {
+			const oldestKey = displayFrameCache.keys().next().value as string | undefined;
+			if (!oldestKey) break;
+			deleteCachedDisplayFrame(oldestKey);
+		}
+
+		if (displayCacheBytes + incoming > DISPLAY_CACHE_BYTE_BUDGET) return null;
+		const entry: DisplayFrameCacheEntry = {
+			blob,
+			bytes: incoming,
+			bitmap: null,
+			decodePromise: null,
+		};
+		displayFrameCache.set(key, entry);
+		displayCacheBytes += incoming;
+		return entry;
+	}
+
+	function currentDisplayWindowOptions(): DisplayFrameWindowOptions {
+		if (windowCenter !== null && windowWidth !== null) {
+			return { wc: windowCenter, ww: windowWidth, windowMode: "default" };
+		}
+		if (windowMode === "full_dynamic") {
+			return { windowMode: "full_dynamic" };
+		}
+		return {};
+	}
+
+	function buildDisplayKey(fileIndex: number, frameIndex: number, options: DisplayFrameWindowOptions): string {
+		return `${displayFrameCacheKey(fileIndex, frameIndex, options)}:preset:${selectedPresetId}`;
+	}
+
+	function validateRenderableRawFrame(frame: RawFrame): string | null {
+		const { rows, columns, bitsAllocated, samplesPerPixel } = frame.metadata;
+		if (rows <= 0 || columns <= 0) {
+			return "Invalid raw frame dimensions";
+		}
+		if (samplesPerPixel !== 1) {
+			return `Unsupported SamplesPerPixel: ${samplesPerPixel}`;
+		}
+		if (bitsAllocated !== 8 && bitsAllocated !== 16) {
+			return `Unsupported BitsAllocated for viewport: ${bitsAllocated}`;
+		}
+		const numPixels = rows * columns;
+		if (!Number.isFinite(numPixels) || numPixels <= 0) {
+			return "Invalid raw frame pixel count";
+		}
+		if (numPixels > MAX_RENDER_PIXELS) {
+			return `Frame too large to render safely (${rows}×${columns})`;
+		}
+		const minExpectedBytes = numPixels * (bitsAllocated / 8);
+		if (frame.buffer.byteLength < minExpectedBytes) {
+			return "Raw frame buffer is shorter than expected for declared metadata";
+		}
+		return null;
+	}
 
 	function buildLut(
 		bitsAllocated: number,
@@ -94,10 +344,18 @@
 		const high = wc + ww / 2;
 		const range = Math.max(high - low, 1e-10);
 
-		let minRaw: number, size: number;
-		if (bitsAllocated === 8) { minRaw = 0; size = 256; }
-		else if (pixelRepresentation === 1) { minRaw = -32768; size = 65536; }
-		else { minRaw = 0; size = 65536; }
+		let minRaw: number;
+		let size: number;
+		if (bitsAllocated === 8) {
+			minRaw = 0;
+			size = 256;
+		} else if (pixelRepresentation === 1) {
+			minRaw = -32768;
+			size = 65536;
+		} else {
+			minRaw = 0;
+			size = 65536;
+		}
 
 		const lut = new Uint8Array(size);
 		for (let i = 0; i < size; i++) {
@@ -111,7 +369,7 @@
 		return lut;
 	}
 
-	function renderRawFrame(
+	function renderRawFrameOnMainThread(
 		canvas: HTMLCanvasElement,
 		frame: RawFrame,
 		wc: number,
@@ -120,8 +378,9 @@
 		const { rows, columns, bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, photometricInterpretation } = frame.metadata;
 		canvas.width = columns;
 		canvas.height = rows;
-		const ctx = canvas.getContext('2d', { alpha: false })!;
-		const invert = photometricInterpretation === 'MONOCHROME1';
+		const ctx = canvas.getContext("2d", { alpha: false });
+		if (!ctx) return;
+		const invert = photometricInterpretation === "MONOCHROME1";
 		const lut = buildLut(bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, wc, Math.max(ww, 1), invert);
 		const numPixels = rows * columns;
 		const imageData = ctx.createImageData(columns, rows);
@@ -132,24 +391,93 @@
 			for (let i = 0; i < numPixels; i++) {
 				const g = lut[view[i]];
 				const o = i * 4;
-				rgba[o] = g; rgba[o+1] = g; rgba[o+2] = g; rgba[o+3] = 255;
+				rgba[o] = g;
+				rgba[o + 1] = g;
+				rgba[o + 2] = g;
+				rgba[o + 3] = 255;
 			}
 		} else if (pixelRepresentation === 1) {
 			const view = new Int16Array(frame.buffer);
 			for (let i = 0; i < numPixels; i++) {
 				const g = lut[view[i] + 32768];
 				const o = i * 4;
-				rgba[o] = g; rgba[o+1] = g; rgba[o+2] = g; rgba[o+3] = 255;
+				rgba[o] = g;
+				rgba[o + 1] = g;
+				rgba[o + 2] = g;
+				rgba[o + 3] = 255;
 			}
 		} else {
 			const view = new Uint16Array(frame.buffer);
 			for (let i = 0; i < numPixels; i++) {
 				const g = lut[view[i]];
 				const o = i * 4;
-				rgba[o] = g; rgba[o+1] = g; rgba[o+2] = g; rgba[o+3] = 255;
+				rgba[o] = g;
+				rgba[o + 1] = g;
+				rgba[o + 2] = g;
+				rgba[o + 3] = 255;
 			}
 		}
 		ctx.putImageData(imageData, 0, 0);
+	}
+
+	async function renderDiagnosticFrame(frame: RawFrame, wc: number, ww: number, generation: number): Promise<void> {
+		if (!canvasEl) return;
+		if (shouldUseWorker(frame)) {
+			try {
+				const imageData = await renderWithWorker(frame, wc, ww);
+				if (generation !== wlRenderGeneration || !canvasEl || pipelineMode !== "diagnostic_wl") return;
+				canvasEl.width = imageData.width;
+				canvasEl.height = imageData.height;
+				const ctx = canvasEl.getContext("2d", { alpha: false });
+				ctx?.putImageData(imageData, 0, 0);
+				return;
+			} catch {
+				workerAvailable = false;
+			}
+		}
+		renderRawFrameOnMainThread(canvasEl, frame, wc, ww);
+	}
+
+	async function drawDisplayEntry(entry: DisplayFrameCacheEntry, generation: number): Promise<void> {
+		if (!canvasEl || pipelineMode !== "cine") return;
+		const ctx = canvasEl.getContext("2d", { alpha: false });
+		if (!ctx) return;
+
+		if (typeof createImageBitmap === "function") {
+			if (!entry.bitmap) {
+				if (!entry.decodePromise) {
+					entry.decodePromise = createImageBitmap(entry.blob).then((bitmap) => {
+						entry.bitmap = bitmap;
+						return bitmap;
+					});
+				}
+				await entry.decodePromise;
+				entry.decodePromise = null;
+			}
+			if (generation !== requestGeneration || !canvasEl || !entry.bitmap || pipelineMode !== "cine") return;
+			canvasEl.width = entry.bitmap.width;
+			canvasEl.height = entry.bitmap.height;
+			ctx.drawImage(entry.bitmap, 0, 0);
+			return;
+		}
+
+		const fallbackUrl = URL.createObjectURL(entry.blob);
+		try {
+			const img = new Image();
+			img.decoding = "async";
+			const loaded = new Promise<void>((resolve, reject) => {
+				img.onload = () => resolve();
+				img.onerror = () => reject(new Error("display image decode failed"));
+			});
+			img.src = fallbackUrl;
+			await loaded;
+			if (generation !== requestGeneration || !canvasEl || pipelineMode !== "cine") return;
+			canvasEl.width = img.naturalWidth;
+			canvasEl.height = img.naturalHeight;
+			ctx.drawImage(img, 0, 0);
+		} finally {
+			URL.revokeObjectURL(fallbackUrl);
+		}
 	}
 
 	function resolveDisplayWindow(
@@ -160,7 +488,7 @@
 		ww: number | null,
 		mode: WindowMode,
 	): { wc: number; ww: number } {
-		if (mode === 'full_dynamic') {
+		if (mode === "full_dynamic") {
 			return computeFullDynamicWindow(frame);
 		}
 		if (liveWc !== null && liveWw !== null) {
@@ -171,7 +499,7 @@
 		}
 		const { defaultWc, defaultWw } = frame.metadata;
 		if (defaultWc !== null && defaultWw !== null) {
-			return { wc: defaultWc!, ww: defaultWw! };
+			return { wc: defaultWc, ww: defaultWw };
 		}
 		return computePercentileWindow(frame);
 	}
@@ -179,24 +507,28 @@
 	function computeFullDynamicWindow(frame: RawFrame): { wc: number; ww: number } {
 		const { bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, rows, columns } = frame.metadata;
 		const numPixels = rows * columns;
-		let min = Infinity, max = -Infinity;
+		let min = Infinity;
+		let max = -Infinity;
 		if (bitsAllocated === 8) {
 			const view = new Uint8Array(frame.buffer);
 			for (let i = 0; i < numPixels; i++) {
 				const v = view[i] * rescaleSlope + rescaleIntercept;
-				if (v < min) min = v; if (v > max) max = v;
+				if (v < min) min = v;
+				if (v > max) max = v;
 			}
 		} else if (pixelRepresentation === 1) {
 			const view = new Int16Array(frame.buffer);
 			for (let i = 0; i < numPixels; i++) {
 				const v = view[i] * rescaleSlope + rescaleIntercept;
-				if (v < min) min = v; if (v > max) max = v;
+				if (v < min) min = v;
+				if (v > max) max = v;
 			}
 		} else {
 			const view = new Uint16Array(frame.buffer);
 			for (let i = 0; i < numPixels; i++) {
 				const v = view[i] * rescaleSlope + rescaleIntercept;
-				if (v < min) min = v; if (v > max) max = v;
+				if (v < min) min = v;
+				if (v > max) max = v;
 			}
 		}
 		if (!isFinite(min) || !isFinite(max)) return { wc: 128, ww: 256 };
@@ -225,172 +557,226 @@
 		return { wc: p1 + width / 2, ww: width };
 	}
 
-	function estimateRawFrameBytes(frame: RawFrame): number {
-		return frame.buffer.byteLength;
-	}
-
-	function clearRawFrameCache(): void {
-		rawFrameCache.clear();
-		rawCacheBytes = 0;
-	}
-
-	function getCachedRawFrame(frameIndex: number): RawFrame | undefined {
-		const cached = rawFrameCache.get(frameIndex);
-		if (!cached) return undefined;
-		rawFrameCache.delete(frameIndex);
-		rawFrameCache.set(frameIndex, cached);
-		return cached;
-	}
-
-	function cacheRawFrame(frameIndex: number, frame: RawFrame): void {
-		const incoming = estimateRawFrameBytes(frame);
-		if (incoming > RAW_CACHE_BYTE_BUDGET) return;
-
-		const existing = rawFrameCache.get(frameIndex);
-		if (existing) {
-			rawFrameCache.delete(frameIndex);
-			rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(existing));
-		}
-
-		while (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) {
-			const oldestKey = rawFrameCache.keys().next().value as number | undefined;
-			if (oldestKey === undefined) break;
-			const oldest = rawFrameCache.get(oldestKey);
-			rawFrameCache.delete(oldestKey);
-			if (oldest) {
-				rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(oldest));
-			}
-		}
-
-		if (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) return;
-		rawFrameCache.set(frameIndex, frame);
-		rawCacheBytes += incoming;
-	}
-
-	function validateRenderableRawFrame(frame: RawFrame): string | null {
-		const { rows, columns, bitsAllocated, samplesPerPixel } = frame.metadata;
-		if (rows <= 0 || columns <= 0) {
-			return 'Invalid raw frame dimensions';
-		}
-		if (samplesPerPixel !== 1) {
-			return `Unsupported SamplesPerPixel: ${samplesPerPixel}`;
-		}
-		if (bitsAllocated !== 8 && bitsAllocated !== 16) {
-			return `Unsupported BitsAllocated for viewport: ${bitsAllocated}`;
-		}
-		const numPixels = rows * columns;
-		if (!Number.isFinite(numPixels) || numPixels <= 0) {
-			return 'Invalid raw frame pixel count';
-		}
-		if (numPixels > MAX_RENDER_PIXELS) {
-			return `Frame too large to render safely (${rows}×${columns})`;
-		}
-		const minExpectedBytes = numPixels * (bitsAllocated / 8);
-		if (frame.buffer.byteLength < minExpectedBytes) {
-			return 'Raw frame buffer is shorter than expected for declared metadata';
-		}
-		return null;
-	}
-
-	function shouldPrefetchWholeStack(totalFrames: number, frameBytes: number): boolean {
-		if (totalFrames <= 1 || frameBytes <= 0) return false;
-		return frameBytes * totalFrames <= FULL_PREFETCH_STACK_BYTE_LIMIT;
-	}
-
-	// --- Prefetch ---
-
-	function buildPriorityOrder(current: number, total: number, maxDistance: number): number[] {
+	function buildDirectionalFrameOrder(
+		centerFrame: number,
+		totalFrames: number,
+		maxDistance: number,
+		direction: 1 | -1,
+	): number[] {
 		const result: number[] = [];
-		const distanceCap = Math.min(total - 1, maxDistance);
+		const distanceCap = Math.min(totalFrames - 1, maxDistance);
 		for (let delta = 1; delta <= distanceCap; delta++) {
-			const fwd = current + delta;
-			const bwd = current - delta;
-			if (fwd < total) result.push(fwd);
-			if (bwd >= 0) result.push(bwd);
+			const preferred = centerFrame + delta * direction;
+			const secondary = centerFrame - delta * direction;
+			if (preferred >= 0 && preferred < totalFrames) result.push(preferred);
+			if (secondary >= 0 && secondary < totalFrames) result.push(secondary);
 		}
 		return result;
 	}
 
-	function ensurePrefetchRunning(fileIndex: number, totalFrames: number, startFrame: number): void {
-		if (prefetchController || totalFrames <= 1 || !currentRawFrame) return;
-		const fullPrefetch = shouldPrefetchWholeStack(totalFrames, estimateRawFrameBytes(currentRawFrame));
-		const maxDistance = fullPrefetch ? totalFrames - 1 : PARTIAL_PREFETCH_DISTANCE;
-		prefetchController = new AbortController();
-		const ctrl = prefetchController;
-		runPrefetch(fileIndex, totalFrames, startFrame, maxDistance, ctrl.signal)
-			.catch(() => {})
-			.finally(() => { if (prefetchController === ctrl) prefetchController = null; });
+	function trimRawCacheToRing(centerFrame: number, totalFrames: number): void {
+		const minFrame = Math.max(0, centerFrame - RAW_RING_RADIUS);
+		const maxFrame = Math.min(totalFrames - 1, centerFrame + RAW_RING_RADIUS);
+		for (const cachedFrame of [...rawFrameCache.keys()]) {
+			if (cachedFrame < minFrame || cachedFrame > maxFrame) {
+				deleteCachedRawFrame(cachedFrame);
+			}
+		}
 	}
 
-	async function runPrefetch(
+	function shouldPrefetchWholeDisplayStack(totalFrames: number, frameBytes: number): boolean {
+		if (totalFrames <= 1 || frameBytes <= 0) return false;
+		return totalFrames * frameBytes <= DISPLAY_FULL_PREFETCH_BUDGET_BYTES;
+	}
+
+	async function runRawRingPrefetch(
+		fileIndex: number,
+		totalFrames: number,
+		centerFrame: number,
+		direction: 1 | -1,
+		signal: AbortSignal,
+	): Promise<void> {
+		trimRawCacheToRing(centerFrame, totalFrames);
+		const targets = buildDirectionalFrameOrder(centerFrame, totalFrames, RAW_RING_RADIUS, direction);
+		for (let i = 0; i < targets.length && !signal.aborted; i += PREFETCH_CONCURRENCY) {
+			const batch = targets.slice(i, i + PREFETCH_CONCURRENCY).filter((frameIndex) => !rawFrameCache.has(frameIndex));
+			if (batch.length === 0) continue;
+			await Promise.allSettled(
+				batch.map(async (frameIndex) => {
+					if (signal.aborted || rawFrameCache.has(frameIndex)) return;
+					try {
+						const rawFrame = await fetchRawFrame(fileIndex, frameIndex, signal);
+						if (validateRenderableRawFrame(rawFrame) !== null) return;
+						cacheRawFrame(frameIndex, rawFrame);
+					} catch {
+						// Ignore network/decode failures during prefetch.
+					}
+				}),
+			);
+		}
+		trimRawCacheToRing(centerFrame, totalFrames);
+	}
+
+	async function runDisplayPrefetch(
 		fileIndex: number,
 		totalFrames: number,
 		startFrame: number,
-		maxDistance: number,
+		direction: 1 | -1,
+		windowOptions: DisplayFrameWindowOptions,
 		signal: AbortSignal,
+		currentBlobSize: number,
 	): Promise<void> {
-		const frames = buildPriorityOrder(startFrame, totalFrames, maxDistance);
-		const CONCURRENCY = 3;
-		for (let i = 0; i < frames.length && !signal.aborted; i += CONCURRENCY) {
-			const batch = frames.slice(i, i + CONCURRENCY).filter(f => !rawFrameCache.has(f));
-			if (batch.length === 0) continue;
+		const fullVolume = shouldPrefetchWholeDisplayStack(totalFrames, currentBlobSize);
+		const maxDistance = fullVolume ? totalFrames - 1 : DISPLAY_NEAR_PREFETCH_DISTANCE;
+		const targets = buildDirectionalFrameOrder(startFrame, totalFrames, maxDistance, direction);
+		for (let i = 0; i < targets.length && !signal.aborted; i += PREFETCH_CONCURRENCY) {
+			const batch = targets.slice(i, i + PREFETCH_CONCURRENCY);
 			await Promise.allSettled(
-				batch.map(async f => {
-					if (signal.aborted || rawFrameCache.has(f)) return;
+				batch.map(async (frameIndex) => {
+					const key = buildDisplayKey(fileIndex, frameIndex, windowOptions);
+					if (signal.aborted || displayFrameCache.has(key)) return;
 					try {
-						const raw = await fetchRawFrame(fileIndex, f, signal);
-						if (validateRenderableRawFrame(raw) === null) {
-							cacheRawFrame(f, raw);
-						}
-					} catch { /* network errors are non-fatal during prefetch */ }
+						const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal);
+						cacheDisplayFrame(key, blob);
+					} catch {
+						// Ignore network/decode failures during prefetch.
+					}
 				}),
 			);
 		}
 	}
 
-	// --- Frame loading ---
-
-	async function loadRawFrameAndRender(fileIndex: number, frameIndex: number): Promise<void> {
+	async function loadRawFrameAndRender(
+		fileIndex: number,
+		frameIndex: number,
+		generation: number,
+		direction: 1 | -1,
+	): Promise<void> {
 		const cached = getCachedRawFrame(frameIndex);
 		if (cached) {
 			currentRawFrame = cached;
 			loading = false;
 			loadError = null;
-			ensurePrefetchRunning(fileIndex, activeFile?.frame_count ?? 1, frameIndex);
+			rawPrefetchCtrl?.abort();
+			rawPrefetchCtrl = new AbortController();
+			void runRawRingPrefetch(fileIndex, activeFile.frame_count, frameIndex, direction, rawPrefetchCtrl.signal);
 			return;
 		}
-		pendingRawCtrl?.abort();
-		const ctrl = new AbortController();
-		pendingRawCtrl = ctrl;
-		loading = true;
-		loadError = null;
+
+		rawRequestCtrl?.abort();
+		rawRequestCtrl = new AbortController();
+		const ctrl = rawRequestCtrl;
+
 		try {
-			const raw = await fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
-			if (ctrl.signal.aborted) return;
-			const validationError = validateRenderableRawFrame(raw);
+			const rawFrame = await fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
+			if (ctrl.signal.aborted || generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
+			const validationError = validateRenderableRawFrame(rawFrame);
 			if (validationError) {
 				currentRawFrame = null;
 				loading = false;
 				loadError = validationError;
 				return;
 			}
-			cacheRawFrame(frameIndex, raw);
-			currentRawFrame = raw;
+			cacheRawFrame(frameIndex, rawFrame);
+			trimRawCacheToRing(frameIndex, activeFile.frame_count);
+			currentRawFrame = rawFrame;
 			loading = false;
 			loadError = null;
-			ensurePrefetchRunning(fileIndex, activeFile?.frame_count ?? 1, frameIndex);
-		} catch (e) {
-			if ((e as Error).name === 'AbortError') return;
+
+			rawPrefetchCtrl?.abort();
+			rawPrefetchCtrl = new AbortController();
+			void runRawRingPrefetch(fileIndex, activeFile.frame_count, frameIndex, direction, rawPrefetchCtrl.signal);
+		} catch (error) {
+			if ((error as Error).name === "AbortError") return;
+			if (generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
 			loading = false;
-			loadError = (e as Error).message || 'Failed to load frame';
+			loadError = (error as Error).message || "Failed to load frame";
 		} finally {
-			if (pendingRawCtrl === ctrl) pendingRawCtrl = null;
+			if (rawRequestCtrl === ctrl) rawRequestCtrl = null;
 		}
 	}
 
-	// --- Effects ---
+	async function loadDisplayFrameAndRender(
+		fileIndex: number,
+		frameIndex: number,
+		generation: number,
+		direction: 1 | -1,
+	): Promise<void> {
+		const windowOptions = currentDisplayWindowOptions();
+		const cacheKey = buildDisplayKey(fileIndex, frameIndex, windowOptions);
+		const cached = getCachedDisplayFrame(cacheKey);
+		if (cached) {
+			currentDisplayCacheKey = cacheKey;
+			loading = false;
+			loadError = null;
+			await drawDisplayEntry(cached, generation);
+			displayPrefetchCtrl?.abort();
+			displayPrefetchCtrl = new AbortController();
+			void runDisplayPrefetch(
+				fileIndex,
+				activeFile.frame_count,
+				frameIndex,
+				direction,
+				windowOptions,
+				displayPrefetchCtrl.signal,
+				cached.bytes,
+			);
+			return;
+		}
 
-	// Initialise per-file transform state on first access.
+		displayRequestCtrl?.abort();
+		displayRequestCtrl = new AbortController();
+		const ctrl = displayRequestCtrl;
+
+		try {
+			const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, ctrl.signal);
+			if (ctrl.signal.aborted || generation !== requestGeneration || pipelineMode !== "cine") return;
+			const entry = cacheDisplayFrame(cacheKey, blob);
+			if (!entry) {
+				loading = false;
+				loadError = "Display frame exceeded cache budget";
+				return;
+			}
+			currentDisplayCacheKey = cacheKey;
+			loading = false;
+			loadError = null;
+			await drawDisplayEntry(entry, generation);
+
+			displayPrefetchCtrl?.abort();
+			displayPrefetchCtrl = new AbortController();
+			void runDisplayPrefetch(
+				fileIndex,
+				activeFile.frame_count,
+				frameIndex,
+				direction,
+				windowOptions,
+				displayPrefetchCtrl.signal,
+				blob.size,
+			);
+		} catch (error) {
+			if ((error as Error).name === "AbortError") return;
+			if (generation !== requestGeneration || pipelineMode !== "cine") return;
+			loading = false;
+			loadError = (error as Error).message || "Failed to load frame";
+		} finally {
+			if (displayRequestCtrl === ctrl) displayRequestCtrl = null;
+		}
+	}
+
+	function updateTransform(index: number, transform: TransformState) {
+		transformsByFile = {
+			...transformsByFile,
+			[index]: transform,
+		};
+	}
+
+	$effect(() => {
+		const current = currentFrame;
+		if (current > lastFrameForDirection) frameDirection = 1;
+		if (current < lastFrameForDirection) frameDirection = -1;
+		lastFrameForDirection = current;
+	});
+
 	$effect(() => {
 		if (activeFile && !transformsByFile[activeFile.index]) {
 			transformsByFile = {
@@ -400,30 +786,79 @@
 		}
 	});
 
-	// Effect 1: load raw frame when file or frame changes.
+	$effect(() => {
+		if (!activeFile) return;
+		const nextScope = String(activeFile.index);
+		if (nextScope === fileScopeKey) return;
+		fileScopeKey = nextScope;
+		rawRequestCtrl?.abort();
+		rawPrefetchCtrl?.abort();
+		displayRequestCtrl?.abort();
+		displayPrefetchCtrl?.abort();
+		clearRawFrameCache();
+		clearDisplayCache();
+		currentRawFrame = null;
+		currentDisplayCacheKey = null;
+		liveWindowCenter = null;
+		liveWindowWidth = null;
+		clearCanvas();
+	});
+
+	$effect(() => {
+		const mode = pipelineMode;
+		requestGeneration += 1;
+		clearCanvas();
+		if (mode === "cine") {
+			rawRequestCtrl?.abort();
+			rawRequestCtrl = null;
+			rawPrefetchCtrl?.abort();
+			rawPrefetchCtrl = null;
+			liveWindowCenter = null;
+			liveWindowWidth = null;
+		} else {
+			displayRequestCtrl?.abort();
+			displayRequestCtrl = null;
+			displayPrefetchCtrl?.abort();
+			displayPrefetchCtrl = null;
+			currentDisplayCacheKey = null;
+		}
+	});
+
 	$effect(() => {
 		if (!activeFile?.has_pixels) {
 			currentRawFrame = null;
+			currentDisplayCacheKey = null;
 			loading = false;
+			loadError = null;
+			clearCanvas();
 			return;
 		}
-		// Detect file change → evict cache, cancel prefetch.
-		const newScopeKey = String(activeFileIndex);
-		if (newScopeKey !== fileScopeKey) {
-			fileScopeKey = newScopeKey;
-			prefetchController?.abort();
-			prefetchController = null;
-			clearRawFrameCache();
-			currentRawFrame = null;
-			loading = true;
+
+		const mode = pipelineMode;
+		const fileIndex = activeFile.index;
+		const frameIndex = currentFrame;
+		const generation = ++requestGeneration;
+		const modeWc = mode === "cine" ? windowCenter : null;
+		const modeWw = mode === "cine" ? windowWidth : null;
+		const modePreset = mode === "cine" ? selectedPresetId : "";
+		const modeWindowMode = mode === "cine" ? windowMode : "default";
+		void modeWc;
+		void modeWw;
+		void modePreset;
+		void modeWindowMode;
+
+		loading = true;
+		loadError = null;
+		if (mode === "cine") {
+			void loadDisplayFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
+		} else {
+			void loadRawFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
 		}
-		void loadRawFrameAndRender(activeFile.index, currentFrame);
 	});
 
-	// Effect 2: re-render when WL changes or frame loads.
 	$effect(() => {
-		if (!currentRawFrame || !canvasEl) return;
-		const win = resolveDisplayWindow(
+		if (pipelineMode !== "diagnostic_wl" || !currentRawFrame || !canvasEl) return;
+		const window = resolveDisplayWindow(
 			currentRawFrame,
 			liveWindowCenter,
 			liveWindowWidth,
@@ -431,54 +866,53 @@
 			windowWidth,
 			windowMode,
 		);
-		renderRawFrame(canvasEl, currentRawFrame, win.wc, win.ww);
+		const generation = ++wlRenderGeneration;
+		void renderDiagnosticFrame(currentRawFrame, window.wc, window.ww, generation);
 	});
 
-	// Cleanup on component destroy: abort in-flight requests, clear cache.
+	$effect(() => {
+		if (pipelineMode !== "cine" || !canvasEl || !currentDisplayCacheKey) return;
+		const entry = getCachedDisplayFrame(currentDisplayCacheKey);
+		if (!entry) return;
+		const generation = requestGeneration;
+		void drawDisplayEntry(entry, generation);
+	});
+
 	$effect(() => {
 		return () => {
-			prefetchController?.abort();
-			pendingRawCtrl?.abort();
+			rawRequestCtrl?.abort();
+			rawPrefetchCtrl?.abort();
+			displayRequestCtrl?.abort();
+			displayPrefetchCtrl?.abort();
 			clearRawFrameCache();
+			clearDisplayCache();
+			for (const pending of pendingWorkerResponses.values()) {
+				pending.reject(new Error("viewport disposed"));
+			}
+			pendingWorkerResponses.clear();
+			wlWorker?.terminate();
+			wlWorker = null;
 		};
 	});
 
-	// Reset transform/window when toolbar Reset is clicked.
-	// Edge-triggered on resetCount: acts only when the counter increments,
-	// never while it merely stays > 0 (which would snap every user interaction).
 	$effect(() => {
 		if (resetCount === lastHandledResetCount) return;
 		lastHandledResetCount = resetCount;
-		// Guard against the initial render (count is 0, no reset has occurred).
 		if (resetCount === 0) return;
 		if (activeFile) {
 			updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
 		}
 		liveWindowCenter = null;
 		liveWindowWidth = null;
-		// Clear transient interaction state so in-progress gestures don't
-		// resurrect stale drag / scroll context after the reset.
 		dragState = null;
 		wheelAccum = 0;
 	});
 
-	// Reset wheel accumulator when file changes.
 	$effect(() => {
-		activeFileIndex; // dependency
+		activeFileIndex;
 		wheelAccum = 0;
 	});
 
-	function updateTransform(index: number, transform: TransformState) {
-		transformsByFile = {
-			...transformsByFile,
-			[index]: transform,
-		};
-	}
-
-	/**
-	 * Zoom to `newScale`, keeping the point under (`clientX`, `clientY`) fixed.
-	 * Coordinates are in client (page) space, not element-relative.
-	 */
 	function zoomAt(newScale: number, clientX: number, clientY: number) {
 		if (!activeFile || !canvasEl) return;
 		const { scale, tx, ty } = activeTransform;
@@ -500,24 +934,17 @@
 		event.preventDefault();
 
 		const isModifiedZoom = event.ctrlKey || event.metaKey;
-
 		if (isModifiedZoom) {
-			// Ctrl/Cmd + wheel: always zoom (includes trackpad pinch which fires as ctrlKey+pixel)
-			const delta = event.deltaMode === 0
-				? -event.deltaY * 0.01
-				: event.deltaY < 0 ? 0.05 : -0.05;
+			const delta = event.deltaMode === 0 ? -event.deltaY * 0.01 : event.deltaY < 0 ? 0.05 : -0.05;
 			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
 			return;
 		}
 
 		if (activeFile.frame_count > 1) {
-			// Multi-frame: scrub through stack
 			if (event.deltaMode !== 0) {
-				// Discrete mouse wheel: 1 frame per click
 				if (event.deltaY > 0) currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
 				else if (event.deltaY < 0) currentFrame = Math.max(0, currentFrame - 1);
 			} else {
-				// Pixel mode trackpad: accumulate to avoid over-scrubbing
 				wheelAccum += event.deltaY;
 				const threshold = 30;
 				while (wheelAccum >= threshold) {
@@ -532,12 +959,10 @@
 			return;
 		}
 
-		// Single-frame: original zoom/pan behavior
 		if (event.deltaMode !== 0) {
 			const delta = event.deltaY < 0 ? 0.05 : -0.05;
 			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
 		} else {
-			// Trackpad two-finger scroll: pan
 			updateTransform(activeFile.index, {
 				...activeTransform,
 				tx: activeTransform.tx - event.deltaX,
@@ -551,7 +976,6 @@
 		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 
 		if (event.button === 1) {
-			// Middle: always pan
 			event.preventDefault();
 			dragState = {
 				mode: "pan",
@@ -564,7 +988,6 @@
 		}
 
 		if (event.button === 2) {
-			// Right: always zoom
 			event.preventDefault();
 			dragState = {
 				mode: "zoom_drag",
@@ -578,7 +1001,6 @@
 		}
 
 		if (event.button === 0) {
-			// Left: route by active tool
 			switch (activeTool) {
 				case "window_level": {
 					const baseCenter = displayWindow.wc;
@@ -647,7 +1069,6 @@
 			const nextCenter = dragState.baseCenter - dy * 2;
 			liveWindowCenter = nextCenter;
 			liveWindowWidth = nextWidth;
-			// Re-render happens automatically via Effect 2 from cached raw data.
 			return;
 		}
 
@@ -667,13 +1088,10 @@
 
 	function onPointerUp(event: PointerEvent) {
 		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-
-		if (dragState?.mode === 'wl') {
-			// Commit live values so they persist after drag ends.
+		if (dragState?.mode === "wl") {
 			windowCenter = liveWindowCenter;
 			windowWidth = liveWindowWidth;
 		}
-
 		dragState = null;
 	}
 
@@ -706,11 +1124,11 @@
 		if (!activeFile) return;
 		const current = activeTransform.scale;
 		if (direction > 0) {
-			const next = ZOOM_STEPS.find(s => s > current + 0.001);
+			const next = ZOOM_STEPS.find((step) => step > current + 0.001);
 			if (next !== undefined) zoomToLevel(next);
 		} else {
-			const prev = [...ZOOM_STEPS].reverse().find(s => s < current - 0.001);
-			if (prev !== undefined) zoomToLevel(prev);
+			const previous = [...ZOOM_STEPS].reverse().find((step) => step < current - 0.001);
+			if (previous !== undefined) zoomToLevel(previous);
 		}
 	}
 </script>

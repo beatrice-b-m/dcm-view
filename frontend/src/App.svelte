@@ -27,7 +27,7 @@
 	let currentFrame = $state(0);
 	let windowCenter = $state<number | null>(null);
 	let windowWidth = $state<number | null>(null);
-	let activeTool = $state<ActiveTool>('window_level');
+	let activeTool = $state<ActiveTool>('pan');
 	let windowMode = $state<WindowMode>('default');
 	let selectedPresetId = $state('default');
 	let resetCount = $state(0);
@@ -162,6 +162,7 @@
 				activeTool={activeTool}
 				windowMode={windowMode}
 				resetCount={resetCount}
+				selectedPresetId={selectedPresetId}
 				onreset={resetViewport}
 			/>
 			<aside class="tag-panel-shell" class:collapsed={tagPanelCollapsed}>
