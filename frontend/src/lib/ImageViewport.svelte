@@ -66,6 +66,8 @@
 	let rawPrefetchCtrl: AbortController | null = null;
 	let displayRequestCtrl: AbortController | null = null;
 	let displayPrefetchCtrl: AbortController | null = null;
+	let displayPrefetchSeedFrame: number | null = null;
+	let displayPrefetchScopeKey = "";
 	let rawFrameCache = new Map<number, RawFrame>();
 	let rawCacheBytes = 0;
 	let displayFrameCache = new Map<string, DisplayFrameCacheEntry>();
@@ -95,6 +97,7 @@
 	const DISPLAY_NEAR_PREFETCH_DISTANCE = 48;
 	const WORKER_MIN_PIXEL_THRESHOLD = 300_000;
 	const PREFETCH_CONCURRENCY = 3;
+	const PREFETCH_RESEED_DISTANCE = 6;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
 	const transformCss = $derived(
@@ -305,6 +308,13 @@
 	function buildDisplayKey(fileIndex: number, frameIndex: number, options: DisplayFrameWindowOptions): string {
 		return `${displayFrameCacheKey(fileIndex, frameIndex, options)}:preset:${selectedPresetId}`;
 	}
+
+function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOptions): string {
+	const wc = options.wc === null || options.wc === undefined ? "none" : options.wc.toFixed(4);
+	const ww = options.ww === null || options.ww === undefined ? "none" : options.ww.toFixed(4);
+	const mode = options.windowMode ?? "default";
+	return `${fileIndex}:${selectedPresetId}:${mode}:${wc}:${ww}`;
+}
 
 	function validateRenderableRawFrame(frame: RawFrame): string | null {
 		const { rows, columns, bitsAllocated, samplesPerPixel } = frame.metadata;
@@ -646,6 +656,46 @@
 		}
 	}
 
+function startDisplayPrefetch(
+	fileIndex: number,
+	totalFrames: number,
+	frameIndex: number,
+	direction: 1 | -1,
+	windowOptions: DisplayFrameWindowOptions,
+	currentBlobSize: number,
+): void {
+	const scopeKey = displayPrefetchScope(fileIndex, windowOptions);
+	const shouldReusePrefetch =
+		displayPrefetchCtrl !== null &&
+		!displayPrefetchCtrl.signal.aborted &&
+		displayPrefetchScopeKey === scopeKey &&
+		displayPrefetchSeedFrame !== null &&
+		Math.abs(frameIndex - displayPrefetchSeedFrame) <= PREFETCH_RESEED_DISTANCE;
+	if (shouldReusePrefetch) return;
+
+	displayPrefetchCtrl?.abort();
+	const ctrl = new AbortController();
+	displayPrefetchCtrl = ctrl;
+	displayPrefetchScopeKey = scopeKey;
+	displayPrefetchSeedFrame = frameIndex;
+
+	void runDisplayPrefetch(
+		fileIndex,
+		totalFrames,
+		frameIndex,
+		direction,
+		windowOptions,
+		ctrl.signal,
+		currentBlobSize,
+	).finally(() => {
+		if (displayPrefetchCtrl === ctrl) {
+			displayPrefetchCtrl = null;
+			displayPrefetchScopeKey = "";
+			displayPrefetchSeedFrame = null;
+		}
+	});
+}
+
 	async function loadRawFrameAndRender(
 		fileIndex: number,
 		frameIndex: number,
@@ -710,15 +760,12 @@
 			loading = false;
 			loadError = null;
 			await drawDisplayEntry(cached, generation);
-			displayPrefetchCtrl?.abort();
-			displayPrefetchCtrl = new AbortController();
-			void runDisplayPrefetch(
+			startDisplayPrefetch(
 				fileIndex,
 				activeFile.frame_count,
 				frameIndex,
 				direction,
 				windowOptions,
-				displayPrefetchCtrl.signal,
 				cached.bytes,
 			);
 			return;
@@ -742,15 +789,12 @@
 			loadError = null;
 			await drawDisplayEntry(entry, generation);
 
-			displayPrefetchCtrl?.abort();
-			displayPrefetchCtrl = new AbortController();
-			void runDisplayPrefetch(
+			startDisplayPrefetch(
 				fileIndex,
 				activeFile.frame_count,
 				frameIndex,
 				direction,
 				windowOptions,
-				displayPrefetchCtrl.signal,
 				blob.size,
 			);
 		} catch (error) {
@@ -795,6 +839,9 @@
 		rawPrefetchCtrl?.abort();
 		displayRequestCtrl?.abort();
 		displayPrefetchCtrl?.abort();
+		displayPrefetchCtrl = null;
+		displayPrefetchScopeKey = "";
+		displayPrefetchSeedFrame = null;
 		clearRawFrameCache();
 		clearDisplayCache();
 		currentRawFrame = null;
@@ -807,7 +854,6 @@
 	$effect(() => {
 		const mode = pipelineMode;
 		requestGeneration += 1;
-		clearCanvas();
 		if (mode === "cine") {
 			rawRequestCtrl?.abort();
 			rawRequestCtrl = null;
@@ -820,6 +866,8 @@
 			displayRequestCtrl = null;
 			displayPrefetchCtrl?.abort();
 			displayPrefetchCtrl = null;
+			displayPrefetchScopeKey = "";
+			displayPrefetchSeedFrame = null;
 			currentDisplayCacheKey = null;
 		}
 	});
@@ -884,6 +932,9 @@
 			rawPrefetchCtrl?.abort();
 			displayRequestCtrl?.abort();
 			displayPrefetchCtrl?.abort();
+			displayPrefetchCtrl = null;
+			displayPrefetchScopeKey = "";
+			displayPrefetchSeedFrame = null;
 			clearRawFrameCache();
 			clearDisplayCache();
 			for (const pending of pendingWorkerResponses.values()) {
@@ -1003,17 +1054,26 @@
 		if (event.button === 0) {
 			switch (activeTool) {
 				case "window_level": {
-					const baseCenter = displayWindow.wc;
-					const baseWidth = displayWindow.ww;
+					if (pipelineMode !== "diagnostic_wl" || !currentRawFrame) {
+						break;
+					}
+					const baseWindow = resolveDisplayWindow(
+						currentRawFrame,
+						liveWindowCenter,
+						liveWindowWidth,
+						windowCenter,
+						windowWidth,
+						windowMode,
+					);
 					dragState = {
 						mode: "wl",
 						startX: event.clientX,
 						startY: event.clientY,
-						baseCenter,
-						baseWidth,
+						baseCenter: baseWindow.wc,
+						baseWidth: baseWindow.ww,
 					};
-					liveWindowCenter = baseCenter;
-					liveWindowWidth = baseWidth;
+					liveWindowCenter = baseWindow.wc;
+					liveWindowWidth = baseWindow.ww;
 					break;
 				}
 				case "pan":
@@ -1088,7 +1148,7 @@
 
 	function onPointerUp(event: PointerEvent) {
 		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-		if (dragState?.mode === "wl") {
+		if (dragState?.mode === "wl" && liveWindowCenter !== null && liveWindowWidth !== null) {
 			windowCenter = liveWindowCenter;
 			windowWidth = liveWindowWidth;
 		}
