@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { ActiveTool } from './viewerTools';
-	import { WL_PRESETS, TOOL_LABELS, TOOL_SHORTCUTS } from './viewerTools';
+	import { TOOL_LABELS, TOOL_ORDER, TOOL_SHORTCUTS, WL_PRESETS } from './viewerTools';
 
 	let {
 		activeTool = $bindable(),
@@ -12,7 +12,7 @@
 		onreset: () => void;
 	} = $props();
 
-	const tools: ActiveTool[] = ['window_level', 'pan', 'zoom', 'scroll'];
+	const tools: ActiveTool[] = TOOL_ORDER;
 </script>
 
 <div class="toolbar">

@@ -1,6 +1,8 @@
 import type { WindowMode } from '../api';
 
-export type ActiveTool = 'window_level' | 'pan' | 'zoom' | 'scroll';
+export type ActiveTool = 'pan' | 'scroll' | 'zoom' | 'window_level';
+
+export const TOOL_ORDER: ActiveTool[] = ['pan', 'scroll', 'zoom', 'window_level'];
 
 export interface WlPreset {
 	id: string;
