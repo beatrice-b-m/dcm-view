@@ -109,25 +109,22 @@
 		activeTool === "window_level" ? "diagnostic_wl" : "cine",
 	);
 
-	const displayWindow = $derived(() => {
-		if (pipelineMode === "diagnostic_wl" && currentRawFrame) {
-			return resolveDisplayWindow(
+	const displayWindow = $derived(
+		pipelineMode === "diagnostic_wl" && currentRawFrame
+			? resolveDisplayWindow(
 				currentRawFrame,
 				liveWindowCenter,
 				liveWindowWidth,
 				windowCenter,
 				windowWidth,
 				windowMode,
-			);
-		}
-		if (windowCenter !== null && windowWidth !== null) {
-			return { wc: windowCenter, ww: windowWidth };
-		}
-		if (activeFile?.default_window) {
-			return { wc: activeFile.default_window.center, ww: activeFile.default_window.width };
-		}
-		return { wc: 0, ww: 1 };
-	});
+			)
+			: windowCenter !== null && windowWidth !== null
+				? { wc: windowCenter, ww: windowWidth }
+				: activeFile?.default_window
+					? { wc: activeFile.default_window.center, ww: activeFile.default_window.width }
+					: { wc: 0, ww: 1 },
+	);
 
 	function ensureWlWorker(): boolean {
 		if (workerInitAttempted) {
