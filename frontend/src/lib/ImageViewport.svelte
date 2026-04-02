@@ -98,6 +98,9 @@
 	const WORKER_MIN_PIXEL_THRESHOLD = 300_000;
 	const PREFETCH_CONCURRENCY = 3;
 	const PREFETCH_RESEED_DISTANCE = 6;
+	const FRAME_SCROLL_SPEED_FACTOR = 0.7;
+	const WHEEL_FRAME_THRESHOLD = 30 / FRAME_SCROLL_SPEED_FACTOR;
+	const DRAG_PIXELS_PER_FRAME = 10 / FRAME_SCROLL_SPEED_FACTOR;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
 	const transformCss = $derived(
@@ -994,7 +997,7 @@ function startDisplayPrefetch(
 				else if (event.deltaY < 0) currentFrame = Math.max(0, currentFrame - 1);
 			} else {
 				wheelAccum += event.deltaY;
-				const threshold = 30;
+				const threshold = WHEEL_FRAME_THRESHOLD;
 				while (wheelAccum >= threshold) {
 					currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
 					wheelAccum -= threshold;
@@ -1138,7 +1141,7 @@ function startDisplayPrefetch(
 
 		if (dragState.mode === "scroll_drag" && activeFile.frame_count > 1) {
 			const dy = event.clientY - dragState.startY;
-			const frameDelta = Math.round(dy / 10);
+			const frameDelta = Math.round(dy / DRAG_PIXELS_PER_FRAME);
 			currentFrame = Math.max(0, Math.min(activeFile.frame_count - 1, dragState.baseFrame + frameDelta));
 		}
 	}
