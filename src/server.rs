@@ -1,3 +1,4 @@
+use crate::annotations::AnnotationIndexMap;
 use crate::pixels::{self, FrameRequest, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
 use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, RawFrameMetadata, TagNode, TagValue, TunnelInfo, WindowMode};
@@ -27,6 +28,7 @@ pub struct AppState {
 	pub pixel_cache: Arc<Mutex<LruCache<crate::types::FrameCacheKey, Bytes>>>,
 	pub raw_cache: Arc<Mutex<LruCache<crate::types::RawFrameCacheKey, (Bytes, RawFrameMetadata)>>>,
 	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
+	pub annotations: Arc<AnnotationIndexMap>,
 	pub tunnel_info: Option<Arc<TunnelInfo>>,
 	pub tunnel_handle: Option<Arc<TunnelHandle>>,
 	pub server_start: Instant,

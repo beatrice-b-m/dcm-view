@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use dcmview::annotations;
 use dcmview::loader;
 use dcmview::pixels;
 use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
@@ -40,6 +41,9 @@ struct Cli {
 
 	#[arg(long = "no-recursive")]
 	no_recursive: bool,
+
+	#[arg(long = "annotations")]
+	annotations: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -64,6 +68,13 @@ async fn run() -> Result<()> {
 	.context("failed to discover DICOM files")?;
 
 	print_load_summary(&load_report, &cli.paths);
+	let annotations = if let Some(path) = cli.annotations.as_ref() {
+		annotations::load_annotations_for_files(path, load_report.files.as_slice())
+			.with_context(|| format!("failed to load annotations from {}", path.display()))?
+	} else {
+		HashMap::new()
+	};
+
 
 	let tunnel = if cli.tunnel {
 		let host = cli
@@ -83,6 +94,7 @@ async fn run() -> Result<()> {
 		pixel_cache: pixels::new_cache(),
 		raw_cache: pixels::new_raw_cache(),
 		tag_cache: Arc::new(Mutex::new(HashMap::new())),
+		annotations: Arc::new(annotations),
 		tunnel_info: None,
 		tunnel_handle: None,
 		server_start: Instant::now(),
