@@ -33,6 +33,12 @@ export interface FrameInfo {
 	default_window: WindowPreset | null;
 }
 
+export interface EmbedRoiAnnotations {
+	num_roi: number;
+	roi_coords: [number, number, number, number][];
+	roi_frames: number[][];
+}
+
 export type TagValue =
 	| { type: "string"; value: string }
 	| { type: "number"; value: number }
@@ -66,6 +72,10 @@ export function fetchFrameInfo(fileIndex: number): Promise<FrameInfo> {
 
 export function fetchTags(fileIndex: number): Promise<TagNode[]> {
 	return requestJson<TagNode[]>(`/api/file/${fileIndex}/tags`);
+}
+
+export function fetchAnnotations(fileIndex: number): Promise<EmbedRoiAnnotations> {
+	return requestJson<EmbedRoiAnnotations>(`/api/file/${fileIndex}/annotations`);
 }
 
 export function frameUrl(fileIndex: number, frame: number, wc?: number | null, ww?: number | null, windowMode?: WindowMode | null): string {

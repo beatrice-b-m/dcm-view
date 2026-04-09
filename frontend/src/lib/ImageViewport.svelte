@@ -1,9 +1,11 @@
 <script lang="ts">
 	import {
 		displayFrameCacheKey,
+		fetchAnnotations,
 		fetchDisplayFrameBlob,
 		fetchRawFrame,
 		type DisplayFrameWindowOptions,
+		type EmbedRoiAnnotations,
 		type FileSummary,
 		type RawFrame,
 		type WindowMode,
@@ -25,6 +27,15 @@
 		bitmap: ImageBitmap | null;
 		decodePromise: Promise<ImageBitmap> | null;
 	}
+
+	type VisibleRoi = {
+		index: number;
+		ymin: number;
+		xmin: number;
+		ymax: number;
+		xmax: number;
+		frames: number[] | null;
+	};
 
 	let {
 		files,
@@ -61,6 +72,10 @@
 	let wheelAccum = $state(0);
 	let currentRawFrame = $state<RawFrame | null>(null);
 	let currentDisplayCacheKey = $state<string | null>(null);
+	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
+	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
+	let annotationLoadingByFile = $state<Record<number, boolean | undefined>>({});
+	let annotationRequestedByFile = $state<Record<number, boolean | undefined>>({});
 
 	let rawRequestCtrl: AbortController | null = null;
 	let rawPrefetchCtrl: AbortController | null = null;
@@ -128,6 +143,43 @@
 					? { wc: activeFile.default_window.center, ww: activeFile.default_window.width }
 					: { wc: 0, ww: 1 },
 	);
+	const activeAnnotations = $derived(activeFile ? annotationsByFile[activeFile.index] ?? null : null);
+	const activeAnnotationError = $derived(activeFile ? annotationErrorsByFile[activeFile.index] ?? null : null);
+	const activeAnnotationLoading = $derived(activeFile ? annotationLoadingByFile[activeFile.index] ?? false : false);
+	const imageRows = $derived(
+		pipelineMode === "diagnostic_wl" && currentRawFrame
+			? currentRawFrame.metadata.rows
+			: activeFile?.rows ?? 0,
+	);
+	const imageColumns = $derived(
+		pipelineMode === "diagnostic_wl" && currentRawFrame
+			? currentRawFrame.metadata.columns
+			: activeFile?.columns ?? 0,
+	);
+	const visibleRois = $derived(deriveVisibleRois(activeAnnotations, currentFrame));
+	const roiListCountLabel = $derived(
+		activeAnnotations ? `${visibleRois.length} / ${activeAnnotations.num_roi}` : String(visibleRois.length),
+	);
+
+	function deriveVisibleRois(annotations: EmbedRoiAnnotations | null, frameIndex: number): VisibleRoi[] {
+		if (!annotations || annotations.roi_coords.length === 0) return [];
+		const appliesToAllFrames = annotations.roi_frames.length === 0;
+		const visible: VisibleRoi[] = [];
+		for (let idx = 0; idx < annotations.roi_coords.length; idx += 1) {
+			const [ymin, xmin, ymax, xmax] = annotations.roi_coords[idx];
+			const frames = appliesToAllFrames ? null : annotations.roi_frames[idx] ?? [];
+			if (!appliesToAllFrames && !frames.includes(frameIndex)) continue;
+			visible.push({ index: idx, ymin, xmin, ymax, xmax, frames });
+		}
+		return visible;
+	}
+
+	function formatRoiFrames(frames: number[] | null): string {
+		if (frames === null) return "all frames";
+		if (frames.length === 0) return "no frame mapping";
+		const preview = frames.slice(0, 6).join(", ");
+		return frames.length > 6 ? `frames ${preview}, …` : `frames ${preview}`;
+	}
 
 	function ensureWlWorker(): boolean {
 		if (workerInitAttempted) {
@@ -832,6 +884,55 @@ function startDisplayPrefetch(
 
 	$effect(() => {
 		if (!activeFile) return;
+		const fileIndex = activeFile.index;
+		if (annotationsByFile[fileIndex] || annotationRequestedByFile[fileIndex] || annotationLoadingByFile[fileIndex]) {
+			return;
+		}
+
+		annotationRequestedByFile = {
+			...annotationRequestedByFile,
+			[fileIndex]: true,
+		};
+		annotationLoadingByFile = {
+			...annotationLoadingByFile,
+			[fileIndex]: true,
+		};
+		annotationErrorsByFile = {
+			...annotationErrorsByFile,
+			[fileIndex]: null,
+		};
+
+		let disposed = false;
+		void fetchAnnotations(fileIndex)
+			.then((annotations) => {
+				if (disposed) return;
+				annotationsByFile = {
+					...annotationsByFile,
+					[fileIndex]: annotations,
+				};
+			})
+			.catch((error) => {
+				if (disposed) return;
+				annotationErrorsByFile = {
+					...annotationErrorsByFile,
+					[fileIndex]: (error as Error).message || "Failed to load annotations",
+				};
+			})
+			.finally(() => {
+				if (disposed) return;
+				annotationLoadingByFile = {
+					...annotationLoadingByFile,
+					[fileIndex]: false,
+				};
+			});
+
+		return () => {
+			disposed = true;
+		};
+	});
+
+	$effect(() => {
+		if (!activeFile) return;
 		const nextScope = String(activeFile.index);
 		if (nextScope === fileScopeKey) return;
 		fileScopeKey = nextScope;
@@ -1217,14 +1318,52 @@ function startDisplayPrefetch(
 		{#if loading}
 			<div class="loading">Loading frame…</div>
 		{/if}
-		<canvas
-			bind:this={canvasEl}
-			class="dicom-canvas"
-			style={`transform:${transformCss}`}
-		></canvas>
+		<div
+			class="image-layer"
+			style={`transform:${transformCss}; width:${Math.max(imageColumns, 1)}px; height:${Math.max(imageRows, 1)}px;`}
+		>
+			<canvas bind:this={canvasEl} class="dicom-canvas"></canvas>
+			{#if imageColumns > 0 && imageRows > 0 && visibleRois.length > 0}
+				<svg
+					class="roi-overlay"
+					viewBox={`0 0 ${imageColumns} ${imageRows}`}
+					preserveAspectRatio="none"
+					aria-hidden="true"
+				>
+					{#each visibleRois as roi (roi.index)}
+						<rect
+							x={Math.min(roi.xmin, roi.xmax)}
+							y={Math.min(roi.ymin, roi.ymax)}
+							width={Math.max(1, Math.abs(roi.xmax - roi.xmin))}
+							height={Math.max(1, Math.abs(roi.ymax - roi.ymin))}
+						></rect>
+					{/each}
+				</svg>
+			{/if}
+		</div>
 		<div class="overlay">
 			<span>frame {currentFrame + 1} / {activeFile.frame_count}</span>
 			<span>W: {Math.round(displayWindow.ww)} · C: {Math.round(displayWindow.wc)}</span>
+		</div>
+		<div class="roi-list">
+			<div class="roi-list-title">ROIs {roiListCountLabel}</div>
+			{#if activeAnnotationLoading}
+				<div class="roi-list-status">Loading annotations…</div>
+			{:else if activeAnnotationError}
+				<div class="roi-list-status error">{activeAnnotationError}</div>
+			{:else if visibleRois.length === 0}
+				<div class="roi-list-status">No ROIs for this frame</div>
+			{:else}
+				<ul>
+					{#each visibleRois as roi (roi.index)}
+						<li>
+							<span class="roi-id">#{roi.index + 1}</span>
+							<span class="roi-coords">[{roi.ymin}, {roi.xmin}, {roi.ymax}, {roi.xmax}]</span>
+							<span class="roi-frames">{formatRoiFrames(roi.frames)}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</div>
 		<div class="zoom-controls">
 			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= ZOOM_STEPS[0]}>−</button>
@@ -1250,13 +1389,31 @@ function startDisplayPrefetch(
 	.viewport[data-tool="zoom"] { cursor: zoom-in; }
 	.viewport[data-tool="scroll"] { cursor: ns-resize; }
 	.viewport.dragging { cursor: grabbing; }
-	.dicom-canvas {
+	.image-layer {
+		position: relative;
 		max-width: 100%;
 		max-height: 100%;
 		transform-origin: 0 0;
 		transition: transform 0.03s linear;
-		image-rendering: pixelated;
+	}
+	.dicom-canvas {
 		display: block;
+		width: 100%;
+		height: 100%;
+		image-rendering: pixelated;
+	}
+	.roi-overlay {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+	}
+	.roi-overlay rect {
+		fill: rgba(255, 115, 115, 0.12);
+		stroke: #ff7373;
+		stroke-width: 1.2;
+		vector-effect: non-scaling-stroke;
 	}
 	.placeholder,
 	.loading {
@@ -1280,6 +1437,58 @@ function startDisplayPrefetch(
 		background: rgba(18, 18, 18, 0.75);
 		border: 1px solid #333;
 		border-radius: 4px;
+	}
+	.roi-list {
+		position: absolute;
+		right: 0.75rem;
+		top: 0.75rem;
+		max-width: min(48ch, 46%);
+		max-height: 38%;
+		overflow: auto;
+		font-size: 0.72rem;
+		padding: 0.45rem 0.5rem;
+		background: rgba(18, 18, 18, 0.82);
+		border: 1px solid #333;
+		border-radius: 6px;
+		z-index: 2;
+	}
+	.roi-list-title {
+		font-weight: 600;
+		margin-bottom: 0.25rem;
+		color: #c8ddff;
+	}
+	.roi-list-status {
+		color: #a8a8a8;
+	}
+	.roi-list-status.error {
+		color: #ff9c9c;
+	}
+	.roi-list ul {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: grid;
+		gap: 0.2rem;
+	}
+	.roi-list li {
+		display: grid;
+		gap: 0.1rem;
+		padding-top: 0.1rem;
+		border-top: 1px dashed rgba(110, 110, 110, 0.5);
+	}
+	.roi-list li:first-child {
+		border-top: none;
+		padding-top: 0;
+	}
+	.roi-id {
+		font-weight: 600;
+		color: #9fcbff;
+	}
+	.roi-coords,
+	.roi-frames {
+		font-family: ui-monospace, monospace;
+		line-height: 1.25;
+		color: #d8d8d8;
 	}
 	.zoom-controls {
 		position: absolute;
