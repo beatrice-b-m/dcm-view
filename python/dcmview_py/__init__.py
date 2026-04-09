@@ -1,3 +1,5 @@
 """Python wrapper package for launching dcmview."""
 
-__all__ = []
+from .wrapper import ShutdownHandle, view
+
+__all__ = ["ShutdownHandle", "view"]
