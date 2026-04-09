@@ -8,4 +8,5 @@ mod integration {
 	mod tags_endpoint;
 	mod tunnel_lifecycle;
 	mod pixels_raw_endpoint;
+	mod annotations_endpoint;
 }

@@ -1,4 +1,4 @@
-use crate::annotations::AnnotationIndexMap;
+use crate::annotations::{AnnotationIndexMap, EmbedRoiAnnotations};
 use crate::pixels::{self, FrameRequest, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
 use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, RawFrameMetadata, TagNode, TagValue, TunnelInfo, WindowMode};
@@ -144,6 +144,7 @@ pub fn router(state: AppState) -> Router {
 		.route("/api/file/{index}/info", get(info_handler))
 		.route("/api/file/{index}/frame/{frame}", get(frame_handler))
 		.route("/api/file/{index}/frame/{frame}/raw", get(raw_frame_handler))
+		.route("/api/file/{index}/annotations", get(annotations_handler))
 		.route("/api/file/{index}/tags", get(tags_handler))
 		.with_state(state)
 }
@@ -173,6 +174,24 @@ async fn info_handler(State(state): State<AppState>, Path(index): Path<usize>) -
 		has_pixels: file.has_pixels,
 		default_window: file.default_window,
 	}))
+}
+
+async fn annotations_handler(
+	State(state): State<AppState>,
+	Path(index): Path<usize>,
+) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
+	touch_request(&state);
+	if state.files.get(index).is_none() {
+		return Err(ApiError::not_found("file index out of range"));
+	}
+
+	let annotations = state
+		.annotations
+		.get(&index)
+		.cloned()
+		.unwrap_or_else(EmbedRoiAnnotations::empty);
+
+	Ok(Json(annotations))
 }
 
 async fn frame_handler(
