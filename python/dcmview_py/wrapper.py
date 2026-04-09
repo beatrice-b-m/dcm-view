@@ -115,10 +115,12 @@ def view(
 	block: bool = True,
 	recursive: bool = True,
 	timeout: int | None = None,
+	annotations: PathInput | None = None,
 ) -> ShutdownHandle | None:
 	"""Launch dcmview for one or more filesystem paths."""
 
 	paths = _normalize_files(files)
+	annotation_path = _normalize_optional_path(annotations, field_name="annotations")
 	command = _build_command(
 		paths,
 		port=port,
@@ -129,6 +131,7 @@ def view(
 		tunnel_port=tunnel_port,
 		recursive=recursive,
 		timeout=timeout,
+		annotations=annotation_path,
 	)
 
 	process = subprocess.Popen(
@@ -173,6 +176,14 @@ def _normalize_files(files: PathInput | Iterable[PathInput]) -> list[str]:
 	return normalized
 
 
+def _normalize_optional_path(path: PathInput | None, *, field_name: str) -> str | None:
+	if path is None:
+		return None
+	if not isinstance(path, (str, os.PathLike)):
+		raise TypeError(f"{field_name} must be a path-like value")
+	return str(Path(path))
+
+
 def _build_command(
 	paths: list[str],
 	*,
@@ -184,6 +195,7 @@ def _build_command(
 	tunnel_port: int,
 	recursive: bool,
 	timeout: int | None,
+	annotations: str | None,
 ) -> list[str]:
 	binary = shutil.which("dcmview")
 	if binary is None:
@@ -201,5 +213,7 @@ def _build_command(
 		command.extend(["--timeout", str(timeout)])
 	if not recursive:
 		command.append("--no-recursive")
+	if annotations is not None:
+		command.extend(["--annotations", annotations])
 	command.extend(paths)
 	return command

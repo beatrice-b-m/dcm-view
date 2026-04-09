@@ -101,7 +101,51 @@ class WrapperTests(unittest.TestCase):
 			recursive=False,
 			timeout=9,
 			block=True,
+			annotations=None,
 		)
+
+	def test_cli_forwards_annotations_path(self) -> None:
+		annotations_path = REPO_ROOT / "tests" / "fixtures" / "embed_annotations.csv"
+		with mock.patch("dcmview_py.__main__.view", return_value=None) as view_mock:
+			exit_code = dcmview_main.run_cli([
+				"--annotations",
+				str(annotations_path),
+				str(FIXTURE_FILE),
+			])
+
+		self.assertEqual(exit_code, 0)
+		view_mock.assert_called_once_with(
+			[str(FIXTURE_FILE)],
+			port=0,
+			host="127.0.0.1",
+			browser=True,
+			tunnel=False,
+			tunnel_host=None,
+			tunnel_port=0,
+			recursive=True,
+			timeout=None,
+			annotations=str(annotations_path),
+			block=True,
+		)
+
+	def test_build_command_includes_annotations_flag_when_provided(self) -> None:
+		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
+			command = wrapper._build_command(
+				["/tmp/scan.dcm"],
+				port=0,
+				host="127.0.0.1",
+				browser=True,
+				tunnel=False,
+				tunnel_host=None,
+				tunnel_port=0,
+				recursive=True,
+				timeout=None,
+				annotations="/tmp/annotations.csv",
+			)
+
+		self.assertIn("--annotations", command)
+		flag_index = command.index("--annotations")
+		self.assertEqual(command[flag_index + 1], "/tmp/annotations.csv")
 
 	def test_cli_returns_child_exit_code(self) -> None:
 		with mock.patch(

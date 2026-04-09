@@ -19,6 +19,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--tunnel-port", type=int, default=0)
 	parser.add_argument("--timeout", type=int)
 	parser.add_argument("--no-recursive", action="store_true")
+	parser.add_argument("--annotations")
 	return parser
 
 
@@ -37,6 +38,7 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
 			tunnel_port=args.tunnel_port,
 			recursive=not args.no_recursive,
 			timeout=args.timeout,
+			annotations=args.annotations,
 			block=True,
 		)
 	except subprocess.CalledProcessError as error:
