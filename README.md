@@ -63,6 +63,30 @@ Resulting binary:
 - `target/release/dcmview` (build)
 - `$CARGO_HOME/bin/dcmview` (install)
 
+### Quick start (CLI)
+
+If you want to run the Rust CLI directly from this repository:
+
+1. Install frontend build dependencies once:
+
+```bash
+npm --prefix frontend ci
+```
+
+2. Install `dcmview` to your Cargo bin path:
+
+```bash
+cargo install --path .
+```
+
+3. Launch the viewer against one or more files/directories:
+
+```bash
+dcmview ./study_dir
+```
+
+`dcmview` prints the local URL (`dcmview: server running at http://...`) as soon as the server is ready.
+
 ## Deployment
 
 `dcmview` is designed for straightforward binary deployment.
@@ -154,6 +178,41 @@ Run with EMBED ROI annotations (strict CSV validation at startup):
 dcmview --annotations ./embed_annotations.csv ./study_dir
 ```
 
+### EMBED annotation CSV requirements
+
+`--annotations` accepts a CSV file only. The parser is strict and fails startup on malformed rows.
+
+Required columns (exact names):
+
+- `anon_dicom_path`
+- `num_ROI`
+- `ROI_coords`
+- `ROI_frames`
+
+Expected row encoding:
+
+- `num_ROI`: integer
+- `ROI_coords`: JSON list of `[ymin, xmin, ymax, xmax]` boxes
+- `ROI_frames`: JSON list of frame-index lists (or `[]` for non-frame-specific rows)
+- JSON-valued fields must be CSV-quoted (see example below)
+
+Example CSV:
+
+```csv
+anon_dicom_path,num_ROI,ROI_coords,ROI_frames
+/path/to/dbt_case.dcm,2,"[[120,340,220,430],[400,510,480,590]]","[[0,1,2],[5,6]]"
+/path/to/ffdm_case.dcm,1,"[[80,150,190,260]]","[]"
+```
+
+Matching and behavior notes:
+
+- Matching is by normalized path equality: `anon_dicom_path` must match the loaded DICOM path after path normalization.
+- CSV rows without a matching loaded file are ignored.
+- Loaded files without a matching CSV row remain valid and show no ROIs.
+- `len(ROI_coords)` must equal `num_ROI`.
+- If `ROI_frames` is non-empty, its length must equal `num_ROI`.
+- Frame indices are zero-based and must be `< NumberOfFrames` for the matched file(s).
+- Duplicate `anon_dicom_path` rows are rejected.
 ## Python wrapper package
 
 > The Python package is a thin subprocess wrapper around the `dcmview` binary.
@@ -170,6 +229,23 @@ The wrapper does not reimplement DICOM logic. It launches the installed Rust bin
 ### Binary requirement
 
 The Python API requires `dcmview` on `PATH` (for example via `cargo install --path .` or `cargo install dcmview`).
+
+### Python package quick start
+
+The Python package is a subprocess wrapper. It does not bundle the Rust binary.
+
+Typical setup from this repo:
+
+```bash
+# 1) install the Rust binary
+cargo install --path .
+
+# 2) install the Python wrapper package
+python -m pip install -e .
+
+# 3) verify wrapper import and binary resolution
+python -m dcmview_py --help
+```
 
 ### Script usage
 
