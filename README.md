@@ -114,6 +114,7 @@ dcmview [OPTIONS] <PATH> [PATH ...]
 - `--tunnel-port <u16>`: forwarded local port (`0` = use bind port)
 - `--timeout <seconds>`: auto-shutdown after idle duration
 - `--no-recursive`: disable recursive directory traversal
+- `--annotations <path>`: load read-only EMBED ROI CSV annotations for overlay/list viewing
 
 ### Examples
 
@@ -147,6 +148,12 @@ Headless/automation style run with idle timeout:
 dcmview --no-browser --timeout 300 ./study_dir
 ```
 
+Run with EMBED ROI annotations (strict CSV validation at startup):
+
+```bash
+dcmview --annotations ./embed_annotations.csv ./study_dir
+```
+
 ## Python wrapper package
 
 > The Python package is a thin subprocess wrapper around the `dcmview` binary.
@@ -172,8 +179,8 @@ from dcmview_py import view
 # Blocking call (returns when dcmview exits)
 view(["./scan.dcm"], browser=False, timeout=300)
 
-# Non-blocking call
-handle = view(["./study_dir"], browser=False, block=False)
+# Non-blocking call with EMBED annotations
+handle = view(["./study_dir"], browser=False, annotations="./embed_annotations.csv", block=False)
 print(handle.url)
 # ...do other work...
 handle.stop()
@@ -208,9 +215,10 @@ The package also exposes CLI-compatible execution via module mode:
 
 ```bash
 python -m dcmview_py --no-browser --timeout 120 ./study_dir
+python -m dcmview_py --annotations ./embed_annotations.csv ./study_dir
 ```
 
-Module flags mirror the Rust CLI options (`--host`, `--port`, `--tunnel`, `--no-recursive`, etc.).
+Module flags mirror the Rust CLI options (`--host`, `--port`, `--tunnel`, `--no-recursive`, `--annotations`, etc.).
 
 ## Frontend behavior summary
 
@@ -241,6 +249,9 @@ Module flags mirror the Rust CLI options (`--host`, `--port`, `--tunnel`, `--no-
   - `?mode=full_dynamic`: window spans true min/max of frame samples, ignores DICOM default_window
   - `?mode=default` (or absent): explicit wc/ww → DICOM default_window → percentile fallback
 - `GET /api/file/:index/tags`
+- `GET /api/file/:index/annotations`
+  - Returns `{ num_roi, roi_coords, roi_frames }` in EMBED schema shape
+  - Returns an empty payload for files without a matching annotation row
 
 Frame responses include `X-Cache: HIT|MISS`. Cache is keyed on `(file_index, frame, wc, ww, mode)`.
 
