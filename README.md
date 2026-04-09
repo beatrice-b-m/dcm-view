@@ -147,6 +147,71 @@ Headless/automation style run with idle timeout:
 dcmview --no-browser --timeout 300 ./study_dir
 ```
 
+## Python wrapper package
+
+> The Python package is a thin subprocess wrapper around the `dcmview` binary.
+
+Install from this repository:
+
+```bash
+# from repo root
+python -m pip install -e .
+```
+
+The wrapper does not reimplement DICOM logic. It launches the installed Rust binary and streams the same web UI/API behavior.
+
+### Binary requirement
+
+The Python API requires `dcmview` on `PATH` (for example via `cargo install --path .` or `cargo install dcmview`).
+
+### Script usage
+
+```python
+from dcmview_py import view
+
+# Blocking call (returns when dcmview exits)
+view(["./scan.dcm"], browser=False, timeout=300)
+
+# Non-blocking call
+handle = view(["./study_dir"], browser=False, block=False)
+print(handle.url)
+# ...do other work...
+handle.stop()
+```
+
+Context-manager form for deterministic cleanup:
+
+```python
+from dcmview_py import view
+
+with view(["./study_dir"], browser=False, block=False) as handle:
+	print(handle.url)
+	# notebook/script work continues while dcmview serves frames
+```
+
+### Notebook usage
+
+No inline notebook renderer is provided. Use the returned URL in your browser:
+
+```python
+from dcmview_py import view
+
+handle = view(["./scan.dcm"], browser=False, block=False)
+print(f"Open in browser: {handle.url}")
+# When done:
+handle.stop()
+```
+
+### Python CLI entrypoint
+
+The package also exposes CLI-compatible execution via module mode:
+
+```bash
+python -m dcmview_py --no-browser --timeout 120 ./study_dir
+```
+
+Module flags mirror the Rust CLI options (`--host`, `--port`, `--tunnel`, `--no-recursive`, etc.).
+
 ## Frontend behavior summary
 
 **Toolbar (top of viewport):**
