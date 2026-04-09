@@ -51,13 +51,15 @@ class _OutputMonitor:
 			self._url_ready.set()
 			return
 
-		for line in stdout:
-			sys.stdout.write(line)
-			sys.stdout.flush()
-			if line.startswith(_STARTUP_PREFIX):
-				self._set_url(line[len(_STARTUP_PREFIX) :].strip())
-
-		self._url_ready.set()
+		try:
+			for line in stdout:
+				sys.stdout.write(line)
+				sys.stdout.flush()
+				if line.startswith(_STARTUP_PREFIX):
+					self._set_url(line[len(_STARTUP_PREFIX) :].strip())
+		finally:
+			stdout.close()
+			self._url_ready.set()
 
 
 class ShutdownHandle:
@@ -76,7 +78,11 @@ class ShutdownHandle:
 			self._monitor.join()
 			return int(self._process.returncode or 0)
 
-		self._process.send_signal(signal.SIGINT)
+		try:
+			self._process.send_signal(signal.SIGINT)
+		except ProcessLookupError:
+			self._monitor.join()
+			return int(self._process.returncode or 0)
 		try:
 			return_code = self._process.wait(timeout=timeout)
 		except subprocess.TimeoutExpired:
