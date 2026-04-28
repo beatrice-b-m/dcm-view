@@ -6,3 +6,7 @@ frontend/dist/
 
 *.dcm
 *.dicom
+
+# python package files
+*.egg-info/
+__pycache__/
