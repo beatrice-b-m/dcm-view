@@ -75,7 +75,7 @@
 	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
 	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
 	let annotationLoadingByFile = $state<Record<number, boolean | undefined>>({});
-	let annotationRequestedByFile = $state<Record<number, boolean | undefined>>({});
+	let annotationRequestedByFile: Record<number, boolean> = {};
 
 	let rawRequestCtrl: AbortController | null = null;
 	let rawPrefetchCtrl: AbortController | null = null;
@@ -885,14 +885,13 @@ function startDisplayPrefetch(
 	$effect(() => {
 		if (!activeFile) return;
 		const fileIndex = activeFile.index;
-		if (annotationsByFile[fileIndex] || annotationRequestedByFile[fileIndex] || annotationLoadingByFile[fileIndex]) {
+		if (annotationsByFile[fileIndex] !== undefined || annotationRequestedByFile[fileIndex]) {
 			return;
 		}
 
-		annotationRequestedByFile = {
-			...annotationRequestedByFile,
-			[fileIndex]: true,
-		};
+		// Direct mutation — annotationRequestedByFile is not $state, so this
+		// does not trigger an effect re-run and will not fire the cleanup.
+		annotationRequestedByFile[fileIndex] = true;
 		annotationLoadingByFile = {
 			...annotationLoadingByFile,
 			[fileIndex]: true,
@@ -902,33 +901,25 @@ function startDisplayPrefetch(
 			[fileIndex]: null,
 		};
 
-		let disposed = false;
 		void fetchAnnotations(fileIndex)
 			.then((annotations) => {
-				if (disposed) return;
 				annotationsByFile = {
 					...annotationsByFile,
 					[fileIndex]: annotations,
 				};
 			})
 			.catch((error) => {
-				if (disposed) return;
 				annotationErrorsByFile = {
 					...annotationErrorsByFile,
 					[fileIndex]: (error as Error).message || "Failed to load annotations",
 				};
 			})
 			.finally(() => {
-				if (disposed) return;
 				annotationLoadingByFile = {
 					...annotationLoadingByFile,
 					[fileIndex]: false,
 				};
 			});
-
-		return () => {
-			disposed = true;
-		};
 	});
 
 	$effect(() => {
