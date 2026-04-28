@@ -4,7 +4,7 @@
 
 `dcmview` is an ephemeral, CLI-invoked DICOM inspection tool for developers and data scientists. It starts a temporary local web server exposing an interactive browser-based viewer, then exits cleanly when the user is done. The primary use case is **multi-frame DICOM inspection** (DBT, cine MR) — workloads that are impractical in a Jupyter notebook due to Python interpreter overhead. Single-frame inspection is a convenience.
 
-**Status:** Core implementation complete. `SYSTEM_SPEC.md` is the authoritative source of truth; implementation order was defined in §17 of the spec.
+**Status:** Core implementation complete.
 
 **Design axioms** (non-negotiable):
 - **Ephemeral** — no persistent state, no config files, no database
@@ -124,7 +124,6 @@ dcmview/
 │   └── fixtures/               Small representative DICOM test files
 ├── build.rs                    Invokes `npm ci && npm run build` in frontend/ at compile time
 ├── Cargo.toml
-└── SYSTEM_SPEC.md              Full authoritative specification — read before implementing anything
 ```
 
 ---
@@ -246,7 +245,7 @@ dcmview [OPTIONS] <PATH> [PATH ...]
 
 | File | Role |
 |---|---|
-| `SYSTEM_SPEC.md` | Complete authoritative spec — read this before implementing any module |
+| `README.md` | User-facing documentation — installation, usage, API reference |
 | `src/main.rs` | CLI struct (clap derive), startup orchestration |
 | `src/server.rs` | Axum router, `AppState`, startup sequence, graceful shutdown |
 | `src/loader.rs` | DICOM discovery + `FileEntry` construction |
@@ -291,7 +290,7 @@ tests/
                       - Non-DICOM file (for skip-counter test)
 ```
 
-**Key integration test assertions (from spec §16):**
+**Key integration test assertions:**
 - `X-Cache: MISS` on first frame request; `X-Cache: HIT` on identical repeat
 - `X-Cache: MISS` after any W/C param change
 - JPEG passthrough: `Content-Type: image/jpeg`; response bytes match reference extraction (no decode)
@@ -308,20 +307,3 @@ tests/
 - Steps 1–7 of startup sequence complete in < 300ms for a small file set
 - First frame (JPEG passthrough) served in < 200ms for a 100+-frame DBT file
 - Memory usage stays roughly constant across sequential frame requests for large multi-frame files (collector API ensures O(one frame) allocation)
-
----
-
-## Implementation Order
-
-Follow §17 of `SYSTEM_SPEC.md` exactly:
-
-1. `loader.rs` — discovery, metadata extraction, `FileEntry`; unit tests against fixtures
-2. `pixels.rs` — JPEG passthrough only; round-trip verify with `curl`
-3. `server.rs` — minimal router, `/api/files`, `/frame/:n` (JPEG only); confirm `X-Cache` headers
-4. `pixels.rs` — uncompressed + windowing + PNG; pixel-value verification
-5. `server.rs` — `/tags` endpoint; verify SQ nesting and binary truncation
-6. Frontend scaffold — Svelte 5 + Vite + `build.rs` integration; verify `rust-embed` serves assets
-7. `FileTabs` + `TagPanel` — wire to API; live filter, SQ expand/collapse, click-to-copy
-8. `ImageViewport` + `FrameSlider` — frame fetch, CSS zoom/pan, W/L drag debounce, keyboard nav, prefetch, cine
-9. `tunnel.rs` — SSH subprocess, readiness polling, stderr logger thread, shutdown cleanup
-10. Polish — status bar uptime, `--timeout` idle watcher, error states in UI, `build.rs` incremental fingerprinting
