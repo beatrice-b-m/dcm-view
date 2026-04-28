@@ -10,7 +10,7 @@
 		type RawFrame,
 		type WindowMode,
 	} from "../api";
-	import type { ActiveTool } from "./viewerTools";
+	import { DEFAULT_ORIENTATION, type ActiveTool, type ImageOrientation } from "./viewerTools";
 
 	type PipelineMode = "cine" | "diagnostic_wl";
 	type TransformState = { scale: number; tx: number; ty: number };
@@ -47,6 +47,7 @@
 		windowMode,
 		selectedPresetId,
 		resetCount,
+		orientation = DEFAULT_ORIENTATION,
 		onreset,
 	}: {
 		files: FileSummary[];
@@ -58,6 +59,7 @@
 		windowMode: WindowMode;
 		selectedPresetId: string;
 		resetCount: number;
+		orientation?: ImageOrientation;
 		onreset?: () => void;
 	} = $props();
 
@@ -122,9 +124,19 @@
 	const DRAG_PIXELS_PER_FRAME = 10 / FRAME_SCROLL_SPEED_FACTOR;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
-	const transformCss = $derived(
-		`translate(${activeTransform.tx}px, ${activeTransform.ty}px) scale(${activeTransform.scale})`,
-	);
+	const transformCss = $derived.by(() => {
+		const { tx, ty, scale } = activeTransform;
+		let css = `translate(${tx}px, ${ty}px) scale(${scale})`;
+		const { flipH, flipV, rotation } = orientation;
+		if (rotation !== 0 || flipH || flipV) {
+			const cx = imageColumns / 2;
+			const cy = imageRows / 2;
+			const sx = flipH ? -1 : 1;
+			const sy = flipV ? -1 : 1;
+			css += ` translate(${cx}px,${cy}px) rotate(${rotation}deg) scale(${sx},${sy}) translate(${-cx}px,${-cy}px)`;
+		}
+		return css;
+	});
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
 	const isDragging = $derived(dragState !== null);
 	const pipelineMode = $derived<PipelineMode>(

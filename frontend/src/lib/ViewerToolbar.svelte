@@ -6,10 +6,18 @@
 		activeTool = $bindable(),
 		selectedPresetId = $bindable(),
 		onreset,
+		onflipH,
+		onflipV,
+		onrotateCW,
+		onrotateCCW,
 	}: {
 		activeTool: ActiveTool;
 		selectedPresetId: string;
 		onreset: () => void;
+		onflipH: () => void;
+		onflipV: () => void;
+		onrotateCW: () => void;
+		onrotateCCW: () => void;
 	} = $props();
 
 	const tools: ActiveTool[] = TOOL_ORDER;
@@ -36,6 +44,13 @@
 	</select>
 	<span class="sep"></span>
 	<button type="button" onclick={onreset} title="Reset viewport (double-click)">Reset</button>
+	<div class="tool-group transform-group">
+		<button type="button" onclick={onflipH} title="Flip horizontal">↔</button>
+		<button type="button" onclick={onflipV} title="Flip vertical">↕</button>
+		<span class="sep"></span>
+		<button type="button" onclick={onrotateCCW} title="Rotate 90° CCW">↺</button>
+		<button type="button" onclick={onrotateCW} title="Rotate 90° CW">↻</button>
+	</div>
 </div>
 
 <style>
@@ -50,6 +65,9 @@
 	.tool-group {
 		display: flex;
 		gap: 2px;
+	}
+	.transform-group {
+		margin-left: auto;
 	}
 	button {
 		background: #1b1b1b;

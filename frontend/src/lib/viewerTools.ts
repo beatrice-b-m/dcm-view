@@ -2,6 +2,14 @@ import type { WindowMode } from '../api';
 
 export type ActiveTool = 'pan' | 'scroll' | 'zoom' | 'window_level';
 
+export type ImageOrientation = {
+	flipH: boolean;
+	flipV: boolean;
+	rotation: 0 | 90 | 180 | 270;
+};
+
+export const DEFAULT_ORIENTATION: ImageOrientation = { flipH: false, flipV: false, rotation: 0 };
+
 export const TOOL_ORDER: ActiveTool[] = ['pan', 'scroll', 'zoom', 'window_level'];
 
 export interface WlPreset {

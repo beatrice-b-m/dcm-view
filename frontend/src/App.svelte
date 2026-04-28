@@ -7,7 +7,7 @@
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
-	import { WL_PRESETS, type ActiveTool } from "./lib/viewerTools";
+	import { DEFAULT_ORIENTATION, WL_PRESETS, type ActiveTool, type ImageOrientation } from "./lib/viewerTools";
 
 	const SIDEBAR_DEFAULT_WIDTH_PX = 360;
 	const SIDEBAR_MIN_WIDTH_PX = 260;
@@ -31,6 +31,8 @@
 	let windowMode = $state<WindowMode>('default');
 	let selectedPresetId = $state('default');
 	let resetCount = $state(0);
+	let orientationByFile = $state<Record<number, ImageOrientation>>({});
+	const activeOrientation = $derived(orientationByFile[activeFileIndex] ?? DEFAULT_ORIENTATION);
 	let tagPanelWidthPx = $state(clampSidebarWidth(SIDEBAR_DEFAULT_WIDTH_PX));
 	let tagPanelCollapsed = $state(false);
 	let sidebarResizeState = $state<SidebarResizeState | null>(null);
@@ -49,6 +51,35 @@
 		windowMode = 'default';
 		selectedPresetId = 'default';
 		resetCount += 1;
+		if (orientationByFile[activeFileIndex]) {
+			orientationByFile = { ...orientationByFile, [activeFileIndex]: DEFAULT_ORIENTATION };
+		}
+	}
+
+	function getOrientation(index: number): ImageOrientation {
+		return orientationByFile[index] ?? DEFAULT_ORIENTATION;
+	}
+
+	function applyFlipH() {
+		const cur = getOrientation(activeFileIndex);
+		orientationByFile = { ...orientationByFile, [activeFileIndex]: { ...cur, flipH: !cur.flipH } };
+	}
+
+	function applyFlipV() {
+		const cur = getOrientation(activeFileIndex);
+		orientationByFile = { ...orientationByFile, [activeFileIndex]: { ...cur, flipV: !cur.flipV } };
+	}
+
+	function applyRotateCW() {
+		const cur = getOrientation(activeFileIndex);
+		const r = ((cur.rotation + 90) % 360) as 0 | 90 | 180 | 270;
+		orientationByFile = { ...orientationByFile, [activeFileIndex]: { ...cur, rotation: r } };
+	}
+
+	function applyRotateCCW() {
+		const cur = getOrientation(activeFileIndex);
+		const r = ((cur.rotation + 270) % 360) as 0 | 90 | 180 | 270;
+		orientationByFile = { ...orientationByFile, [activeFileIndex]: { ...cur, rotation: r } };
 	}
 
 	function toggleTagPanel() {
@@ -151,6 +182,10 @@
 			bind:activeTool
 			bind:selectedPresetId
 			onreset={resetViewport}
+			onflipH={applyFlipH}
+			onflipV={applyFlipV}
+			onrotateCW={applyRotateCW}
+			onrotateCCW={applyRotateCCW}
 		/>
 		<section class="content" style={`--tag-panel-width:${sidebarWidthPx}px;`}>
 			<ImageViewport
@@ -163,6 +198,7 @@
 				windowMode={windowMode}
 				resetCount={resetCount}
 				selectedPresetId={selectedPresetId}
+				orientation={activeOrientation}
 				onreset={resetViewport}
 			/>
 			<aside class="tag-panel-shell" class:collapsed={tagPanelCollapsed}>
