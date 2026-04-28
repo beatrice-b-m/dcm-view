@@ -5,8 +5,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-const REQUIRED_COLUMNS: [&str; 4] = ["anon_dicom_path", "num_ROI", "ROI_coords", "ROI_frames"];
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EmbedRoiAnnotations {
 	pub num_roi: usize,
@@ -32,6 +30,13 @@ struct ParsedAnnotationRow {
 }
 
 pub type AnnotationIndexMap = HashMap<usize, EmbedRoiAnnotations>;
+
+struct ColumnIndexes {
+	path: usize,
+	roi_coords: usize,
+	num_roi: Option<usize>,
+	roi_frames: Option<usize>,
+}
 
 pub fn load_annotations_for_files(csv_path: &Path, files: &[FileEntry]) -> Result<AnnotationIndexMap> {
 	let rows = parse_rows(csv_path)?;
@@ -60,7 +65,7 @@ fn parse_rows(csv_path: &Path) -> Result<Vec<ParsedAnnotationRow>> {
 		.headers()
 		.with_context(|| format!("failed to read annotations CSV header: {}", csv_path.display()))?
 		.clone();
-	let indexes = required_column_indexes(&headers)?;
+	let indexes = build_column_indexes(&headers)?;
 
 	let mut rows = Vec::new();
 	let mut seen_paths = HashMap::<String, usize>::new();
@@ -85,50 +90,72 @@ fn parse_rows(csv_path: &Path) -> Result<Vec<ParsedAnnotationRow>> {
 	Ok(rows)
 }
 
-fn required_column_indexes(headers: &StringRecord) -> Result<HashMap<&'static str, usize>> {
-	let mut indexes = HashMap::new();
-	for column in REQUIRED_COLUMNS {
-		let idx = headers
-			.iter()
-			.position(|candidate| candidate == column)
-			.ok_or_else(|| anyhow!("annotations CSV missing required column `{column}`"))?;
-		indexes.insert(column, idx);
-	}
-	Ok(indexes)
+fn build_column_indexes(headers: &StringRecord) -> Result<ColumnIndexes> {
+	let find = |name: &str| headers.iter().position(|h| h == name);
+
+	let path = find("anon_dicom_path")
+		.ok_or_else(|| anyhow!("annotations CSV missing required column `anon_dicom_path`"))?;
+	let roi_coords = find("ROI_coords")
+		.ok_or_else(|| anyhow!("annotations CSV missing required column `ROI_coords`"))?;
+
+	Ok(ColumnIndexes {
+		path,
+		roi_coords,
+		num_roi: find("num_ROI"),
+		roi_frames: find("ROI_frames"),
+	})
 }
 
-fn parse_row(row: &StringRecord, indexes: &HashMap<&'static str, usize>, row_number: usize) -> Result<ParsedAnnotationRow> {
-	let raw_path = read_column(row, indexes, "anon_dicom_path", row_number)?;
+fn parse_row(row: &StringRecord, indexes: &ColumnIndexes, row_number: usize) -> Result<ParsedAnnotationRow> {
+	let raw_path = row
+		.get(indexes.path)
+		.ok_or_else(|| anyhow!("annotations CSV row {row_number}: missing value for `anon_dicom_path`"))?;
 	let normalized_path = normalize_path(Path::new(raw_path.trim()));
 	if normalized_path.is_empty() {
 		bail!("annotations CSV row {row_number}: anon_dicom_path must not be empty");
 	}
 
-	let raw_num_roi = read_column(row, indexes, "num_ROI", row_number)?;
-	let num_roi = raw_num_roi
-		.trim()
-		.parse::<usize>()
-		.map_err(|error| anyhow!("annotations CSV row {row_number}: num_ROI must be an integer: {error}"))?;
-
-	let raw_roi_coords = read_column(row, indexes, "ROI_coords", row_number)?;
+	let raw_roi_coords = row
+		.get(indexes.roi_coords)
+		.ok_or_else(|| anyhow!("annotations CSV row {row_number}: missing value for `ROI_coords`"))?;
 	let roi_coords = parse_roi_coords(raw_roi_coords.trim(), row_number)?;
-	if roi_coords.len() != num_roi {
-		bail!(
-			"annotations CSV row {row_number}: len(ROI_coords) must equal num_ROI ({} != {})",
-			roi_coords.len(),
-			num_roi
-		);
-	}
 
-	let raw_roi_frames = read_column(row, indexes, "ROI_frames", row_number)?;
-	let roi_frames = parse_roi_frames(raw_roi_frames.trim(), row_number)?;
-	if !roi_frames.is_empty() && roi_frames.len() != num_roi {
-		bail!(
-			"annotations CSV row {row_number}: len(ROI_frames) must equal num_ROI when ROI_frames is not empty ({} != {})",
-			roi_frames.len(),
-			num_roi
-		);
-	}
+	let num_roi = if let Some(num_roi_idx) = indexes.num_roi {
+		let raw = row
+			.get(num_roi_idx)
+			.ok_or_else(|| anyhow!("annotations CSV row {row_number}: missing value for `num_ROI`"))?;
+		let parsed = raw
+			.trim()
+			.parse::<usize>()
+			.map_err(|error| anyhow!("annotations CSV row {row_number}: num_ROI must be an integer: {error}"))?;
+		if parsed != roi_coords.len() {
+			bail!(
+				"annotations CSV row {row_number}: len(ROI_coords) must equal num_ROI ({} != {})",
+				roi_coords.len(),
+				parsed
+			);
+		}
+		parsed
+	} else {
+		roi_coords.len()
+	};
+
+	let roi_frames = if let Some(roi_frames_idx) = indexes.roi_frames {
+		let raw = row
+			.get(roi_frames_idx)
+			.ok_or_else(|| anyhow!("annotations CSV row {row_number}: missing value for `ROI_frames`"))?;
+		let frames = parse_roi_frames(raw.trim(), row_number)?;
+		if !frames.is_empty() && frames.len() != num_roi {
+			bail!(
+				"annotations CSV row {row_number}: len(ROI_frames) must equal num_ROI when ROI_frames is not empty ({} != {})",
+				frames.len(),
+				num_roi
+			);
+		}
+		frames
+	} else {
+		vec![]
+	};
 
 	Ok(ParsedAnnotationRow {
 		row_number,
@@ -139,21 +166,6 @@ fn parse_row(row: &StringRecord, indexes: &HashMap<&'static str, usize>, row_num
 			roi_frames,
 		},
 	})
-}
-
-fn read_column<'a>(
-	row: &'a StringRecord,
-	indexes: &HashMap<&'static str, usize>,
-	column: &'static str,
-	row_number: usize,
-) -> Result<&'a str> {
-	let idx = indexes
-		.get(column)
-		.copied()
-		.ok_or_else(|| anyhow!("annotations CSV row {row_number}: missing required column `{column}`"))?;
-	row
-		.get(idx)
-		.ok_or_else(|| anyhow!("annotations CSV row {row_number}: missing value for `{column}`"))
 }
 
 fn parse_roi_coords(raw: &str, row_number: usize) -> Result<Vec<[u32; 4]>> {
@@ -295,13 +307,51 @@ mod tests {
 	}
 
 	#[test]
+	fn accepts_csv_without_num_roi_column() {
+		let dir = tempdir().expect("temp dir");
+		let csv_path = dir.path().join("annotations.csv");
+		let matched_file = dir.path().join("matched.dcm");
+
+		write_csv(
+			&csv_path,
+			&format!(
+				"anon_dicom_path,ROI_coords,ROI_frames\n{matched},\"[[10,20,30,40],[50,60,70,80]]\",\"[[0],[1]]\"\n",
+				matched = matched_file.display(),
+			),
+		);
+
+		let files = vec![file_entry(0, matched_file.clone(), 3)];
+		let mapped = load_annotations_for_files(&csv_path, &files).expect("annotations should parse without num_ROI");
+		assert_eq!(mapped.get(&0).map(|a| a.num_roi), Some(2));
+	}
+
+	#[test]
+	fn accepts_csv_without_roi_frames_column() {
+		let dir = tempdir().expect("temp dir");
+		let csv_path = dir.path().join("annotations.csv");
+		let matched_file = dir.path().join("matched.dcm");
+
+		write_csv(
+			&csv_path,
+			&format!(
+				"anon_dicom_path,ROI_coords\n{matched},\"[[1,2,3,4]]\"\n",
+				matched = matched_file.display(),
+			),
+		);
+
+		let files = vec![file_entry(0, matched_file.clone(), 10)];
+		let mapped = load_annotations_for_files(&csv_path, &files).expect("annotations should parse without ROI_frames");
+		assert_eq!(mapped.get(&0).map(|a| a.roi_frames.clone()), Some(vec![]));
+	}
+
+	#[test]
 	fn errors_when_required_column_is_missing() {
 		let dir = tempdir().expect("temp dir");
 		let csv_path = dir.path().join("annotations.csv");
-		write_csv(&csv_path, "anon_dicom_path,num_ROI,ROI_coords\n/path/one.dcm,1,\"[[1,2,3,4]]\"\n");
+		write_csv(&csv_path, "anon_dicom_path,num_ROI,ROI_frames\n/path/one.dcm,1,\"[]\"\n");
 
 		let error = load_annotations_for_files(&csv_path, &[]).expect_err("missing header should fail");
-		assert!(error.to_string().contains("missing required column `ROI_frames`"));
+		assert!(error.to_string().contains("missing required column `ROI_coords`"));
 	}
 
 	#[test]
