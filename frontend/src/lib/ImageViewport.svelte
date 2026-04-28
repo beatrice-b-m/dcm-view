@@ -92,6 +92,7 @@
 	let requestGeneration = 0;
 	let lastFrameForDirection = 0;
 	let frameDirection: 1 | -1 = 1;
+	let lastFrameChangeTime = 0;
 	let wlRenderGeneration = 0;
 
 	let wlWorker: Worker | null = null;
@@ -99,7 +100,7 @@
 	let workerAvailable = false;
 	let workerMessageId = 0;
 	let pendingWorkerResponses = new Map<number, {
-		resolve: (value: { width: number; height: number; rgba: ArrayBuffer }) => void;
+		resolve: (value: { width: number; height: number; bitmap: ImageBitmap }) => void;
 		reject: (error: Error) => void;
 	}>();
 
@@ -112,7 +113,10 @@
 	const DISPLAY_NEAR_PREFETCH_DISTANCE = 48;
 	const WORKER_MIN_PIXEL_THRESHOLD = 300_000;
 	const PREFETCH_CONCURRENCY = 3;
+	const CINE_LOOKAHEAD_FRAMES = 16;
+	const CINE_PLAYING_THRESHOLD_MS = 250;
 	const PREFETCH_RESEED_DISTANCE = 6;
+	let prefetchConcurrency = $state(PREFETCH_CONCURRENCY);
 	const FRAME_SCROLL_SPEED_FACTOR = 0.7;
 	const WHEEL_FRAME_THRESHOLD = 30 / FRAME_SCROLL_SPEED_FACTOR;
 	const DRAG_PIXELS_PER_FRAME = 10 / FRAME_SCROLL_SPEED_FACTOR;
@@ -190,7 +194,7 @@
 			wlWorker = new Worker(new URL("./workers/wlRenderer.worker.ts", import.meta.url), { type: "module" });
 			wlWorker.onmessage = (event: MessageEvent) => {
 				const payload = event.data as
-					| { type: "rendered"; id: number; width: number; height: number; rgba: ArrayBuffer }
+					| { type: "rendered"; id: number; width: number; height: number; bitmap: ImageBitmap }
 					| { type: "error"; id: number; message: string };
 				if (payload.type === "error") {
 					const pending = pendingWorkerResponses.get(payload.id);
@@ -202,7 +206,7 @@
 				const pending = pendingWorkerResponses.get(payload.id);
 				if (!pending) return;
 				pendingWorkerResponses.delete(payload.id);
-				pending.resolve({ width: payload.width, height: payload.height, rgba: payload.rgba });
+				pending.resolve({ width: payload.width, height: payload.height, bitmap: payload.bitmap });
 			};
 			wlWorker.onerror = () => {
 				workerAvailable = false;
@@ -221,13 +225,13 @@
 		return pixels >= WORKER_MIN_PIXEL_THRESHOLD && ensureWlWorker();
 	}
 
-	async function renderWithWorker(frame: RawFrame, wc: number, ww: number): Promise<ImageData> {
+	async function renderWithWorker(frame: RawFrame, wc: number, ww: number): Promise<ImageBitmap> {
 		if (!wlWorker || !workerAvailable) {
 			throw new Error("worker unavailable");
 		}
 		const id = ++workerMessageId;
 		const copiedBuffer = frame.buffer.slice(0);
-		const pending = new Promise<{ width: number; height: number; rgba: ArrayBuffer }>((resolve, reject) => {
+		const pending = new Promise<{ width: number; height: number; bitmap: ImageBitmap }>((resolve, reject) => {
 			pendingWorkerResponses.set(id, { resolve, reject });
 		});
 		wlWorker.postMessage(
@@ -242,7 +246,7 @@
 			[copiedBuffer],
 		);
 		const result = await pending;
-		return new ImageData(new Uint8ClampedArray(result.rgba), result.width, result.height);
+		return result.bitmap;
 	}
 
 	function clearCanvas(): void {
@@ -486,12 +490,16 @@ function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOpti
 		if (!canvasEl) return;
 		if (shouldUseWorker(frame)) {
 			try {
-				const imageData = await renderWithWorker(frame, wc, ww);
-				if (generation !== wlRenderGeneration || !canvasEl || pipelineMode !== "diagnostic_wl") return;
-				canvasEl.width = imageData.width;
-				canvasEl.height = imageData.height;
+				const bitmap = await renderWithWorker(frame, wc, ww);
+				if (generation !== wlRenderGeneration || !canvasEl || pipelineMode !== "diagnostic_wl") {
+					bitmap.close();
+					return;
+				}
+				canvasEl.width = bitmap.width;
+				canvasEl.height = bitmap.height;
 				const ctx = canvasEl.getContext("2d", { alpha: false });
-				ctx?.putImageData(imageData, 0, 0);
+				ctx?.drawImage(bitmap, 0, 0);
+				bitmap.close();
 				return;
 			} catch {
 				workerAvailable = false;
@@ -636,6 +644,28 @@ function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOpti
 		return result;
 	}
 
+	function isCineLikelyPlaying(): boolean {
+		return Date.now() - lastFrameChangeTime < CINE_PLAYING_THRESHOLD_MS;
+	}
+
+	function scheduleIdleOrImmediate(fn: () => void, timeout = 200): void {
+		if (typeof requestIdleCallback === "function") {
+			requestIdleCallback(fn, { timeout });
+		} else {
+			setTimeout(fn, 0);
+		}
+	}
+
+	function derivePrefetchConcurrency(): number {
+		const conn = (navigator as { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+		if (!conn) return PREFETCH_CONCURRENCY;
+		if (conn.saveData) return 1;
+		const type = conn.effectiveType ?? "";
+		if (type === "slow-2g" || type === "2g") return 1;
+		if (type === "3g") return 2;
+		return 4;
+	}
+
 	function trimRawCacheToRing(centerFrame: number, totalFrames: number): void {
 		const minFrame = Math.max(0, centerFrame - RAW_RING_RADIUS);
 		const maxFrame = Math.min(totalFrames - 1, centerFrame + RAW_RING_RADIUS);
@@ -660,8 +690,8 @@ function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOpti
 	): Promise<void> {
 		trimRawCacheToRing(centerFrame, totalFrames);
 		const targets = buildDirectionalFrameOrder(centerFrame, totalFrames, RAW_RING_RADIUS, direction);
-		for (let i = 0; i < targets.length && !signal.aborted; i += PREFETCH_CONCURRENCY) {
-			const batch = targets.slice(i, i + PREFETCH_CONCURRENCY).filter((frameIndex) => !rawFrameCache.has(frameIndex));
+		for (let i = 0; i < targets.length && !signal.aborted; i += prefetchConcurrency) {
+			const batch = targets.slice(i, i + prefetchConcurrency).filter((frameIndex) => !rawFrameCache.has(frameIndex));
 			if (batch.length === 0) continue;
 			await Promise.allSettled(
 				batch.map(async (frameIndex) => {
@@ -687,19 +717,38 @@ function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOpti
 		windowOptions: DisplayFrameWindowOptions,
 		signal: AbortSignal,
 		currentBlobSize: number,
+		forwardOnly = false,
 	): Promise<void> {
-		const fullVolume = shouldPrefetchWholeDisplayStack(totalFrames, currentBlobSize);
-		const maxDistance = fullVolume ? totalFrames - 1 : DISPLAY_NEAR_PREFETCH_DISTANCE;
-		const targets = buildDirectionalFrameOrder(startFrame, totalFrames, maxDistance, direction);
-		for (let i = 0; i < targets.length && !signal.aborted; i += PREFETCH_CONCURRENCY) {
-			const batch = targets.slice(i, i + PREFETCH_CONCURRENCY);
+		let targets: number[];
+		if (forwardOnly) {
+			targets = [];
+			for (let delta = 1; delta <= CINE_LOOKAHEAD_FRAMES; delta++) {
+				const f = startFrame + delta * direction;
+				if (f >= 0 && f < totalFrames) targets.push(f);
+			}
+		} else {
+			const fullVolume = shouldPrefetchWholeDisplayStack(totalFrames, currentBlobSize);
+			const maxDistance = fullVolume ? totalFrames - 1 : DISPLAY_NEAR_PREFETCH_DISTANCE;
+			targets = buildDirectionalFrameOrder(startFrame, totalFrames, maxDistance, direction);
+		}
+		for (let i = 0; i < targets.length && !signal.aborted; i += prefetchConcurrency) {
+			const batch = targets.slice(i, i + prefetchConcurrency);
 			await Promise.allSettled(
 				batch.map(async (frameIndex) => {
 					const key = buildDisplayKey(fileIndex, frameIndex, windowOptions);
 					if (signal.aborted || displayFrameCache.has(key)) return;
 					try {
 						const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal);
-						cacheDisplayFrame(key, blob);
+						const entry = cacheDisplayFrame(key, blob);
+						if (entry && typeof createImageBitmap === "function" && !entry.bitmap) {
+							createImageBitmap(entry.blob).then((bmp) => {
+								if (displayFrameCache.get(key) === entry && entry.bitmap === null) {
+									entry.bitmap = bmp;
+								} else {
+									bmp.close();
+								}
+							}).catch(() => {});
+						}
 					} catch {
 						// Ignore network/decode failures during prefetch.
 					}
@@ -717,6 +766,26 @@ function startDisplayPrefetch(
 	currentBlobSize: number,
 ): void {
 	const scopeKey = displayPrefetchScope(fileIndex, windowOptions);
+
+	if (isCineLikelyPlaying()) {
+		// During active playback: always reseed forward unconditionally, no suppression.
+		displayPrefetchCtrl?.abort();
+		const ctrl = new AbortController();
+		displayPrefetchCtrl = ctrl;
+		displayPrefetchScopeKey = scopeKey;
+		displayPrefetchSeedFrame = frameIndex;
+		void runDisplayPrefetch(
+			fileIndex, totalFrames, frameIndex, direction, windowOptions, ctrl.signal, currentBlobSize, true,
+		).finally(() => {
+			if (displayPrefetchCtrl === ctrl) {
+				displayPrefetchCtrl = null;
+				displayPrefetchScopeKey = "";
+				displayPrefetchSeedFrame = null;
+			}
+		});
+		return;
+	}
+
 	const shouldReusePrefetch =
 		displayPrefetchCtrl !== null &&
 		!displayPrefetchCtrl.signal.aborted &&
@@ -731,20 +800,23 @@ function startDisplayPrefetch(
 	displayPrefetchScopeKey = scopeKey;
 	displayPrefetchSeedFrame = frameIndex;
 
-	void runDisplayPrefetch(
-		fileIndex,
-		totalFrames,
-		frameIndex,
-		direction,
-		windowOptions,
-		ctrl.signal,
-		currentBlobSize,
-	).finally(() => {
-		if (displayPrefetchCtrl === ctrl) {
-			displayPrefetchCtrl = null;
-			displayPrefetchScopeKey = "";
-			displayPrefetchSeedFrame = null;
-		}
+	scheduleIdleOrImmediate(() => {
+		if (displayPrefetchCtrl !== ctrl) return;
+		void runDisplayPrefetch(
+			fileIndex,
+			totalFrames,
+			frameIndex,
+			direction,
+			windowOptions,
+			ctrl.signal,
+			currentBlobSize,
+		).finally(() => {
+			if (displayPrefetchCtrl === ctrl) {
+				displayPrefetchCtrl = null;
+				displayPrefetchScopeKey = "";
+				displayPrefetchSeedFrame = null;
+			}
+		});
 	});
 }
 
@@ -759,9 +831,14 @@ function startDisplayPrefetch(
 			currentRawFrame = cached;
 			loading = false;
 			loadError = null;
-			rawPrefetchCtrl?.abort();
-			rawPrefetchCtrl = new AbortController();
-			void runRawRingPrefetch(fileIndex, activeFile.frame_count, frameIndex, direction, rawPrefetchCtrl.signal);
+			const prefetchFileScope = fileScopeKey;
+			const cachedTotalFrames = activeFile.frame_count;
+			scheduleIdleOrImmediate(() => {
+				if (fileScopeKey !== prefetchFileScope || pipelineMode !== "diagnostic_wl") return;
+				rawPrefetchCtrl?.abort();
+				rawPrefetchCtrl = new AbortController();
+				void runRawRingPrefetch(fileIndex, cachedTotalFrames, frameIndex, direction, rawPrefetchCtrl.signal);
+			});
 			return;
 		}
 
@@ -785,9 +862,14 @@ function startDisplayPrefetch(
 			loading = false;
 			loadError = null;
 
-			rawPrefetchCtrl?.abort();
-			rawPrefetchCtrl = new AbortController();
-			void runRawRingPrefetch(fileIndex, activeFile.frame_count, frameIndex, direction, rawPrefetchCtrl.signal);
+			const prefetchFileScope = fileScopeKey;
+			const fetchedTotalFrames = activeFile.frame_count;
+			scheduleIdleOrImmediate(() => {
+				if (fileScopeKey !== prefetchFileScope || pipelineMode !== "diagnostic_wl") return;
+				rawPrefetchCtrl?.abort();
+				rawPrefetchCtrl = new AbortController();
+				void runRawRingPrefetch(fileIndex, fetchedTotalFrames, frameIndex, direction, rawPrefetchCtrl.signal);
+			});
 		} catch (error) {
 			if ((error as Error).name === "AbortError") return;
 			if (generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
@@ -871,6 +953,7 @@ function startDisplayPrefetch(
 		if (current > lastFrameForDirection) frameDirection = 1;
 		if (current < lastFrameForDirection) frameDirection = -1;
 		lastFrameForDirection = current;
+		lastFrameChangeTime = Date.now();
 	});
 
 	$effect(() => {
@@ -1016,6 +1099,15 @@ function startDisplayPrefetch(
 		if (!entry) return;
 		const generation = requestGeneration;
 		void drawDisplayEntry(entry, generation);
+	});
+
+	$effect(() => {
+		prefetchConcurrency = derivePrefetchConcurrency();
+		const conn = (navigator as { connection?: { addEventListener: (t: string, fn: () => void) => void; removeEventListener: (t: string, fn: () => void) => void } }).connection;
+		if (!conn) return;
+		const update = () => { prefetchConcurrency = derivePrefetchConcurrency(); };
+		conn.addEventListener("change", update);
+		return () => conn.removeEventListener("change", update);
 	});
 
 	$effect(() => {

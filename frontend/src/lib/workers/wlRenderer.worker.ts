@@ -60,7 +60,7 @@ function buildLut(
 	return lut;
 }
 
-self.onmessage = (event: MessageEvent<RenderMessage>) => {
+self.onmessage = async (event: MessageEvent<RenderMessage>) => {
 	const payload = event.data;
 	if (!payload || payload.type !== "render") {
 		return;
@@ -115,9 +115,10 @@ self.onmessage = (event: MessageEvent<RenderMessage>) => {
 			}
 		}
 
+		const bitmap = await createImageBitmap(new ImageData(output, width, height));
 		self.postMessage(
-			{ type: "rendered", id, width, height, rgba: output.buffer },
-			[output.buffer],
+			{ type: "rendered", id, width, height, bitmap },
+			[bitmap as unknown as Transferable],
 		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
