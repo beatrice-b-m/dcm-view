@@ -111,6 +111,9 @@ Date: 2026-06-14
 - Added `.github/ISSUE_TEMPLATE/dicom_compatibility.md` with DICOM-specific
   compatibility prompts, non-sensitive metadata fields, public/synthetic
   reproduction guidance, and explicit no-PHI/no-sensitive-DICOM guardrails.
+- Added `.github/ISSUE_TEMPLATE/feature_request.md` with enhancement-request
+  prompts for problem, proposed behavior, alternatives, scope, and explicit
+  no-PHI/no-sensitive-DICOM guardrails.
 
 ## Blockers
 
@@ -230,14 +233,21 @@ PY` - passed by inspection; help now includes arguments, return values,
   fields without asking for sensitive dataset content.
 - `git diff --cached --check` - passed after staging the compatibility template
   and tracker update; command emitted the existing macOS temp-dir warning only.
+- `rg -n "PHI|sensitive|DICOM|redact|clinical|synthetic|de-identified" .github/ISSUE_TEMPLATE/feature_request.md`
+  - passed; the feature request template includes no-PHI, no-sensitive-DICOM,
+  redaction, synthetic/de-identified example, and non-clinical-use guidance.
+- `rg -n "Problem|Proposed behavior|Alternatives considered|Scope" .github/ISSUE_TEMPLATE/feature_request.md`
+  - passed; the template prompts users for the workflow need, expected
+  behavior, existing workaround, and affected surface.
+- `git diff --check -- .github/ISSUE_TEMPLATE/feature_request.md CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `.github/ISSUE_TEMPLATE/dicom_compatibility.md` and
-  `CURRENT_PROGRESS.md` for the Phase 8 DICOM compatibility issue template
-  slice.
+- Commit `.github/ISSUE_TEMPLATE/feature_request.md` and
+  `CURRENT_PROGRESS.md` for the Phase 8 feature request issue template slice.
 
 ## Next Recommended Action
 
-- Continue Phase 8 by adding `.github/ISSUE_TEMPLATE/feature_request.md` with
-  no-PHI/no-sensitive-DICOM guidance for public enhancement requests.
+- Continue Phase 8 by adding `.github/pull_request_template.md` with
+  tests/docs/security checklist items and no-PHI/no-sensitive-DICOM guidance.
