@@ -12,7 +12,7 @@ Date: 2026-06-14
 
 - Phase 1: Command-Line Self-Service - complete.
 - Phase 2: Troubleshooting Guide - complete.
-- Phase 3: Configuration Reference - pending.
+- Phase 3: Configuration Reference - complete.
 - Phase 4: Python Wrapper Reference - pending.
 - Phase 5: Internal API Documentation - pending.
 - Phase 6: Documentation Navigation - pending.
@@ -45,6 +45,14 @@ Date: 2026-06-14
 - Linked troubleshooting from the README install, quick start, and reporting
   sections.
 - Linked troubleshooting from `vscode/README.md` for extension users.
+- Added `docs/configuration.md` as a centralized reference for Rust CLI flags,
+  Python module CLI flags, Python `view()` parameters, VS Code settings,
+  runtime environment variables, build/development variables, binary resolution
+  order, VS Code bridge bypass/debug variables, and the `debug-api` feature.
+- Linked the configuration reference from the README install and CLI reference
+  sections.
+- Linked the configuration reference from `vscode/README.md` for extension
+  settings, binary resolution, and bridge environment variables.
 
 ## Blockers
 
@@ -74,15 +82,25 @@ Date: 2026-06-14
   remote workflow command readable.
 - `git diff --check -- docs/troubleshooting.md README.md vscode/README.md CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `grep -n "DCMVIEW_BINARY" docs/configuration.md` - passed; Python binary
+  override and runtime variable are documented.
+- `grep -n "dcmview.binaryPath" docs/configuration.md` - passed; VS Code binary
+  override is documented.
+- `grep -n "DCMVIEW_SKIP_FRONTEND_BUILD" docs/configuration.md` - passed; the
+  build-only frontend skip variable is documented.
+- `grep -n "configuration" README.md vscode/README.md` - passed; both user
+  entry points link to the configuration reference.
+- `git diff --check -- docs/configuration.md README.md vscode/README.md CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `docs/troubleshooting.md`, `README.md`, `vscode/README.md`, and
-  `CURRENT_PROGRESS.md` for the troubleshooting guide slice.
+- Commit `docs/configuration.md`, `README.md`, `vscode/README.md`, and
+  `CURRENT_PROGRESS.md` for the configuration reference slice.
 
 ## Next Recommended Action
 
-- Start Phase 3 by adding `docs/configuration.md` to centralize Rust CLI flags,
-  Python wrapper parameters, Python module CLI flags, VS Code settings, runtime
-  environment variables, build/development variables, and binary resolution
-  precedence.
+- Start Phase 4 by adding `docs/python.md` and expanding the `view()` docstring
+  in `python/dcmview_py/wrapper.py` to cover parameters, return values,
+  blocking behavior, handle lifecycle, context-manager usage, exceptions, binary
+  resolution, VS Code bridge behavior, bypass options, and examples.

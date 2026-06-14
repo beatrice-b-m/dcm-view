@@ -74,7 +74,9 @@ Build prerequisites for source installs:
 - `ssh` on `PATH` only when using SSH forwarding helpers
 
 If install or binary discovery fails, see the
-[troubleshooting guide](docs/troubleshooting.md).
+[troubleshooting guide](docs/troubleshooting.md). For all CLI, Python, VS Code,
+and environment settings, see the
+[configuration reference](docs/configuration.md).
 
 ## Quick Start
 
@@ -249,7 +251,9 @@ python -m dcmview_py [OPTIONS] <PATH> [PATH ...]
 ```
 
 The Python module CLI forwards the same options to the underlying `dcmview`
-binary.
+binary. For Python wrapper parameters, VS Code settings, environment variables,
+and binary resolution order, see the
+[configuration reference](docs/configuration.md).
 
 | Option | Default | Description |
 |---|---:|---|
