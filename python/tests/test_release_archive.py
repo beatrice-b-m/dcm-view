@@ -32,7 +32,7 @@ class ReleaseArchiveTests(unittest.TestCase):
 			root = Path(temp_dir)
 			binary = root / "dcmview.exe"
 			binary.write_bytes(b"windows-binary")
-			output = root / "dcmview-0.2.6-x86_64-pc-windows-msvc.zip"
+			output = root / "dcmview-0.2.7-x86_64-pc-windows-msvc.zip"
 
 			packager.write_zip(output, packager.archive_members(binary, "dcmview.exe"))
 			sha_path = output.with_name(f"{output.name}.sha256")
