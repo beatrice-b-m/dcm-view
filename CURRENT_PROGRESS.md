@@ -16,7 +16,7 @@ Date: 2026-06-14
 - Phase 4: Python Wrapper Reference - complete.
 - Phase 5: Internal API Documentation - complete.
 - Phase 6: Documentation Navigation - complete.
-- Phase 7: README Landing Page Cleanup - pending.
+- Phase 7: README Landing Page Cleanup - complete.
 - Phase 8: Public Project Hygiene - pending.
 - Phase 9: Homebrew v0.2.7 Preparation - pending.
 - Phase 10: Visual Onboarding - blocked on approved non-sensitive dataset.
@@ -80,6 +80,21 @@ Date: 2026-06-14
 - Kept internal planning documents in place for this slice and labeled them as
   maintainer-oriented notes from the docs index; no file moves were needed for
   the navigation outcome.
+- Tightened the README landing page from 502 lines to 311 lines while keeping
+  the public overview, install matrix, quick start, remote workflow, Python
+  pointer, VS Code pointer, viewer features, annotations summary,
+  troubleshooting link, reporting guidance, and non-clinical-use warnings.
+- Replaced the long README CLI option table with direct help-command guidance
+  and links to the configuration and Python references.
+- Reduced the README HTTP API section to a viewer-internal stability warning,
+  `debug-api` caution, and link to the dedicated internal API reference.
+- Added `docs/annotations.md` with the EMBED-style ROI CSV contract, required
+  and optional columns, coordinate and frame formats, examples, validation
+  failures, export behavior, and API shape.
+- Added `docs/development.md` with source-build prerequisites, build script
+  behavior, frontend proxy workflow, Rust and frontend checks, Python wrapper
+  tests, fixture policy, architecture summary, and cache budget guidance.
+- Linked the annotation and development references from `docs/index.md`.
 
 ## Blockers
 
@@ -153,15 +168,31 @@ PY` - passed by inspection; help now includes arguments, return values,
   are grouped separately from user-facing guides.
 - `git diff --check -- docs/index.md README.md vscode/README.md CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `git diff --check -- README.md docs/annotations.md docs/development.md docs/index.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
+- `wc -l README.md` - passed; README is now 311 lines.
+- `rg -n "annotation reference|development reference|internal API reference|troubleshooting guide|configuration reference|documentation index|SECURITY.md" README.md`
+  - passed; README links to the dedicated references and reporting guidance.
+- `rg -n "ROI_coords|ROI_frames|num_ROI|anon_dicom_path" docs/annotations.md`
+  - passed; annotation CSV columns and JSON fields are documented.
+- `rg -n "Transfer syntax|X-Cache|debug-api|scan_complete|X-Frame-Rows" docs/api.md`
+  - passed; API details moved out of README remain available in the dedicated
+  reference.
+- `rg -n "Development reference|Annotation reference" docs/index.md` - passed;
+  the docs index links the new reference pages.
+- `rg -n "\\]\\(" README.md docs vscode/README.md` - passed by inspection;
+  relative links include the new annotation and development references.
+- `git diff --check -- README.md docs/annotations.md docs/development.md docs/index.md CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `docs/index.md`, `README.md`, `vscode/README.md`, and
-  `CURRENT_PROGRESS.md` for the documentation navigation slice.
+- Commit `README.md`, `docs/annotations.md`, `docs/development.md`,
+  `docs/index.md`, and `CURRENT_PROGRESS.md` for the README landing page
+  cleanup slice.
 
 ## Next Recommended Action
 
-- Start Phase 7 by tightening the README landing page: keep the user-facing
-  overview, install matrix, quick start, remote workflow, Python pointer, VS
-  Code pointer, annotations summary, troubleshooting link, and reporting
-  guidance while moving remaining long-form detail to dedicated docs.
+- Start Phase 8 by adding a focused `CONTRIBUTING.md` with setup, test
+  commands, fixture policy, documentation expectations, and no-PHI issue
+  guidance.

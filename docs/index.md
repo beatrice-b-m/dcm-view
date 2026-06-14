@@ -11,6 +11,8 @@ or metadata unless they are fully de-identified and approved for public use.
   decode, tunnel, VS Code, and annotation CSV problems.
 - [Configuration reference](configuration.md): CLI flags, Python wrapper
   parameters, VS Code settings, environment variables, and binary resolution.
+- [Annotation reference](annotations.md): EMBED-style ROI CSV columns,
+  coordinate format, frame scoping, validation, and export behavior.
 - [README](../README.md): install matrix, quick start, remote workflow, viewer
   features, annotations, and issue-reporting guidance.
 
@@ -40,6 +42,9 @@ or metadata unless they are fully de-identified and approved for public use.
 
 ## Development And Release
 
+- [Development reference](development.md): source builds, frontend proxy
+  workflow, test commands, fixture policy, architecture notes, and cache
+  budgets.
 - [Release process](releasing.md): local release checks, GitHub Release assets,
   PyPI wheels, VS Code Marketplace publishing, and Homebrew tap prerequisites.
 - [npm audit notes](npm-audit-2026-06-09.md): recorded frontend and VS Code npm
