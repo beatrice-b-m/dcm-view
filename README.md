@@ -149,7 +149,9 @@ annotations.
 ## Python Usage
 
 `dcmview-py` is a small subprocess wrapper around the Rust binary. It is useful
-when a script or notebook has already selected the cases to inspect.
+when a script or notebook has already selected the cases to inspect. For the
+full parameter reference, lifecycle details, VS Code bridge behavior, and
+notebook-oriented examples, see the [Python reference](docs/python.md).
 
 ```python
 from dcmview_py import view
@@ -253,7 +255,8 @@ python -m dcmview_py [OPTIONS] <PATH> [PATH ...]
 The Python module CLI forwards the same options to the underlying `dcmview`
 binary. For Python wrapper parameters, VS Code settings, environment variables,
 and binary resolution order, see the
-[configuration reference](docs/configuration.md).
+[configuration reference](docs/configuration.md) and
+[Python reference](docs/python.md).
 
 | Option | Default | Description |
 |---|---:|---|

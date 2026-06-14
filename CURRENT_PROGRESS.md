@@ -13,7 +13,7 @@ Date: 2026-06-14
 - Phase 1: Command-Line Self-Service - complete.
 - Phase 2: Troubleshooting Guide - complete.
 - Phase 3: Configuration Reference - complete.
-- Phase 4: Python Wrapper Reference - pending.
+- Phase 4: Python Wrapper Reference - complete.
 - Phase 5: Internal API Documentation - pending.
 - Phase 6: Documentation Navigation - pending.
 - Phase 7: README Landing Page Cleanup - pending.
@@ -53,6 +53,17 @@ Date: 2026-06-14
   sections.
 - Linked the configuration reference from `vscode/README.md` for extension
   settings, binary resolution, and bridge environment variables.
+- Added `docs/python.md` with Python wrapper install notes, blocking and
+  non-blocking examples, context-manager usage, parameter details, annotation
+  loading, filters, remote/no-browser workflow, return values, exceptions,
+  binary resolution, VS Code bridge behavior, bypass options, and related links.
+- Expanded the `dcmview_py.view()` docstring so `help(dcmview_py.view)` exposes
+  parameters, return values, handle lifecycle, exceptions, binary resolution,
+  VS Code bridge behavior, and the non-clinical-use note.
+- Added Python test coverage that keeps the public `view()` docstring
+  informative.
+- Linked the Python reference from the README Python and CLI sections, the VS
+  Code README bridge guidance, and PyPI project metadata.
 
 ## Blockers
 
@@ -92,15 +103,30 @@ Date: 2026-06-14
   entry points link to the configuration reference.
 - `git diff --check -- docs/configuration.md README.md vscode/README.md CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `PYTHONPATH=python python - <<'PY'
+from dcmview_py import view
+help(view)
+PY` - passed by inspection; help now includes arguments, return values,
+  exceptions, VS Code bridge behavior, binary resolution, and non-clinical-use
+  guidance.
+- `python -m unittest discover -s python/tests` - passed; 52 tests run, 1
+  skipped.
+- `grep -n "Python reference" README.md vscode/README.md` - passed; README and
+  VS Code README link to the Python reference.
+- `grep -n "Documentation" pyproject.toml` - passed; PyPI metadata links to the
+  Python reference.
+- `git diff --check -- docs/python.md README.md vscode/README.md pyproject.toml python/dcmview_py/wrapper.py python/tests/test_wrapper.py CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `docs/configuration.md`, `README.md`, `vscode/README.md`, and
-  `CURRENT_PROGRESS.md` for the configuration reference slice.
+- Commit `docs/python.md`, `python/dcmview_py/wrapper.py`,
+  `python/tests/test_wrapper.py`, `README.md`, `vscode/README.md`,
+  `pyproject.toml`, and `CURRENT_PROGRESS.md` for the Python wrapper reference
+  slice.
 
 ## Next Recommended Action
 
-- Start Phase 4 by adding `docs/python.md` and expanding the `view()` docstring
-  in `python/dcmview_py/wrapper.py` to cover parameters, return values,
-  blocking behavior, handle lifecycle, context-manager usage, exceptions, binary
-  resolution, VS Code bridge behavior, bypass options, and examples.
+- Start Phase 5 by adding `docs/api.md` for the viewer-internal HTTP API,
+  including progressive scan fields, polling behavior, cache headers, raw-frame
+  metadata headers, error semantics, and the debugging-only `debug-api` feature.

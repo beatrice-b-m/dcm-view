@@ -19,7 +19,9 @@ For common install, binary resolution, VS Code interception, startup, tunnel,
 and annotation CSV problems, see the main
 [troubleshooting guide](../docs/troubleshooting.md). For settings, binary
 resolution order, and bridge environment variables, see the
-[configuration reference](../docs/configuration.md).
+[configuration reference](../docs/configuration.md). For Python scripts and
+notebooks that may route through the VS Code bridge, see the
+[Python reference](../docs/python.md).
 
 ## Supported Platforms
 

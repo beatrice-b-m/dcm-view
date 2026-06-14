@@ -71,6 +71,16 @@ class WrapperTests(unittest.TestCase):
 		self.assertEqual(context.exception.code, 0)
 		self.assertEqual(output.getvalue().strip(), "dcmview 9.8.7")
 
+	def test_view_docstring_documents_public_api(self) -> None:
+		docstring = wrapper.view.__doc__ or ""
+
+		self.assertIn("Launch dcmview", docstring)
+		self.assertIn("Args:", docstring)
+		self.assertIn("Returns:", docstring)
+		self.assertIn("Raises:", docstring)
+		self.assertIn("vscode_bridge", docstring)
+		self.assertIn("DCMVIEW_BINARY", docstring)
+
 	def test_module_cli_help_describes_options_and_examples(self) -> None:
 		parser = dcmview_main._build_parser()
 		output = StringIO()

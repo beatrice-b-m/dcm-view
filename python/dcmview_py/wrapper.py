@@ -177,7 +177,48 @@ def view(
 	filters: Optional[Iterable[str]] = None,
 	vscode_bridge: bool = True,
 ) -> Optional[ShutdownHandle | BridgeShutdownHandle]:
-	"""Launch dcmview for one or more filesystem paths."""
+	"""Launch dcmview for one or more DICOM files or directories.
+
+	Args:
+		files: A path-like value or iterable of path-like values to inspect.
+		port: Local HTTP port to bind. ``0`` asks the OS for an available port.
+		host: Local interface to bind. Keep ``"127.0.0.1"`` unless you have
+			added your own network access controls.
+		browser: Open the system browser when ``True``; pass ``False`` to print
+			the viewer URL for terminals, notebooks, or SSH forwarding.
+		tunnel: Start the Rust binary's optional SSH local port-forward helper.
+		tunnel_host: SSH host used with ``tunnel=True``. Required when
+			``tunnel`` is enabled.
+		tunnel_port: Local forwarded port for ``tunnel=True``. ``0`` reuses the
+			viewer port.
+		block: Wait for the viewer process to exit when ``True``. When ``False``,
+			return a handle with ``url``, ``stop()``, and context-manager support.
+		recursive: Recursively scan input directories when ``True``.
+		timeout: Exit after this many seconds without API or browser requests.
+		annotations: Optional EMBED-style ROI annotation CSV to load in memory.
+		filters: Optional iterable of ``FIELD=VALUE`` metadata filters. Filters
+			are forwarded to the binary and combined with AND semantics.
+		vscode_bridge: When ``True``, route through an active dcmview VS Code
+			bridge when one is available. Pass ``False`` or set
+			``DCMVIEW_VSCODE_BYPASS=1`` to force a local subprocess launch.
+
+	Returns:
+		``None`` for blocking calls after dcmview exits successfully. For
+		non-blocking calls, returns a ``ShutdownHandle`` for local subprocesses
+		or ``BridgeShutdownHandle`` for VS Code-managed sessions.
+
+	Raises:
+		ValueError: If no files are provided or ``tunnel=True`` has no
+			``tunnel_host``.
+		TypeError: If file, annotation, or filter arguments have invalid types.
+		RuntimeError: If no dcmview binary can be resolved or startup fails.
+		subprocess.CalledProcessError: If the underlying viewer exits with a
+			non-zero status.
+
+	The Python wrapper resolves the binary from ``DCMVIEW_BINARY``, then a
+	bundled wheel binary, then ``PATH``. It is intended for research and
+	development inspection, not clinical diagnosis.
+	"""
 
 	paths = _normalize_files(files)
 	annotation_path = _normalize_optional_path(annotations, field_name="annotations")

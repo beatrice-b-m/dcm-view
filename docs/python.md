@@ -1,0 +1,237 @@
+# dcmview Python Reference
+
+The `dcmview-py` package exposes a small Python wrapper around the `dcmview`
+Rust binary. It is intended for scripts and notebooks that have already selected
+local DICOM files or directories and need a temporary viewer for research or
+development inspection.
+
+`dcmview` is not for clinical diagnosis. The local HTTP server is
+unauthenticated; keep it bound to `127.0.0.1` unless you have added your own
+network access controls.
+
+## Install
+
+```bash
+python -m pip install dcmview-py
+python -m dcmview_py --help
+```
+
+Supported wheels bundle the `dcmview` binary. On unsupported platforms, or when
+testing a local build, set `DCMVIEW_BINARY` to an absolute or user-expanded path
+to a compatible `dcmview` executable.
+
+## Basic Use
+
+```python
+from dcmview_py import view
+
+# Blocking call. This returns after the viewer exits.
+view("./scan.dcm")
+```
+
+Use a list or tuple to inspect multiple files or directories:
+
+```python
+view(["./scan.dcm", "./study_dir"])
+```
+
+## Non-Blocking Use
+
+Set `block=False` when a notebook or script needs to keep running while the
+viewer stays open:
+
+```python
+from dcmview_py import view
+
+handle = view("./study_dir", browser=False, block=False)
+print(handle.url)
+
+# Later, stop the viewer process.
+exit_code = handle.stop()
+```
+
+For local subprocess launches, the handle is a `ShutdownHandle`. For launches
+captured by the VS Code bridge, the handle is a `BridgeShutdownHandle`. Both
+provide:
+
+| Attribute or method | Behavior |
+|---|---|
+| `url` | Viewer URL when startup has reported one. |
+| `stop(timeout=5.0)` | Ask the viewer to stop, wait for exit, and return the exit code. |
+| Context manager | Calls `stop()` automatically on context exit. |
+
+`stop()` is idempotent for local handles after the process has already exited.
+
+## Context Manager
+
+Use a context manager when a script should always clean up the viewer:
+
+```python
+from dcmview_py import view
+
+with view("./study_dir", browser=False, block=False) as handle:
+    print(handle.url)
+    # Run analysis while the viewer is available.
+```
+
+## Parameters
+
+`view()` accepts one required argument and keyword-only launch options:
+
+```python
+view(
+    files,
+    *,
+    port=0,
+    host="127.0.0.1",
+    browser=True,
+    tunnel=False,
+    tunnel_host=None,
+    tunnel_port=0,
+    block=True,
+    recursive=True,
+    timeout=None,
+    annotations=None,
+    filters=None,
+    vscode_bridge=True,
+)
+```
+
+| Parameter | Default | Description |
+|---|---:|---|
+| `files` | required | A path-like value or iterable of path-like values to DICOM files or directories. |
+| `port` | `0` | Local HTTP port. `0` asks the OS for an available port. |
+| `host` | `"127.0.0.1"` | Local interface to bind. Keep the default for normal and SSH-forwarded use. |
+| `browser` | `True` | Open the system browser. Use `False` to print and capture the URL instead. |
+| `tunnel` | `False` | Ask the Rust binary to start its optional SSH local port-forward helper. |
+| `tunnel_host` | `None` | SSH host used with `tunnel=True`, for example `user@example.org`. Required when `tunnel` is enabled. |
+| `tunnel_port` | `0` | Local forwarded port for `tunnel=True`; `0` reuses the viewer port. |
+| `block` | `True` | Wait for the viewer to exit and return `None`. When `False`, return a shutdown handle. |
+| `recursive` | `True` | Recursively scan input directories. |
+| `timeout` | `None` | Exit after this many seconds without API or browser requests. |
+| `annotations` | `None` | Load an EMBED-style ROI annotation CSV into memory without modifying the file. |
+| `filters` | `None` | Iterable of `FIELD=VALUE` metadata filters. Values are forwarded as repeatable `--filter` flags and combined with AND semantics. |
+| `vscode_bridge` | `True` | Route launches into an active dcmview VS Code bridge when available. |
+
+Filter fields are the same as the Rust CLI: `patient_id`, `patient_name`,
+`study_description`, `study_date`, `study_uid`, `series_description`,
+`series_number`, `series_uid`, and `modality`. Matching is case-insensitive
+substring matching.
+
+## Examples
+
+Blocking inspection with an idle timeout:
+
+```python
+from dcmview_py import view
+
+view("./scan.dcm", browser=False, timeout=300)
+```
+
+Non-recursive directory scan:
+
+```python
+view("./study_dir", recursive=False)
+```
+
+Annotation loading:
+
+```python
+view("./study_dir", annotations="./rois.csv")
+```
+
+Metadata filters:
+
+```python
+view(
+    "./study_dir",
+    filters=["Modality=CT", "PatientID=phantom"],
+)
+```
+
+Remote server workflow:
+
+```python
+view(
+    "/data/study_dir",
+    browser=False,
+    host="127.0.0.1",
+    port=8010,
+    timeout=600,
+)
+```
+
+Then forward the port from your local machine:
+
+```bash
+ssh -L 8010:127.0.0.1:8010 user@remote
+```
+
+Open `http://127.0.0.1:8010` locally.
+
+## Return Values and Errors
+
+Blocking calls return `None` after a successful viewer exit. Non-blocking calls
+return a shutdown handle.
+
+The wrapper may raise:
+
+| Exception | When it can happen |
+|---|---|
+| `ValueError` | No files were provided, or `tunnel=True` was used without `tunnel_host`. |
+| `TypeError` | File, annotation, or filter arguments have invalid types. |
+| `RuntimeError` | No binary can be resolved, the VS Code bridge fails after capturing a session, or startup fails before a handle is available. |
+| `subprocess.CalledProcessError` | The underlying viewer exits with a non-zero status. |
+
+## Binary Resolution
+
+The Python wrapper resolves the binary in this order:
+
+1. `DCMVIEW_BINARY`, when set. The value may include `~`, but must point to an
+   existing file.
+2. The bundled wheel binary under `dcmview_py/bin/`.
+3. `dcmview` or `dcmview.exe` on `PATH`.
+
+When launching a local subprocess, the wrapper sets `DCMVIEW_VSCODE_BYPASS=1`
+for the child process so that the Rust binary does not recursively route itself
+back into VS Code interception.
+
+## VS Code Bridge
+
+When Python runs inside a VS Code environment with the dcmview extension active,
+`view()` may route through the extension bridge. In that mode, the extension
+opens the viewer in a VS Code webview panel and the Python call controls the
+extension-managed session.
+
+Set `vscode_bridge=False` for one call:
+
+```python
+view("./scan.dcm", vscode_bridge=False)
+```
+
+Or set an environment variable before starting Python:
+
+```bash
+export DCMVIEW_VSCODE_BYPASS=1
+```
+
+Set `DCMVIEW_VSCODE_BRIDGE_DEBUG=1` to print bridge discovery diagnostics to
+stderr. The bridge registry location and related variables are documented in the
+[configuration reference](configuration.md).
+
+## Module CLI
+
+The package also provides a module CLI:
+
+```bash
+python -m dcmview_py --no-browser --timeout 120 ./study_dir
+```
+
+The module CLI mirrors the Rust CLI and runs in blocking mode. Use the Python
+API when a script or notebook needs a non-blocking handle.
+
+## Related Documentation
+
+- [Configuration reference](configuration.md)
+- [Troubleshooting guide](troubleshooting.md)
+- [VS Code extension local testing](vscode-extension-local-testing.md)
