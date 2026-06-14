@@ -13,8 +13,19 @@ license = "MIT"
 classifiers = [
 	"Programming Language :: Python :: 3",
 	"Programming Language :: Python :: 3 :: Only",
-	"Operating System :: OS Independent",
+	"Operating System :: MacOS",
+	"Operating System :: Microsoft :: Windows",
+	"Operating System :: POSIX :: Linux",
+	"Intended Audience :: Developers",
+	"Intended Audience :: Science/Research",
+	"Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
+
+[project.urls]
+Homepage = "https://github.com/beatrice-b-m/dcmview"
+Repository = "https://github.com/beatrice-b-m/dcmview"
+Issues = "https://github.com/beatrice-b-m/dcmview/issues"
+Security = "https://github.com/beatrice-b-m/dcmview/security/policy"
 
 [project.scripts]
 dcmview = "dcmview_py.__main__:main"

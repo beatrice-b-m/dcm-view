@@ -16,8 +16,9 @@ third-party cloud tool. `dcmview` keeps the workflow local to the machine with
 the files: start the viewer, forward the loopback port over SSH when needed, and
 inspect the study in seconds.
 
-`dcmview` is intended for developer and research inspection, not clinical
-diagnosis.
+`dcmview` is intended for developer and research inspection on secure networks,
+not clinical diagnosis. Avoid public-facing server binds; use the default
+loopback binding and SSH forwarding for remote workflows.
 
 ## Why use it?
 
@@ -33,7 +34,19 @@ diagnosis.
 
 ## Install
 
-On supported Linux platforms, the Python package bundles the `dcmview` binary:
+The current public install channels are the Python package, GitHub Releases, and
+the VS Code Marketplace extension:
+
+| Platform | Recommended channel | Notes |
+|---|---|---|
+| Linux x64 | `dcmview-py` or GitHub Releases | PyPI wheels bundle the `dcmview` binary. |
+| macOS x64 | `dcmview-py` or GitHub Releases | PyPI wheels bundle the `dcmview` binary. |
+| macOS arm64 | `dcmview-py` or GitHub Releases | PyPI wheels bundle the `dcmview` binary. |
+| Windows x64 | `dcmview-py`, GitHub Releases, or VS Code Marketplace | PyPI wheels bundle `dcmview.exe`. |
+| VS Code | VS Code Marketplace | The extension bundles platform-specific binaries for supported hosts. |
+| Other platforms | Source build | Build the Rust binary locally and point wrappers at it when needed. |
+
+Install the Python package:
 
 ```bash
 python -m pip install --user dcmview-py
@@ -41,10 +54,12 @@ dcmview --help
 ```
 
 The package installs both `dcmview` and `dcmview-py`; `dcmview` is the primary
-command.
+command. If you are using an unsupported platform or a local debug binary, set
+`DCMVIEW_BINARY` to an absolute path to a compatible `dcmview` executable.
 
-On macOS, use the published Homebrew tap or download a prebuilt archive from
-GitHub Releases.
+Homebrew distribution is planned for the `v0.2.7` release but is not configured
+yet. Until then, use PyPI, the VS Code extension, GitHub Releases, or a source
+build.
 
 Source builds are available for contributors and unsupported platforms:
 
@@ -89,7 +104,9 @@ Press Ctrl+C to stop the server.
 ## Remote Server Workflow
 
 The safest default is to keep `dcmview` bound to loopback on the remote machine
-and access it through SSH port forwarding.
+and access it through SSH port forwarding. `dcmview` is intended for research
+and development use on secure networks; do not expose the server directly to a
+public network.
 
 On the remote server:
 
@@ -116,7 +133,9 @@ itself.
 
 The HTTP server is unauthenticated. It binds to `127.0.0.1` by default. If you
 bind to `0.0.0.0` or another public interface, use your own network access
-controls.
+controls. Anyone who can reach the server may be able to access image pixels,
+DICOM tags, file paths, patient identifiers, study identifiers, and in-memory
+annotations.
 
 ## Python Usage
 
@@ -253,8 +272,9 @@ multiple filters are combined with AND semantics.
 
 ## HTTP API
 
-The browser UI uses a small local HTTP API. It is also useful for scripts that
-need the same decoded frame, tag, or annotation data while the server is running.
+The browser UI uses a small local HTTP API. This API is internal to the viewer
+and is not a stable public integration surface; use it only for `dcmview`
+debugging and test automation.
 
 Static frontend assets are served at `/` and `/assets/*`.
 
@@ -301,7 +321,11 @@ Static frontend assets are served at `/` and `/assets/*`.
   ],
   "tunnelled": false,
   "tunnel_host": null,
-  "server_start_ms": 1714300000000
+  "server_start_ms": 1714300000000,
+  "scan_complete": true,
+  "scanned": 2,
+  "skipped": 0,
+  "filtered": 0
 }
 ```
 
@@ -426,6 +450,19 @@ Backend frame cache budgets are currently 256 MiB for display PNGs and 384 MiB
 for raw sample frames. The frontend also keeps active frame blobs, raw buffers,
 and rendered bitmaps in memory for responsiveness, so cache budget changes
 should consider total browser plus server memory pressure.
+
+## Reporting Issues
+
+Use GitHub issues for DICOM compatibility problems, install failures, and feature
+requests. Do not attach DICOM files, screenshots, logs, paths, patient
+identifiers, or other sensitive information unless you have fully de-identified
+them.
+
+Report suspected security vulnerabilities privately to the maintainers before
+public disclosure; see `SECURITY.md`.
+
+`dcmview` is not for clinical use, clinical diagnosis, or clinical
+decision-making.
 
 ## License
 

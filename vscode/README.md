@@ -8,8 +8,12 @@ Open local DICOM files and folders in `dcmview` directly from VS Code.
 development workflows. The extension starts a local loopback `dcmview` server
 from the selected file or folder and displays the viewer in a VS Code webview.
 
-`dcmview` is intended for developer and research inspection, not clinical
-diagnosis.
+`dcmview` is intended for developer and research inspection on secure networks,
+not clinical diagnosis. Avoid public-facing server binds; the extension launches
+the bundled server on loopback and displays it in a VS Code webview.
+
+Do not include PHI or sensitive DICOM content in public issue reports. Report
+security issues privately to the maintainers before public disclosure.
 
 ## Supported Platforms
 
