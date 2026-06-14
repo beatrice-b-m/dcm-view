@@ -23,42 +23,109 @@ const VSCODE_BRIDGE_DEBUG_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_DEBUG";
 const BRIDGE_REGISTRY_MAX_AGE_MS: u64 = 3 * 60 * 60 * 1000;
 
 #[derive(Debug, Parser)]
-#[command(name = "dcmview", version, about = "Ephemeral DICOM inspection server")]
+#[command(
+    name = "dcmview",
+    version,
+    about = "Start a temporary local DICOM inspection viewer",
+    long_about = "Start a temporary local web server for inspecting DICOM files, directories, image frames, tags, and optional ROI annotations. dcmview is intended for research and development inspection, not clinical diagnosis.",
+    after_long_help = "\
+Examples:
+  dcmview ./scan.dcm
+  dcmview ./study_dir
+  dcmview --no-recursive ./study_dir
+  dcmview --no-browser --host 127.0.0.1 --port 8010 ./study_dir
+  ssh -L 8010:127.0.0.1:8010 user@remote
+  dcmview --annotations ./rois.csv ./study_dir
+  dcmview --filter Modality=CT --filter PatientID=phantom ./study_dir
+
+For remote use, run dcmview on the machine that has the DICOM files, keep the
+server bound to 127.0.0.1, and forward the chosen port over SSH."
+)]
 struct Cli {
-    #[arg(required_unless_present = "vscode_bridge_client")]
+    #[arg(
+        value_name = "PATH",
+        required_unless_present = "vscode_bridge_client",
+        help = "DICOM file or directory to inspect; repeat for multiple inputs"
+    )]
     paths: Vec<PathBuf>,
 
-    #[arg(short = 'p', long = "port", default_value_t = 0)]
+    #[arg(
+        short = 'p',
+        long = "port",
+        value_name = "PORT",
+        default_value_t = 0,
+        help = "Local HTTP port to bind; 0 selects an available port"
+    )]
     port: u16,
 
-    #[arg(long = "host", default_value = "127.0.0.1")]
+    #[arg(
+        long = "host",
+        value_name = "ADDR",
+        default_value = "127.0.0.1",
+        help = "Local interface to bind; keep 127.0.0.1 unless you understand the network exposure"
+    )]
     host: String,
 
-    #[arg(long = "no-browser")]
+    #[arg(
+        long = "no-browser",
+        help = "Print the viewer URL instead of opening a browser automatically"
+    )]
     no_browser: bool,
 
-    #[arg(long = "tunnel")]
+    #[arg(
+        long = "tunnel",
+        help = "Start an SSH local port-forward helper after the viewer starts"
+    )]
     tunnel: bool,
 
-    #[arg(long = "tunnel-host")]
+    #[arg(
+        long = "tunnel-host",
+        value_name = "SSH_HOST",
+        help = "SSH host used with --tunnel, for example user@example.org"
+    )]
     tunnel_host: Option<String>,
 
-    #[arg(long = "tunnel-port", default_value_t = 0)]
+    #[arg(
+        long = "tunnel-port",
+        value_name = "PORT",
+        default_value_t = 0,
+        help = "Local forwarded port for --tunnel; 0 reuses the viewer port"
+    )]
     tunnel_port: u16,
 
-    #[arg(long = "timeout")]
+    #[arg(
+        long = "timeout",
+        value_name = "SECONDS",
+        help = "Exit after this many seconds without API or browser requests"
+    )]
     timeout: Option<u64>,
 
-    #[arg(long = "no-recursive")]
+    #[arg(
+        long = "no-recursive",
+        help = "Scan only the top level of input directories"
+    )]
     no_recursive: bool,
 
-    #[arg(long = "annotations")]
+    #[arg(
+        long = "annotations",
+        value_name = "CSV",
+        help = "Load EMBED-style ROI annotations from CSV without modifying the file"
+    )]
     annotations: Option<PathBuf>,
 
-    #[arg(long = "filter", value_name = "FIELD=VALUE", value_parser = parse_scan_filter)]
+    #[arg(
+        long = "filter",
+        value_name = "FIELD=VALUE",
+        value_parser = parse_scan_filter,
+        help = "Include only files whose metadata field contains the value; repeatable"
+    )]
     filters: Vec<loader::ScanFilter>,
 
-    #[arg(long = "startup-json")]
+    #[arg(
+        long = "startup-json",
+        hide = true,
+        help = "Print machine-readable startup events for integrations"
+    )]
     startup_json: bool,
 
     #[arg(
