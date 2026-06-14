@@ -73,6 +73,9 @@ Build prerequisites for source installs:
 - Node.js 18+ and npm at build time
 - `ssh` on `PATH` only when using SSH forwarding helpers
 
+If install or binary discovery fails, see the
+[troubleshooting guide](docs/troubleshooting.md).
+
 ## Quick Start
 
 Open one file:
@@ -100,6 +103,10 @@ dcmview: server running at http://127.0.0.1:<port>
 ```
 
 Press Ctrl+C to stop the server.
+
+If startup reports skipped files, no valid DICOM files, a port conflict, or a
+browser launch failure, see the
+[troubleshooting guide](docs/troubleshooting.md).
 
 ## Remote Server Workflow
 
@@ -468,6 +475,10 @@ Use GitHub issues for DICOM compatibility problems, install failures, and featur
 requests. Do not attach DICOM files, screenshots, logs, paths, patient
 identifiers, or other sensitive information unless you have fully de-identified
 them.
+
+Before filing an issue, check the
+[troubleshooting guide](docs/troubleshooting.md) for common install, startup,
+decode, tunnel, VS Code, and annotation CSV problems.
 
 Report suspected security vulnerabilities privately to the maintainers before
 public disclosure; see `SECURITY.md`.

@@ -15,6 +15,10 @@ the bundled server on loopback and displays it in a VS Code webview.
 Do not include PHI or sensitive DICOM content in public issue reports. Report
 security issues privately to the maintainers before public disclosure.
 
+For common install, binary resolution, VS Code interception, startup, tunnel,
+and annotation CSV problems, see the main
+[troubleshooting guide](../docs/troubleshooting.md).
+
 ## Supported Platforms
 
 Marketplace builds currently bundle `dcmview` binaries for:

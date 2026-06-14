@@ -11,7 +11,7 @@ Date: 2026-06-14
 ## Phase Status
 
 - Phase 1: Command-Line Self-Service - complete.
-- Phase 2: Troubleshooting Guide - pending.
+- Phase 2: Troubleshooting Guide - complete.
 - Phase 3: Configuration Reference - pending.
 - Phase 4: Python Wrapper Reference - pending.
 - Phase 5: Internal API Documentation - pending.
@@ -37,6 +37,14 @@ Date: 2026-06-14
   user-facing help.
 - Aligned the README CLI reference with the Rust and Python help text, including
   value names, remote SSH forwarding, and the `python -m dcmview_py` invocation.
+- Added `docs/troubleshooting.md` with symptom, likely cause, and fix guidance
+  for install failures, binary resolution, source build prerequisites, discovery
+  failures, skipped files, unsupported transfer syntaxes, port conflicts,
+  browser launch failures, SSH tunnel issues, VS Code interception confusion,
+  VS Code binary launch failures, and annotation CSV validation errors.
+- Linked troubleshooting from the README install, quick start, and reporting
+  sections.
+- Linked troubleshooting from `vscode/README.md` for extension users.
 
 ## Blockers
 
@@ -55,15 +63,26 @@ Date: 2026-06-14
 - `DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo test --locked launcher_cli_flags_exist_on_clap_contract` - passed; hidden integration flag remains part of the clap contract.
 - `PYTHONPATH=python python -m dcmview_py --help` - passed by inspection; help explains each option, includes remote workflow examples, and does not show `--startup-json`.
 - `python -m unittest discover -s python/tests` - passed; 51 tests run, 1 skipped.
+- `grep -n "troubleshooting" README.md vscode/README.md` - passed; both user
+  entry points link to the guide.
+- `grep -n "PHI" docs/troubleshooting.md` - passed; guide explicitly warns that
+  public reports must not include PHI or sensitive DICOM content.
+- `rg -n "Symptom:|Likely cause:|Fix:" docs/troubleshooting.md` - passed; each
+  troubleshooting entry uses the planned structure.
+- `rg -n "SECURITY.md|dcmview --no-browser" docs/troubleshooting.md` - passed;
+  the guide links back to the top-level security policy and keeps the manual
+  remote workflow command readable.
+- `git diff --check -- docs/troubleshooting.md README.md vscode/README.md CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `README.md`, `python/dcmview_py/__main__.py`,
-  `python/tests/test_wrapper.py`, and `CURRENT_PROGRESS.md` for the Python CLI
-  help and README CLI alignment slice.
+- Commit `docs/troubleshooting.md`, `README.md`, `vscode/README.md`, and
+  `CURRENT_PROGRESS.md` for the troubleshooting guide slice.
 
 ## Next Recommended Action
 
-- Start Phase 2 by adding `docs/troubleshooting.md` with symptom, likely cause,
-  fix, and safe no-PHI issue-reporting guidance for the planned troubleshooting
-  entries.
+- Start Phase 3 by adding `docs/configuration.md` to centralize Rust CLI flags,
+  Python wrapper parameters, Python module CLI flags, VS Code settings, runtime
+  environment variables, build/development variables, and binary resolution
+  precedence.
