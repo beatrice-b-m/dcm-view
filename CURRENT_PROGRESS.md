@@ -18,7 +18,7 @@ Date: 2026-06-14
 - Phase 6: Documentation Navigation - complete.
 - Phase 7: README Landing Page Cleanup - complete.
 - Phase 8: Public Project Hygiene - complete.
-- Phase 9: Homebrew v0.2.7 Preparation - pending.
+- Phase 9: Homebrew v0.2.7 Preparation - complete.
 - Phase 10: Visual Onboarding - blocked on approved non-sensitive dataset.
 
 ## Completed Work
@@ -117,6 +117,13 @@ Date: 2026-06-14
 - Added `.github/pull_request_template.md` with summary, verification,
   documentation, safety/data-hygiene, area-specific checks, and follow-up
   prompts.
+- Added a `Homebrew v0.2.7 checklist` section to `docs/releasing.md` covering
+  tap repository setup, the `HOMEBREW_TAP_REPOSITORY` repository variable, the
+  `HOMEBREW_TAP_TOKEN` secret, release workflow validation, post-publication
+  `brew audit` and `brew test` checks, and the rule that public Homebrew install
+  commands wait until the tap has a working formula.
+- Confirmed the README still describes Homebrew distribution as planned for
+  `v0.2.7` and not currently configured.
 
 ## Blockers
 
@@ -252,16 +259,19 @@ PY` - passed by inspection; help now includes arguments, return values,
   safety/data-hygiene, and area-specific checklist prompts.
 - `git diff --check -- .github/pull_request_template.md CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `rg -n 'Homebrew|HOMEBREW_TAP_REPOSITORY|HOMEBREW_TAP_TOKEN|brew audit|brew test|planned for the `v0\.2\.7`' README.md docs/releasing.md`
+  - passed; release docs now include the Homebrew checklist and owner-side
+  prerequisites, while the README says Homebrew is planned but not configured.
+- `git diff --check -- docs/releasing.md CURRENT_PROGRESS.md` - passed; command
+  emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `.github/pull_request_template.md` and `CURRENT_PROGRESS.md` for the
-  Phase 8 pull request template slice.
+- Commit `docs/releasing.md` and `CURRENT_PROGRESS.md` for the Phase 9 Homebrew
+  release-prep checklist slice.
 
 ## Next Recommended Action
 
-- Start Phase 9 by adding the `v0.2.7` Homebrew checklist to
-  `docs/releasing.md`, including owner-side prerequisites for
-  `HOMEBREW_TAP_REPOSITORY`, `HOMEBREW_TAP_TOKEN`, and tap repository setup,
-  while keeping public docs clear that Homebrew is planned but not currently
-  available.
+- Phase 10 remains blocked until an approved public, non-sensitive dataset is
+  selected for screenshots or GIFs. Do not start visual onboarding work until
+  that dataset approval is recorded.

@@ -37,6 +37,36 @@ VS Code Marketplace publishing is handled in Azure DevOps:
 The Azure pipeline uses Microsoft Entra ID with workload identity federation and
 publishes only VSIX assets that already exist on the GitHub Release.
 
+## Homebrew v0.2.7 checklist
+
+Homebrew publication is planned for `v0.2.7`, but public install commands should
+not be added to the README or release notes until the tap exists and a release
+has published a formula successfully.
+
+Before tagging `v0.2.7`:
+
+- Create or select the Homebrew tap repository that will receive
+  `Formula/dcmview.rb`.
+- Set the repository variable `HOMEBREW_TAP_REPOSITORY` to the tap repository in
+  `owner/repo` form.
+- Add the repository secret `HOMEBREW_TAP_TOKEN` with push access to the tap
+  repository.
+- Confirm the tap repository accepts commits from GitHub Actions and does not
+  require branch protection rules that the release workflow cannot satisfy.
+- Confirm the generated formula artifact from a dry run or previous release
+  contains both macOS archive URLs and SHA-256 checksums.
+
+During the `v0.2.7` release:
+
+- Verify the `Render Homebrew formula` step uploads the `homebrew-formula`
+  artifact.
+- Verify the `publish-homebrew-tap` job runs when `HOMEBREW_TAP_REPOSITORY` is
+  set and commits `Formula/dcmview.rb` to the tap.
+- Run `brew audit --strict --online dcmview` and `brew test dcmview` from the
+  tap repository after publication.
+- Add public Homebrew install commands only after the tap contains a working
+  formula for the tagged release.
+
 ## Standard release flow
 
 1. Regenerate fixtures if they changed:
