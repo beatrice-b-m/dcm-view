@@ -28,6 +28,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::{futures::Notified, Notify};
+#[cfg(feature = "debug-api")]
+use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -299,7 +301,7 @@ fn is_non_loopback_bind(ip: std::net::IpAddr) -> bool {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/", get(index_handler))
         .route("/assets/{*path}", get(asset_handler))
         .route("/api/health", get(health_handler))
@@ -319,7 +321,12 @@ pub fn router(state: AppState) -> Router {
             get(export_annotations_handler),
         )
         .route("/api/file/{index}/tags", get(tags_handler))
-        .with_state(state)
+        .with_state(state);
+
+    #[cfg(feature = "debug-api")]
+    let router = router.layer(CorsLayer::permissive());
+
+    router
 }
 
 pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json::Result<String> {

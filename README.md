@@ -276,6 +276,11 @@ The browser UI uses a small local HTTP API. This API is internal to the viewer
 and is not a stable public integration surface; use it only for `dcmview`
 debugging and test automation.
 
+Production builds do not enable cross-origin browser API access for external
+debugging tools. To debug the viewer API from another browser origin, build with
+`cargo build --features debug-api`; this enables permissive CORS and prints a
+build warning. Do not enable `debug-api` outside `dcmview` debugging contexts.
+
 Static frontend assets are served at `/` and `/assets/*`.
 
 | Method | Path | Description |

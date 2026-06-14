@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "science", "visualization"]
 
 [features]
 default = []
+debug-api = []
 debug-embed = ["rust-embed/debug-embed"]
 remote-fixtures = ["dep:dicom-test-files"]
 

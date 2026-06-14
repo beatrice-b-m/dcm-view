@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    if debug_api_enabled() {
+        println!(
+            "cargo:warning=The dcmview debug-api feature enables permissive API CORS for debugging. Never enable it outside dcmview debugging contexts."
+        );
+    }
+
     // Emit cargo:rerun-if-changed for every file in frontend/src/ recursively,
     // plus the config and lock files. Cargo's directory-level watch does not
     // recurse into subdirectories, so we walk the tree ourselves.
@@ -40,6 +46,10 @@ fn main() {
     }
 
     run_npm(&npm_bin, ["run", "build"]);
+}
+
+fn debug_api_enabled() -> bool {
+    std::env::var_os("CARGO_FEATURE_DEBUG_API").is_some()
 }
 
 fn fatal(message: &str) -> ! {
