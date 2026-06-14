@@ -105,6 +105,9 @@ Date: 2026-06-14
 - Referenced the existing VS Code Marketplace-focused changelog from the new
   root changelog.
 - Linked the root changelog from `docs/index.md`.
+- Added `.github/ISSUE_TEMPLATE/bug_report.md` with a structured reproducible
+  bug report flow and explicit no-PHI, no-sensitive-DICOM, redaction, and
+  non-clinical-use guidance.
 
 ## Blockers
 
@@ -210,13 +213,18 @@ PY` - passed by inspection; help now includes arguments, return values,
   files are discoverable.
 - `git diff --check -- CHANGELOG.md docs/index.md CURRENT_PROGRESS.md` -
   passed; command emitted the existing macOS temp-dir warning only.
+- `rg -n "PHI|sensitive|DICOM|redact|clinical" .github/ISSUE_TEMPLATE/bug_report.md`
+  - passed; the bug report template includes no-PHI, no-sensitive-DICOM,
+  redaction, and non-clinical-use guidance.
+- `git diff --cached --check` - passed after staging the bug report template
+  and tracker update; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `CHANGELOG.md`, `docs/index.md`, and `CURRENT_PROGRESS.md` for the
-  Phase 8 root changelog slice.
+- Commit `.github/ISSUE_TEMPLATE/bug_report.md` and `CURRENT_PROGRESS.md` for
+  the Phase 8 bug report issue template slice.
 
 ## Next Recommended Action
 
-- Continue Phase 8 by adding `.github/ISSUE_TEMPLATE/bug_report.md` with strong
-  no-PHI/no-sensitive-DICOM reporting guidance.
+- Continue Phase 8 by adding `.github/ISSUE_TEMPLATE/dicom_compatibility.md`
+  with strong no-PHI/no-sensitive-DICOM compatibility reporting guidance.
