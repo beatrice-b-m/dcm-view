@@ -26,19 +26,95 @@ def _package_version() -> str:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-	parser = argparse.ArgumentParser(prog="python -m dcmview_py")
+	parser = argparse.ArgumentParser(
+		prog="python -m dcmview_py",
+		description=(
+			"Start a temporary local web server for inspecting DICOM files, "
+			"directories, image frames, tags, and optional ROI annotations. "
+			"dcmview is intended for research and development inspection, not "
+			"clinical diagnosis."
+		),
+		formatter_class=argparse.RawDescriptionHelpFormatter,
+		epilog="""\
+Examples:
+  python -m dcmview_py ./scan.dcm
+  python -m dcmview_py ./study_dir
+  python -m dcmview_py --no-recursive ./study_dir
+  python -m dcmview_py --no-browser --host 127.0.0.1 --port 8010 ./study_dir
+  ssh -L 8010:127.0.0.1:8010 user@remote
+  python -m dcmview_py --annotations ./rois.csv ./study_dir
+  python -m dcmview_py --filter Modality=CT --filter PatientID=phantom ./study_dir
+
+For remote use, run dcmview on the machine that has the DICOM files, keep the
+server bound to 127.0.0.1, and forward the chosen port over SSH.
+""",
+	)
 	parser.add_argument("--version", action="version", version=f"dcmview {_package_version()}")
-	parser.add_argument("paths", nargs="+", help="One or more DICOM file or directory paths")
-	parser.add_argument("-p", "--port", type=int, default=0)
-	parser.add_argument("--host", default="127.0.0.1")
-	parser.add_argument("--no-browser", action="store_true")
-	parser.add_argument("--tunnel", action="store_true")
-	parser.add_argument("--tunnel-host")
-	parser.add_argument("--tunnel-port", type=int, default=0)
-	parser.add_argument("--timeout", type=int)
-	parser.add_argument("--no-recursive", action="store_true")
-	parser.add_argument("--annotations")
-	parser.add_argument("--filter", action="append", default=[])
+	parser.add_argument(
+		"paths",
+		metavar="PATH",
+		nargs="+",
+		help="DICOM file or directory to inspect; repeat for multiple inputs",
+	)
+	parser.add_argument(
+		"-p",
+		"--port",
+		metavar="PORT",
+		type=int,
+		default=0,
+		help="local HTTP port to bind; 0 selects an available port",
+	)
+	parser.add_argument(
+		"--host",
+		metavar="ADDR",
+		default="127.0.0.1",
+		help="local interface to bind; keep 127.0.0.1 unless you understand the network exposure",
+	)
+	parser.add_argument(
+		"--no-browser",
+		action="store_true",
+		help="print the viewer URL instead of opening a browser automatically",
+	)
+	parser.add_argument(
+		"--tunnel",
+		action="store_true",
+		help="start an SSH local port-forward helper after the viewer starts",
+	)
+	parser.add_argument(
+		"--tunnel-host",
+		metavar="SSH_HOST",
+		help="SSH host used with --tunnel, for example user@example.org",
+	)
+	parser.add_argument(
+		"--tunnel-port",
+		metavar="PORT",
+		type=int,
+		default=0,
+		help="local forwarded port for --tunnel; 0 reuses the viewer port",
+	)
+	parser.add_argument(
+		"--timeout",
+		metavar="SECONDS",
+		type=int,
+		help="exit after this many seconds without API or browser requests",
+	)
+	parser.add_argument(
+		"--no-recursive",
+		action="store_true",
+		help="scan only the top level of input directories",
+	)
+	parser.add_argument(
+		"--annotations",
+		metavar="CSV",
+		help="load EMBED-style ROI annotations from CSV without modifying the file",
+	)
+	parser.add_argument(
+		"--filter",
+		metavar="FIELD=VALUE",
+		action="append",
+		default=[],
+		help="include only files whose metadata field contains the value; repeatable",
+	)
 	return parser
 
 

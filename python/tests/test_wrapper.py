@@ -71,6 +71,24 @@ class WrapperTests(unittest.TestCase):
 		self.assertEqual(context.exception.code, 0)
 		self.assertEqual(output.getvalue().strip(), "dcmview 9.8.7")
 
+	def test_module_cli_help_describes_options_and_examples(self) -> None:
+		parser = dcmview_main._build_parser()
+		output = StringIO()
+		with redirect_stdout(output):
+			with self.assertRaises(SystemExit) as context:
+				parser.parse_args(["--help"])
+
+		self.assertEqual(context.exception.code, 0)
+		help_text = output.getvalue()
+		self.assertIn("DICOM file or directory to inspect", help_text)
+		self.assertIn("--host ADDR", help_text)
+		self.assertIn("--tunnel-host SSH_HOST", help_text)
+		self.assertIn("--annotations CSV", help_text)
+		self.assertIn("--filter FIELD=VALUE", help_text)
+		self.assertIn("ssh -L 8010:127.0.0.1:8010 user@remote", help_text)
+		self.assertIn("not clinical diagnosis", help_text)
+		self.assertNotIn("--startup-json", help_text)
+
 	def test_missing_binary_raises_runtime_error(self) -> None:
 		with mock.patch.dict(os.environ, {}, clear=True):
 			with mock.patch("dcmview_py.wrapper.shutil.which", return_value=None):

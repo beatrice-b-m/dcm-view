@@ -238,21 +238,25 @@ are zero-based and must be less than `NumberOfFrames`.
 
 ```text
 dcmview [OPTIONS] <PATH> [PATH ...]
+python -m dcmview_py [OPTIONS] <PATH> [PATH ...]
 ```
+
+The Python module CLI forwards the same options to the underlying `dcmview`
+binary.
 
 | Option | Default | Description |
 |---|---:|---|
-| `<PATH>...` | required | DICOM files or directories to inspect |
-| `-p, --port <u16>` | `0` | Bind port; `0` auto-assigns an available port |
-| `--host <addr>` | `127.0.0.1` | Bind address |
-| `--no-browser` | false | Do not open the browser automatically |
-| `--timeout <seconds>` | none | Exit after this many seconds without API/browser requests |
-| `--no-recursive` | false | Scan only the top level of input directories |
-| `--filter <FIELD=VALUE>` | none | Include only DICOM files whose metadata field contains the value; repeatable |
-| `--tunnel` | false | Start an SSH local port-forward helper |
-| `--tunnel-host <host>` | none | SSH target used with `--tunnel` |
-| `--tunnel-port <u16>` | `0` | Forwarded local port; `0` uses the server port |
-| `--annotations <csv>` | none | Load EMBED-style ROI annotations |
+| `<PATH>...` | required | DICOM file or directory to inspect; repeat for multiple inputs |
+| `-p, --port <PORT>` | `0` | Local HTTP port to bind; `0` selects an available port |
+| `--host <ADDR>` | `127.0.0.1` | Local interface to bind; keep `127.0.0.1` unless you understand the network exposure |
+| `--no-browser` | `false` | Print the viewer URL instead of opening a browser automatically |
+| `--timeout <SECONDS>` | none | Exit after this many seconds without API or browser requests |
+| `--no-recursive` | `false` | Scan only the top level of input directories |
+| `--filter <FIELD=VALUE>` | none | Include only files whose metadata field contains the value; repeatable |
+| `--tunnel` | `false` | Start an SSH local port-forward helper after the viewer starts |
+| `--tunnel-host <SSH_HOST>` | none | SSH host used with `--tunnel`, for example `user@example.org` |
+| `--tunnel-port <PORT>` | `0` | Local forwarded port for `--tunnel`; `0` reuses the viewer port |
+| `--annotations <CSV>` | none | Load EMBED-style ROI annotations from CSV without modifying the file |
 
 Examples:
 
@@ -260,9 +264,11 @@ Examples:
 dcmview ./scan.dcm
 dcmview --no-recursive ./study_dir
 dcmview --host 127.0.0.1 --port 8888 --no-browser ./study_dir
+ssh -L 8888:127.0.0.1:8888 user@remote
 dcmview --timeout 300 ./study_dir
 dcmview --annotations ./embed_annotations.csv ./study_dir
 dcmview --filter modality=MR --filter patient_id=1234 ./archive_dir
+python -m dcmview_py --no-browser --timeout 120 ./study_dir
 ```
 
 Filter fields are `patient_id`, `patient_name`, `study_description`,
