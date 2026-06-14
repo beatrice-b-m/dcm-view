@@ -14,7 +14,7 @@ Date: 2026-06-14
 - Phase 2: Troubleshooting Guide - complete.
 - Phase 3: Configuration Reference - complete.
 - Phase 4: Python Wrapper Reference - complete.
-- Phase 5: Internal API Documentation - pending.
+- Phase 5: Internal API Documentation - complete.
 - Phase 6: Documentation Navigation - pending.
 - Phase 7: README Landing Page Cleanup - pending.
 - Phase 8: Public Project Hygiene - pending.
@@ -64,6 +64,13 @@ Date: 2026-06-14
   informative.
 - Linked the Python reference from the README Python and CLI sections, the VS
   Code README bridge guidance, and PyPI project metadata.
+- Added `docs/api.md` documenting the viewer-internal HTTP API as a debugging
+  and test-automation surface, including endpoint summaries, progressive
+  `/api/files` scan fields, polling guidance, display-frame cache behavior,
+  raw-frame metadata headers, tag value shapes, annotation semantics, error
+  statuses, and the debugging-only `debug-api` feature.
+- Linked the README HTTP API section to the dedicated internal API reference
+  without doing the broader Phase 7 README cleanup.
 
 ## Blockers
 
@@ -117,16 +124,24 @@ PY` - passed by inspection; help now includes arguments, return values,
   Python reference.
 - `git diff --check -- docs/python.md README.md vscode/README.md pyproject.toml python/dcmview_py/wrapper.py python/tests/test_wrapper.py CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `grep -n "internal to the viewer" docs/api.md README.md` - passed; both the
+  dedicated API reference and README mark the API as viewer-internal.
+- `grep -n "scan_complete" docs/api.md` - passed; progressive scan completion
+  and polling behavior are documented.
+- `grep -n "X-Frame-Rows" docs/api.md` - passed; raw-frame metadata headers are
+  documented.
+- `DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --features debug-api --locked` -
+  passed; build emitted the existing macOS `xcrun` temp-dir warning and the
+  intended `debug-api` permissive-CORS warning.
+- `git diff --check -- docs/api.md README.md CURRENT_PROGRESS.md` - passed;
+  command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `docs/python.md`, `python/dcmview_py/wrapper.py`,
-  `python/tests/test_wrapper.py`, `README.md`, `vscode/README.md`,
-  `pyproject.toml`, and `CURRENT_PROGRESS.md` for the Python wrapper reference
-  slice.
+- Commit `docs/api.md`, `README.md`, and `CURRENT_PROGRESS.md` for the internal
+  API documentation slice.
 
 ## Next Recommended Action
 
-- Start Phase 5 by adding `docs/api.md` for the viewer-internal HTTP API,
-  including progressive scan fields, polling behavior, cache headers, raw-frame
-  metadata headers, error semantics, and the debugging-only `debug-api` feature.
+- Start Phase 6 by adding `docs/index.md` and linking it from README and VS Code
+  documentation so the expanded documentation set is navigable.

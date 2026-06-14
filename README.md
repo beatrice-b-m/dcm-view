@@ -294,7 +294,10 @@ multiple filters are combined with AND semantics.
 
 The browser UI uses a small local HTTP API. This API is internal to the viewer
 and is not a stable public integration surface; use it only for `dcmview`
-debugging and test automation.
+debugging and test automation. See the
+[internal API reference](docs/api.md) for the fuller endpoint contract,
+progressive scan fields, cache headers, raw-frame metadata headers, and error
+semantics.
 
 Production builds do not enable cross-origin browser API access for external
 debugging tools. To debug the viewer API from another browser origin, build with
