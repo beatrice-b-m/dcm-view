@@ -17,7 +17,7 @@ Date: 2026-06-14
 - Phase 5: Internal API Documentation - complete.
 - Phase 6: Documentation Navigation - complete.
 - Phase 7: README Landing Page Cleanup - complete.
-- Phase 8: Public Project Hygiene - in progress.
+- Phase 8: Public Project Hygiene - complete.
 - Phase 9: Homebrew v0.2.7 Preparation - pending.
 - Phase 10: Visual Onboarding - blocked on approved non-sensitive dataset.
 
@@ -114,6 +114,9 @@ Date: 2026-06-14
 - Added `.github/ISSUE_TEMPLATE/feature_request.md` with enhancement-request
   prompts for problem, proposed behavior, alternatives, scope, and explicit
   no-PHI/no-sensitive-DICOM guardrails.
+- Added `.github/pull_request_template.md` with summary, verification,
+  documentation, safety/data-hygiene, area-specific checks, and follow-up
+  prompts.
 
 ## Blockers
 
@@ -241,13 +244,24 @@ PY` - passed by inspection; help now includes arguments, return values,
   behavior, existing workaround, and affected surface.
 - `git diff --check -- .github/ISSUE_TEMPLATE/feature_request.md CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `rg -n "PHI|sensitive|DICOM" CONTRIBUTING.md .github/ISSUE_TEMPLATE .github/pull_request_template.md`
+  - passed; contributor and GitHub templates continue to include no-PHI,
+  no-sensitive-DICOM, and sensitive-data guidance.
+- `rg -n "Verification|Documentation|Safety And Data Hygiene|cargo fmt|typecheck|debug-api" .github/pull_request_template.md`
+  - passed; the pull request template includes verification, docs,
+  safety/data-hygiene, and area-specific checklist prompts.
+- `git diff --check -- .github/pull_request_template.md CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `.github/ISSUE_TEMPLATE/feature_request.md` and
-  `CURRENT_PROGRESS.md` for the Phase 8 feature request issue template slice.
+- Commit `.github/pull_request_template.md` and `CURRENT_PROGRESS.md` for the
+  Phase 8 pull request template slice.
 
 ## Next Recommended Action
 
-- Continue Phase 8 by adding `.github/pull_request_template.md` with
-  tests/docs/security checklist items and no-PHI/no-sensitive-DICOM guidance.
+- Start Phase 9 by adding the `v0.2.7` Homebrew checklist to
+  `docs/releasing.md`, including owner-side prerequisites for
+  `HOMEBREW_TAP_REPOSITORY`, `HOMEBREW_TAP_TOKEN`, and tap repository setup,
+  while keeping public docs clear that Homebrew is planned but not currently
+  available.
