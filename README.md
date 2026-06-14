@@ -76,7 +76,8 @@ Build prerequisites for source installs:
 If install or binary discovery fails, see the
 [troubleshooting guide](docs/troubleshooting.md). For all CLI, Python, VS Code,
 and environment settings, see the
-[configuration reference](docs/configuration.md).
+[configuration reference](docs/configuration.md). For the full documentation
+map, see the [documentation index](docs/index.md).
 
 ## Quick Start
 

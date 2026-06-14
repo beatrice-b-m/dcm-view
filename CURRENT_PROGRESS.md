@@ -15,7 +15,7 @@ Date: 2026-06-14
 - Phase 3: Configuration Reference - complete.
 - Phase 4: Python Wrapper Reference - complete.
 - Phase 5: Internal API Documentation - complete.
-- Phase 6: Documentation Navigation - pending.
+- Phase 6: Documentation Navigation - complete.
 - Phase 7: README Landing Page Cleanup - pending.
 - Phase 8: Public Project Hygiene - pending.
 - Phase 9: Homebrew v0.2.7 Preparation - pending.
@@ -71,6 +71,15 @@ Date: 2026-06-14
   statuses, and the debugging-only `debug-api` feature.
 - Linked the README HTTP API section to the dedicated internal API reference
   without doing the broader Phase 7 README cleanup.
+- Added `docs/index.md` to group the documentation set into user guides,
+  Python, VS Code, API/debugging, development/release, and internal planning
+  notes.
+- Linked the documentation index from the README install guidance and VS Code
+  README so users can navigate to configuration, troubleshooting, Python,
+  VS Code, API/debugging, and release references.
+- Kept internal planning documents in place for this slice and labeled them as
+  maintainer-oriented notes from the docs index; no file moves were needed for
+  the navigation outcome.
 
 ## Blockers
 
@@ -135,13 +144,24 @@ PY` - passed by inspection; help now includes arguments, return values,
   intended `debug-api` permissive-CORS warning.
 - `git diff --check -- docs/api.md README.md CURRENT_PROGRESS.md` - passed;
   command emitted the existing macOS temp-dir warning only.
+- `rg -n "\\]\\(" README.md docs vscode/README.md` - passed by inspection;
+  relative documentation links are visible across README, docs, and the VS Code
+  README.
+- `grep -n "documentation index" README.md vscode/README.md` - passed; both
+  public entry points link to `docs/index.md`.
+- `grep -n "Internal Planning Notes" docs/index.md` - passed; maintainer notes
+  are grouped separately from user-facing guides.
+- `git diff --check -- docs/index.md README.md vscode/README.md CURRENT_PROGRESS.md`
+  - passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `docs/api.md`, `README.md`, and `CURRENT_PROGRESS.md` for the internal
-  API documentation slice.
+- Commit `docs/index.md`, `README.md`, `vscode/README.md`, and
+  `CURRENT_PROGRESS.md` for the documentation navigation slice.
 
 ## Next Recommended Action
 
-- Start Phase 6 by adding `docs/index.md` and linking it from README and VS Code
-  documentation so the expanded documentation set is navigable.
+- Start Phase 7 by tightening the README landing page: keep the user-facing
+  overview, install matrix, quick start, remote workflow, Python pointer, VS
+  Code pointer, annotations summary, troubleshooting link, and reporting
+  guidance while moving remaining long-form detail to dedicated docs.

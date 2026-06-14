@@ -21,7 +21,9 @@ and annotation CSV problems, see the main
 resolution order, and bridge environment variables, see the
 [configuration reference](../docs/configuration.md). For Python scripts and
 notebooks that may route through the VS Code bridge, see the
-[Python reference](../docs/python.md).
+[Python reference](../docs/python.md). The main
+[documentation index](../docs/index.md) links the user, configuration,
+troubleshooting, API/debugging, development, and release references.
 
 ## Supported Platforms
 
