@@ -99,6 +99,12 @@ Date: 2026-06-14
   fixture policy, documentation expectations, pull request expectations, and
   explicit no-PHI/no-sensitive-DICOM guidance.
 - Linked the contributor guide from `docs/index.md`.
+- Added a top-level `CHANGELOG.md` with an Unreleased section covering
+  user-visible CLI, Python, VS Code, API/debugging, documentation, and packaging
+  changes.
+- Referenced the existing VS Code Marketplace-focused changelog from the new
+  root changelog.
+- Linked the root changelog from `docs/index.md`.
 
 ## Blockers
 
@@ -196,14 +202,21 @@ PY` - passed by inspection; help now includes arguments, return values,
   index.
 - `git diff --check -- CONTRIBUTING.md docs/index.md CURRENT_PROGRESS.md` -
   passed; command emitted the existing macOS temp-dir warning only.
+- `rg -n "Unreleased|vscode/CHANGELOG.md|CLI|Python|VS Code|API And Debugging|Documentation And Packaging" CHANGELOG.md`
+  - passed; the root changelog has an Unreleased section, public-surface
+  headings, and references the VS Code changelog.
+- `rg -n "Changelog|CHANGELOG" docs/index.md CHANGELOG.md vscode/CHANGELOG.md`
+  - passed; the documentation index links the root changelog and both changelog
+  files are discoverable.
+- `git diff --check -- CHANGELOG.md docs/index.md CURRENT_PROGRESS.md` -
+  passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `CONTRIBUTING.md`, `docs/index.md`, and `CURRENT_PROGRESS.md` for the
-  first Phase 8 public project hygiene slice.
+- Commit `CHANGELOG.md`, `docs/index.md`, and `CURRENT_PROGRESS.md` for the
+  Phase 8 root changelog slice.
 
 ## Next Recommended Action
 
-- Continue Phase 8 by adding a top-level `CHANGELOG.md` with an Unreleased
-  section for user-visible CLI, Python, VS Code, API/debug, and packaging
-  changes, and reference the existing VS Code changelog if present.
+- Continue Phase 8 by adding `.github/ISSUE_TEMPLATE/bug_report.md` with strong
+  no-PHI/no-sensitive-DICOM reporting guidance.

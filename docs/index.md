@@ -45,6 +45,8 @@ or metadata unless they are fully de-identified and approved for public use.
 - [Contributing](../CONTRIBUTING.md): contributor setup, test expectations,
   fixture policy, documentation expectations, pull request guidance, and
   no-PHI reporting rules.
+- [Changelog](../CHANGELOG.md): user-visible CLI, Python, VS Code, API/debug,
+  documentation, and packaging changes.
 - [Development reference](development.md): source builds, frontend proxy
   workflow, test commands, fixture policy, architecture notes, and cache
   budgets.
