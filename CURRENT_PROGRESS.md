@@ -17,7 +17,7 @@ Date: 2026-06-14
 - Phase 5: Internal API Documentation - complete.
 - Phase 6: Documentation Navigation - complete.
 - Phase 7: README Landing Page Cleanup - complete.
-- Phase 8: Public Project Hygiene - pending.
+- Phase 8: Public Project Hygiene - in progress.
 - Phase 9: Homebrew v0.2.7 Preparation - pending.
 - Phase 10: Visual Onboarding - blocked on approved non-sensitive dataset.
 
@@ -95,6 +95,10 @@ Date: 2026-06-14
   behavior, frontend proxy workflow, Rust and frontend checks, Python wrapper
   tests, fixture policy, architecture summary, and cache budget guidance.
 - Linked the annotation and development references from `docs/index.md`.
+- Added `CONTRIBUTING.md` with contributor setup, relevant test commands,
+  fixture policy, documentation expectations, pull request expectations, and
+  explicit no-PHI/no-sensitive-DICOM guidance.
+- Linked the contributor guide from `docs/index.md`.
 
 ## Blockers
 
@@ -184,15 +188,22 @@ PY` - passed by inspection; help now includes arguments, return values,
   relative links include the new annotation and development references.
 - `git diff --check -- README.md docs/annotations.md docs/development.md docs/index.md CURRENT_PROGRESS.md`
   - passed; command emitted the existing macOS temp-dir warning only.
+- `rg -n "PHI|sensitive|DICOM" CONTRIBUTING.md` - passed; contributor guide
+  explicitly covers DICOM data, PHI, sensitive reports, fixture policy, and PR
+  confirmation.
+- `rg -n "Contributing|CONTRIBUTING" docs/index.md CONTRIBUTING.md README.md`
+  - passed; the contributor guide exists and is linked from the documentation
+  index.
+- `git diff --check -- CONTRIBUTING.md docs/index.md CURRENT_PROGRESS.md` -
+  passed; command emitted the existing macOS temp-dir warning only.
 
 ## Commit-Ready Summary
 
-- Commit `README.md`, `docs/annotations.md`, `docs/development.md`,
-  `docs/index.md`, and `CURRENT_PROGRESS.md` for the README landing page
-  cleanup slice.
+- Commit `CONTRIBUTING.md`, `docs/index.md`, and `CURRENT_PROGRESS.md` for the
+  first Phase 8 public project hygiene slice.
 
 ## Next Recommended Action
 
-- Start Phase 8 by adding a focused `CONTRIBUTING.md` with setup, test
-  commands, fixture policy, documentation expectations, and no-PHI issue
-  guidance.
+- Continue Phase 8 by adding a top-level `CHANGELOG.md` with an Unreleased
+  section for user-visible CLI, Python, VS Code, API/debug, and packaging
+  changes, and reference the existing VS Code changelog if present.

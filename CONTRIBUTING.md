@@ -1,0 +1,119 @@
+# Contributing to dcmview
+
+`dcmview` is a temporary DICOM inspection tool for research and development
+workflows. It is not for clinical diagnosis or clinical decision-making.
+
+## Privacy And Safety
+
+DICOM files, screenshots, logs, paths, metadata, and annotation CSVs can contain
+PHI, patient identifiers, study identifiers, institution names, hostnames, or
+other sensitive research data. Do not post that material in public issues,
+pull requests, discussions, or logs unless it is fully de-identified and
+approved for public sharing.
+
+Use synthetic fixtures, redacted logs, or minimal reproduction steps whenever
+possible. Report suspected security vulnerabilities privately; see
+[SECURITY.md](SECURITY.md).
+
+## Development Setup
+
+Prerequisites:
+
+- Rust stable 1.75+
+- Node.js 18+ and npm for frontend builds
+- Python 3 for wrapper tests
+- `ssh` only when testing tunnel behavior
+
+Install frontend dependencies:
+
+```bash
+npm --prefix frontend ci
+```
+
+Build the Rust binary:
+
+```bash
+cargo build
+```
+
+During backend-only development, you may skip the frontend rebuild only when
+`frontend/dist/index.html` already exists:
+
+```bash
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
+```
+
+See the [development reference](docs/development.md) for the full source-build,
+frontend proxy, architecture, and release workflow notes.
+
+## Tests And Checks
+
+Run the checks that match the area you changed:
+
+```bash
+cargo fmt --all
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
+cargo test --locked
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+python -m unittest discover -s python/tests
+npm --prefix vscode run compile
+```
+
+Use targeted Rust tests while iterating, then broaden coverage when changing
+shared contracts, server behavior, pixel decoding, generated types, packaging,
+or release workflows.
+
+For `debug-api` changes, also run:
+
+```bash
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --features debug-api --locked
+```
+
+## Fixture Policy
+
+Committed DICOM fixtures live in `tests/fixtures/` and are intentionally small,
+synthetic, and generated from repository code:
+
+```bash
+cargo run --example generate_test_fixtures
+```
+
+Do not commit real clinical data, institutional data, screenshots of real data,
+or unapproved downloaded DICOM files. Integration tests should exercise the real
+DICOM layer with generated fixtures instead of mocking decoding, metadata, or
+transport behavior.
+
+Remote fixture coverage is feature-gated because it can download or cache data:
+
+```bash
+cargo test --features remote-fixtures --test integration -- --ignored
+```
+
+## Documentation Expectations
+
+Update documentation when a change affects install paths, CLI flags, Python
+wrapper behavior, VS Code settings, environment variables, HTTP API behavior,
+annotation CSV semantics, release steps, or troubleshooting guidance.
+
+Useful entry points:
+
+- [Documentation index](docs/index.md)
+- [Configuration reference](docs/configuration.md)
+- [Troubleshooting guide](docs/troubleshooting.md)
+- [Python reference](docs/python.md)
+- [Internal API reference](docs/api.md)
+- [Release process](docs/releasing.md)
+
+## Pull Requests
+
+Keep pull requests focused on one coherent change. Include:
+
+- The behavior or documentation changed.
+- The tests or checks run.
+- Any known limitations or follow-up work.
+- Confirmation that no PHI, sensitive DICOM data, sensitive screenshots, or
+  unredacted logs are included.
+
+Use the existing Rust, Svelte, Python, and VS Code patterns in the repository.
+Avoid unrelated refactors when fixing a bug or adding a narrowly scoped feature.

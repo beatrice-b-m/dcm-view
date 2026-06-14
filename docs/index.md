@@ -42,6 +42,9 @@ or metadata unless they are fully de-identified and approved for public use.
 
 ## Development And Release
 
+- [Contributing](../CONTRIBUTING.md): contributor setup, test expectations,
+  fixture policy, documentation expectations, pull request guidance, and
+  no-PHI reporting rules.
 - [Development reference](development.md): source builds, frontend proxy
   workflow, test commands, fixture policy, architecture notes, and cache
   budgets.
