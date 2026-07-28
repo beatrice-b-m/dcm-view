@@ -5,8 +5,12 @@ use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
 use std::fs;
 use std::io::{Seek, Write};
 use std::path::Path;
+use std::time::Duration;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
+
+const DISCOVERY_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn discover_options(recursive: bool) -> DiscoverOptions {
     DiscoverOptions {
@@ -97,6 +101,106 @@ async fn progressive_discovery_applies_backpressure_and_reports_each_disposition
     assert_eq!(report.files_found, 1);
     assert_eq!(report.skipped, 1);
     assert_eq!(report.filtered, 1);
+}
+
+#[tokio::test]
+async fn progressive_discovery_stops_before_work_when_pre_cancelled() {
+    let dir = tempdir().expect("temp dir");
+    copy_golden_discovery_fixtures(dir.path(), 4);
+
+    let cancellation = loader::DiscoveryCancellation::new();
+    cancellation.cancel();
+    let (events_tx, mut events_rx) = mpsc::channel(1);
+
+    let result = timeout(
+        DISCOVERY_TEST_TIMEOUT,
+        loader::discover_progressive_with_cancellation(
+            &[dir.path().to_path_buf()],
+            discover_options(true),
+            events_tx,
+            cancellation,
+        ),
+    )
+    .await
+    .expect("pre-cancelled discovery should terminate promptly");
+
+    assert_discovery_cancelled(
+        result.expect_err("pre-cancelled discovery should fail"),
+        loader::DiscoveryCancellationReason::Requested,
+    );
+    assert!(
+        events_rx.try_recv().is_err(),
+        "pre-cancelled discovery must not emit events"
+    );
+}
+
+#[tokio::test]
+async fn progressive_discovery_stops_when_event_receiver_is_closed() {
+    let dir = tempdir().expect("temp dir");
+    copy_golden_discovery_fixtures(dir.path(), 4);
+
+    let (events_tx, events_rx) = mpsc::channel(1);
+    drop(events_rx);
+
+    let result = timeout(
+        DISCOVERY_TEST_TIMEOUT,
+        loader::discover_progressive_with_cancellation(
+            &[dir.path().to_path_buf()],
+            discover_options(true),
+            events_tx,
+            loader::DiscoveryCancellation::new(),
+        ),
+    )
+    .await
+    .expect("receiver-closed discovery should terminate promptly");
+
+    assert_discovery_cancelled(
+        result.expect_err("receiver-closed discovery should fail"),
+        loader::DiscoveryCancellationReason::EventReceiverClosed,
+    );
+}
+
+#[tokio::test]
+async fn progressive_discovery_cancels_while_bounded_channel_is_full() {
+    let dir = tempdir().expect("temp dir");
+    copy_golden_discovery_fixtures(dir.path(), 64);
+
+    let cancellation = loader::DiscoveryCancellation::new();
+    let scan_cancellation = cancellation.clone();
+    let scan_path = dir.path().to_path_buf();
+    let (events_tx, mut events_rx) = mpsc::channel(1);
+    let scan = tokio::spawn(async move {
+        loader::discover_progressive_with_cancellation(
+            &[scan_path],
+            discover_options(true),
+            events_tx,
+            scan_cancellation,
+        )
+        .await
+    });
+
+    timeout(DISCOVERY_TEST_TIMEOUT, events_rx.recv())
+        .await
+        .expect("discovery should emit its first event")
+        .expect("event channel should remain open");
+    timeout(DISCOVERY_TEST_TIMEOUT, async {
+        while events_rx.capacity() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("bounded event channel should fill");
+
+    cancellation.cancel();
+    let result = timeout(DISCOVERY_TEST_TIMEOUT, scan)
+        .await
+        .expect("mid-stream cancellation should terminate promptly")
+        .expect("progressive scan task should not panic");
+
+    assert_discovery_cancelled(
+        result.expect_err("cancelled discovery should fail"),
+        loader::DiscoveryCancellationReason::Requested,
+    );
 }
 
 #[tokio::test]
@@ -257,6 +361,39 @@ fn rejects_unknown_filter_field() {
     assert!(error.contains("FIELD is one of"));
     assert!(error.contains("patient_id"));
     assert!(error.contains("modality"));
+}
+
+fn assert_discovery_cancelled(
+    error: anyhow::Error,
+    expected_reason: loader::DiscoveryCancellationReason,
+) {
+    assert!(
+        loader::is_discovery_cancelled(&error),
+        "cancellation helper should recognize typed error: {error:#}"
+    );
+    assert_eq!(
+        loader::discovery_cancellation_reason(&error),
+        Some(expected_reason)
+    );
+    assert_eq!(
+        error
+            .downcast_ref::<loader::DiscoveryCancelled>()
+            .expect("typed cancellation error")
+            .reason(),
+        expected_reason
+    );
+}
+
+fn copy_golden_discovery_fixtures(directory: &Path, count: usize) {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("golden-no-pixels-sr.dcm");
+
+    for index in 0..count {
+        fs::copy(&fixture, directory.join(format!("fixture-{index:03}.dcm")))
+            .expect("copy generated DICOM fixture");
+    }
 }
 
 fn write_test_dicom(

@@ -8,10 +8,17 @@ use std::fs::File;
 use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use thiserror::Error;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::task;
 use walkdir::WalkDir;
+
+const DISCOVERY_SEND_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 
 #[derive(Debug, Clone)]
 pub struct DiscoverOptions {
@@ -143,6 +150,66 @@ pub struct DiscoveryReport {
     pub searched_recursive: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl DiscoveryCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryCancellationReason {
+    Requested,
+    EventReceiverClosed,
+}
+
+impl std::fmt::Display for DiscoveryCancellationReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Requested => formatter.write_str("cancellation requested"),
+            Self::EventReceiverClosed => formatter.write_str("event receiver closed"),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("DICOM discovery cancelled: {reason}")]
+pub struct DiscoveryCancelled {
+    reason: DiscoveryCancellationReason,
+}
+
+impl DiscoveryCancelled {
+    fn new(reason: DiscoveryCancellationReason) -> Self {
+        Self { reason }
+    }
+
+    pub fn reason(&self) -> DiscoveryCancellationReason {
+        self.reason
+    }
+}
+
+pub fn is_discovery_cancelled(error: &anyhow::Error) -> bool {
+    discovery_cancellation_reason(error).is_some()
+}
+
+pub fn discovery_cancellation_reason(error: &anyhow::Error) -> Option<DiscoveryCancellationReason> {
+    error
+        .downcast_ref::<DiscoveryCancelled>()
+        .map(DiscoveryCancelled::reason)
+}
+
 pub async fn discover(paths: &[PathBuf], options: DiscoverOptions) -> Result<LoadReport> {
     let paths = paths.to_vec();
     task::spawn_blocking(move || discover_blocking(&paths, &options))
@@ -155,17 +222,54 @@ pub async fn discover_progressive(
     options: DiscoverOptions,
     events: mpsc::Sender<DiscoveryEvent>,
 ) -> Result<DiscoveryReport> {
-    let paths = paths.to_vec();
-    task::spawn_blocking(move || discover_progressive_blocking(&paths, &options, events))
+    discover_progressive_with_cancellation(paths, options, events, DiscoveryCancellation::new())
         .await
-        .context("loader worker panicked")?
+}
+
+pub async fn discover_progressive_with_cancellation(
+    paths: &[PathBuf],
+    options: DiscoverOptions,
+    events: mpsc::Sender<DiscoveryEvent>,
+    cancellation: DiscoveryCancellation,
+) -> Result<DiscoveryReport> {
+    let paths = paths.to_vec();
+    task::spawn_blocking(move || {
+        discover_progressive_blocking(&paths, &options, events, &cancellation)
+    })
+    .await
+    .context("loader worker panicked")?
 }
 
 fn collect_candidates(paths: &[PathBuf], options: &DiscoverOptions) -> (Vec<PathBuf>, usize) {
+    collect_candidates_with_check(paths, options, || Ok(()))
+        .expect("infallible candidate collection check failed")
+}
+
+fn collect_progressive_candidates(
+    paths: &[PathBuf],
+    options: &DiscoverOptions,
+    events: &mpsc::Sender<DiscoveryEvent>,
+    cancellation: &DiscoveryCancellation,
+) -> std::result::Result<(Vec<PathBuf>, usize), DiscoveryCancelled> {
+    collect_candidates_with_check(paths, options, || {
+        ensure_discovery_active(events, cancellation)
+    })
+}
+
+fn collect_candidates_with_check<F>(
+    paths: &[PathBuf],
+    options: &DiscoverOptions,
+    mut check_active: F,
+) -> std::result::Result<(Vec<PathBuf>, usize), DiscoveryCancelled>
+where
+    F: FnMut() -> std::result::Result<(), DiscoveryCancelled>,
+{
     let mut candidates = Vec::new();
     let mut skipped = 0_usize;
 
     for path in paths {
+        check_active()?;
+
         if path.is_file() {
             candidates.push(path.clone());
             continue;
@@ -177,7 +281,12 @@ fn collect_candidates(paths: &[PathBuf], options: &DiscoverOptions) -> (Vec<Path
                 walker = walker.max_depth(1);
             }
 
-            for entry in walker.into_iter() {
+            let mut entries = walker.into_iter();
+            loop {
+                check_active()?;
+                let Some(entry) = entries.next() else {
+                    break;
+                };
                 match entry {
                     Ok(dir_entry) if dir_entry.path().is_file() => {
                         candidates.push(dir_entry.path().to_path_buf());
@@ -199,7 +308,8 @@ fn collect_candidates(paths: &[PathBuf], options: &DiscoverOptions) -> (Vec<Path
         );
     }
 
-    (candidates, skipped)
+    check_active()?;
+    Ok((candidates, skipped))
 }
 
 fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<LoadReport> {
@@ -246,37 +356,51 @@ fn discover_progressive_blocking(
     paths: &[PathBuf],
     options: &DiscoverOptions,
     events: mpsc::Sender<DiscoveryEvent>,
+    cancellation: &DiscoveryCancellation,
 ) -> Result<DiscoveryReport> {
-    let (candidates, initial_skipped) = collect_candidates(paths, options);
+    let (candidates, initial_skipped) =
+        collect_progressive_candidates(paths, options, &events, cancellation)?;
     for _ in 0..initial_skipped {
-        let _ = events.blocking_send(DiscoveryEvent::Skipped);
+        send_discovery_event(&events, cancellation, DiscoveryEvent::Skipped)?;
     }
 
     let files_found = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(initial_skipped);
     let filtered = AtomicUsize::new(0);
 
-    candidates
+    let processing_result: std::result::Result<(), DiscoveryCancelled> = candidates
         .par_iter()
-        .for_each_with(events, |events, candidate| match build_entry(candidate) {
-            Ok(Some(entry)) if matches_filters(&entry, &options.filters) => {
-                files_found.fetch_add(1, Ordering::Relaxed);
-                let _ = events.blocking_send(DiscoveryEvent::File(Box::new(entry)));
+        .try_for_each_with(events.clone(), |events, candidate| {
+            ensure_discovery_active(events, cancellation)?;
+
+            match build_entry(candidate) {
+                Ok(Some(entry)) if matches_filters(&entry, &options.filters) => {
+                    send_discovery_event(
+                        events,
+                        cancellation,
+                        DiscoveryEvent::File(Box::new(entry)),
+                    )?;
+                    files_found.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Some(_)) => {
+                    send_discovery_event(events, cancellation, DiscoveryEvent::Filtered)?;
+                    filtered.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(None) => {
+                    send_discovery_event(events, cancellation, DiscoveryEvent::Skipped)?;
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => {
+                    send_discovery_event(events, cancellation, DiscoveryEvent::Skipped)?;
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
+                }
             }
-            Ok(Some(_)) => {
-                filtered.fetch_add(1, Ordering::Relaxed);
-                let _ = events.blocking_send(DiscoveryEvent::Filtered);
-            }
-            Ok(None) => {
-                skipped.fetch_add(1, Ordering::Relaxed);
-                let _ = events.blocking_send(DiscoveryEvent::Skipped);
-            }
-            Err(error) => {
-                skipped.fetch_add(1, Ordering::Relaxed);
-                let _ = events.blocking_send(DiscoveryEvent::Skipped);
-                eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
-            }
+
+            Ok(())
         });
+    processing_result?;
+    ensure_discovery_active(&events, cancellation)?;
 
     Ok(DiscoveryReport {
         files_found: files_found.load(Ordering::Relaxed),
@@ -284,6 +408,45 @@ fn discover_progressive_blocking(
         filtered: filtered.load(Ordering::Relaxed),
         searched_recursive: options.recursive,
     })
+}
+
+fn ensure_discovery_active(
+    events: &mpsc::Sender<DiscoveryEvent>,
+    cancellation: &DiscoveryCancellation,
+) -> std::result::Result<(), DiscoveryCancelled> {
+    if cancellation.is_cancelled() {
+        return Err(DiscoveryCancelled::new(
+            DiscoveryCancellationReason::Requested,
+        ));
+    }
+    if events.is_closed() {
+        return Err(DiscoveryCancelled::new(
+            DiscoveryCancellationReason::EventReceiverClosed,
+        ));
+    }
+    Ok(())
+}
+
+fn send_discovery_event(
+    events: &mpsc::Sender<DiscoveryEvent>,
+    cancellation: &DiscoveryCancellation,
+    mut event: DiscoveryEvent,
+) -> std::result::Result<(), DiscoveryCancelled> {
+    loop {
+        ensure_discovery_active(events, cancellation)?;
+        match events.try_send(event) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(unsent_event)) => {
+                event = unsent_event;
+                thread::park_timeout(DISCOVERY_SEND_RETRY_INTERVAL);
+            }
+            Err(TrySendError::Closed(_)) => {
+                return Err(DiscoveryCancelled::new(
+                    DiscoveryCancellationReason::EventReceiverClosed,
+                ));
+            }
+        }
+    }
 }
 
 fn matches_filters(entry: &FileEntry, filters: &[ScanFilter]) -> bool {
