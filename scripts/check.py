@@ -216,13 +216,7 @@ class CheckRunner:
 
 	def quick(self) -> None:
 		self.versions()
-		self.install_frontend()
-		run(
-			"Check generated frontend contracts",
-			[self.npm, "--prefix", "frontend", "run", "check:contracts"],
-		)
-		run("Typecheck Svelte and TypeScript", [self.npm, "--prefix", "frontend", "run", "typecheck"])
-		run("Run frontend behavior tests", [self.npm, "--prefix", "frontend", "run", "test"])
+		self.frontend()
 		self.rust_lint()
 		self.python_unit()
 
