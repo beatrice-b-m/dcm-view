@@ -282,16 +282,17 @@ async fn run() -> Result<i32> {
         last_request: Arc::new(AtomicU64::new(now_unix_ms())),
     };
 
-    spawn_progressive_discovery(
-        cli.paths.clone(),
-        !cli.no_recursive,
-        cli.filters.clone(),
+    ProgressiveDiscovery {
+        input_paths: cli.paths.clone(),
+        recursive: !cli.no_recursive,
+        filters: cli.filters.clone(),
         annotation_source,
         registry,
         annotation_store,
-        shutdown_notify.clone(),
-        exit_code.clone(),
-    );
+        shutdown_notify: shutdown_notify.clone(),
+        exit_code: exit_code.clone(),
+    }
+    .spawn();
 
     let run_result = server::run(
         ServerConfig {
@@ -575,14 +576,14 @@ fn discover_vscode_bridge_registry_endpoints_from_dir(
         "scanning bridge registry dir {}",
         registry_dir.display()
     ));
-    if !registry_dir_is_trusted(&registry_dir) {
+    if !registry_dir_is_trusted(registry_dir) {
         bridge_debug(&format!(
             "registry dir untrusted or missing: {}",
             registry_dir.display()
         ));
         return Vec::new();
     }
-    let Ok(entries) = fs::read_dir(&registry_dir) else {
+    let Ok(entries) = fs::read_dir(registry_dir) else {
         bridge_debug(&format!(
             "registry dir unreadable: {}",
             registry_dir.display()
@@ -720,7 +721,7 @@ fn remove_vscode_bridge_registry_endpoint(endpoint: &BridgeEndpoint) {
 }
 
 fn remove_vscode_bridge_registry_endpoint_from_dir(endpoint: &BridgeEndpoint, registry_dir: &Path) {
-    if !registry_dir_is_trusted(&registry_dir) {
+    if !registry_dir_is_trusted(registry_dir) {
         return;
     }
     let Ok(entries) = fs::read_dir(registry_dir) else {
@@ -913,7 +914,7 @@ fn fallback_to_local_viewer(args: &[String]) -> Result<i32> {
     Ok(status.code().unwrap_or(1))
 }
 
-fn spawn_progressive_discovery(
+struct ProgressiveDiscovery {
     input_paths: Vec<PathBuf>,
     recursive: bool,
     filters: Vec<loader::ScanFilter>,
@@ -922,106 +923,120 @@ fn spawn_progressive_discovery(
     annotation_store: annotations::AnnotationStore,
     shutdown_notify: Arc<Notify>,
     exit_code: Arc<AtomicI32>,
-) {
-    tokio::spawn(async move {
-        let (events_tx, mut events_rx) = mpsc::channel(DISCOVERY_EVENT_CAPACITY);
-        let scan_paths = input_paths.clone();
-        let filters_for_message = filters.clone();
-        let scan = tokio::spawn(async move {
-            loader::discover_progressive(
-                &scan_paths,
-                loader::DiscoverOptions { recursive, filters },
-                events_tx,
-            )
-            .await
-        });
+}
 
-        while let Some(event) = events_rx.recv().await {
-            match event {
-                loader::DiscoveryEvent::File(file) => {
-                    registry.record_scanned();
-                    let annotations = if let Some(source) = annotation_source.as_ref() {
-                        match source.annotations_for_file(&file) {
-                            Ok(annotations) => annotations,
-                            Err(error) => {
+impl ProgressiveDiscovery {
+    fn spawn(self) {
+        tokio::spawn(async move {
+            let Self {
+                input_paths,
+                recursive,
+                filters,
+                annotation_source,
+                registry,
+                annotation_store,
+                shutdown_notify,
+                exit_code,
+            } = self;
+            let (events_tx, mut events_rx) = mpsc::channel(DISCOVERY_EVENT_CAPACITY);
+            let scan_paths = input_paths.clone();
+            let filters_for_message = filters.clone();
+            let scan = tokio::spawn(async move {
+                loader::discover_progressive(
+                    &scan_paths,
+                    loader::DiscoverOptions { recursive, filters },
+                    events_tx,
+                )
+                .await
+            });
+
+            while let Some(event) = events_rx.recv().await {
+                match event {
+                    loader::DiscoveryEvent::File(file) => {
+                        registry.record_scanned();
+                        let annotations = if let Some(source) = annotation_source.as_ref() {
+                            match source.annotations_for_file(&file) {
+                                Ok(annotations) => annotations,
+                                Err(error) => {
+                                    eprintln!("{error:#}");
+                                    exit_code.store(1, Ordering::Relaxed);
+                                    shutdown_notify.notify_one();
+                                    return;
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        let index = registry.insert(*file);
+                        if let Some(annotations) = annotations {
+                            if let Err(error) =
+                                annotation_store.insert_csv_if_unedited(index, annotations)
+                            {
                                 eprintln!("{error:#}");
                                 exit_code.store(1, Ordering::Relaxed);
                                 shutdown_notify.notify_one();
                                 return;
                             }
                         }
-                    } else {
-                        None
-                    };
-                    let index = registry.insert(*file);
-                    if let Some(annotations) = annotations {
-                        if let Err(error) =
-                            annotation_store.insert_csv_if_unedited(index, annotations)
-                        {
-                            eprintln!("{error:#}");
-                            exit_code.store(1, Ordering::Relaxed);
-                            shutdown_notify.notify_one();
-                            return;
-                        }
                     }
-                }
-                loader::DiscoveryEvent::Skipped => {
-                    registry.record_skipped();
-                }
-                loader::DiscoveryEvent::Filtered => {
-                    registry.record_filtered();
+                    loader::DiscoveryEvent::Skipped => {
+                        registry.record_skipped();
+                    }
+                    loader::DiscoveryEvent::Filtered => {
+                        registry.record_filtered();
+                    }
                 }
             }
-        }
 
-        let scan_result = match scan.await {
-            Ok(result) => result,
-            Err(error) => Err(anyhow::anyhow!("loader worker panicked: {error}")),
-        };
+            let scan_result = match scan.await {
+                Ok(result) => result,
+                Err(error) => Err(anyhow::anyhow!("loader worker panicked: {error}")),
+            };
 
-        registry.mark_scan_complete();
-        match scan_result {
-            Ok(report) => {
-                let files = registry.files_snapshot();
-                if files.is_empty() {
-                    if report.filtered > 0 {
-                        eprintln!(
-                            "dcmview: no DICOM files matched active filters ({})",
-                            format_scan_filters(&filters_for_message)
-                        );
-                    } else {
-                        eprintln!("dcmview: no valid DICOM files found");
+            registry.mark_scan_complete();
+            match scan_result {
+                Ok(report) => {
+                    let files = registry.files_snapshot();
+                    if files.is_empty() {
+                        if report.filtered > 0 {
+                            eprintln!(
+                                "dcmview: no DICOM files matched active filters ({})",
+                                format_scan_filters(&filters_for_message)
+                            );
+                        } else {
+                            eprintln!("dcmview: no valid DICOM files found");
+                        }
+                        exit_code.store(1, Ordering::Relaxed);
+                        shutdown_notify.notify_one();
+                        return;
                     }
-                    exit_code.store(1, Ordering::Relaxed);
-                    shutdown_notify.notify_one();
-                    return;
-                }
 
-                if let Some(source) = annotation_source.as_ref() {
-                    let unmatched = source.unmatched_row_count(files.as_slice());
-                    if unmatched > 0 {
-                        eprintln!(
+                    if let Some(source) = annotation_source.as_ref() {
+                        let unmatched = source.unmatched_row_count(files.as_slice());
+                        if unmatched > 0 {
+                            eprintln!(
                             "dcmview: warning — {unmatched} annotation row(s) did not match discovered DICOM files"
                         );
+                        }
                     }
-                }
 
-                print_progressive_load_summary(
-                    files.len(),
-                    report.skipped,
-                    report.filtered,
-                    report.searched_recursive,
-                    &filters_for_message,
-                    &input_paths,
-                );
+                    print_progressive_load_summary(
+                        files.len(),
+                        report.skipped,
+                        report.filtered,
+                        report.searched_recursive,
+                        &filters_for_message,
+                        &input_paths,
+                    );
+                }
+                Err(error) => {
+                    eprintln!("failed to discover DICOM files: {error:#}");
+                    exit_code.store(1, Ordering::Relaxed);
+                    shutdown_notify.notify_one();
+                }
             }
-            Err(error) => {
-                eprintln!("failed to discover DICOM files: {error:#}");
-                exit_code.store(1, Ordering::Relaxed);
-                shutdown_notify.notify_one();
-            }
-        }
-    });
+        });
+    }
 }
 
 fn print_progressive_load_summary(
