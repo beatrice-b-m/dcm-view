@@ -2,20 +2,17 @@ mod bridge;
 
 use anyhow::{Context, Result};
 use bridge::{
-    bridge_debug, discover_vscode_bridge_endpoints, discover_vscode_bridge_registry_endpoints,
-    remove_vscode_bridge_registry_endpoint, BridgeEndpoint, BridgeLaunchRequest,
-    BridgeLaunchResponse, BridgeWaitResponse, RegistryMatch, VSCODE_BRIDGE_BYPASS_ENV,
+    discover_vscode_bridge_endpoints, run_vscode_bridge_client, run_vscode_bridge_launch,
+    RegistryMatch,
 };
 use clap::Parser;
 use dcmview::annotations;
 use dcmview::loader;
-use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
+use dcmview::server::{self, AppState, ServerConfig, TunnelConfig};
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 const DISCOVERY_EVENT_CAPACITY: usize = 64;
@@ -135,21 +132,6 @@ struct Cli {
     vscode_bridge_client: Option<Vec<String>>,
 }
 
-#[derive(Debug, thiserror::Error)]
-enum BridgeLaunchError {
-    #[error("failed to contact VS Code bridge: {0}")]
-    Connect(String),
-    #[error("VS Code bridge returned {status}: {message}")]
-    Http {
-        status: reqwest::StatusCode,
-        message: String,
-    },
-    #[error("failed to parse VS Code bridge launch response: {0}")]
-    Decode(String),
-    #[error("VS Code bridge request failed: {0}")]
-    Request(String),
-}
-
 fn parse_scan_filter(raw: &str) -> std::result::Result<loader::ScanFilter, String> {
     raw.parse()
 }
@@ -267,219 +249,6 @@ async fn run() -> Result<i32> {
             }
         }
     }
-}
-
-async fn run_vscode_bridge_client(values: Vec<String>) -> Result<i32> {
-    let Some((program, args)) = values.split_first() else {
-        return Ok(1);
-    };
-
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let bridge_endpoints = discover_vscode_bridge_endpoints(&cwd, RegistryMatch::AllowAny);
-    if bridge_endpoints.is_empty() {
-        return fallback_to_local_viewer(args);
-    }
-
-    match run_vscode_bridge_launch(program, args, &bridge_endpoints).await {
-        Ok(exit_code) => Ok(exit_code),
-        Err(error) => {
-            eprintln!(
-                "dcmview: VS Code bridge unavailable ({error}); falling back to local viewer"
-            );
-            fallback_to_local_viewer(args)
-        }
-    }
-}
-
-async fn run_vscode_bridge_launch(
-    program: &str,
-    args: &[String],
-    bridge_endpoints: &[BridgeEndpoint],
-) -> Result<i32> {
-    let client = reqwest::Client::builder()
-        .build()
-        .context("failed to create VS Code bridge HTTP client")?;
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let registry_endpoints =
-        discover_vscode_bridge_registry_endpoints(&cwd, RegistryMatch::AllowAny, now_unix_ms());
-    let launch = BridgeLaunchRequest {
-        program: program.to_string(),
-        args: args.to_vec(),
-        cwd: cwd.display().to_string(),
-        wait: false,
-        binary_path: env::current_exe()
-            .ok()
-            .map(|path| path.display().to_string()),
-    };
-
-    let mut last_error = None;
-    for endpoint in bridge_endpoints {
-        match launch_vscode_session(&client, endpoint, &launch).await {
-            Ok(launch_response) => {
-                return match wait_for_launched_vscode_session(&client, endpoint, launch_response)
-                    .await
-                {
-                    Ok(exit_code) => Ok(exit_code),
-                    Err(error) => {
-                        eprintln!(
-                            "dcmview: VS Code bridge session was captured but wait failed: {error}"
-                        );
-                        Ok(1)
-                    }
-                };
-            }
-            Err(error) => {
-                if should_remove_registry_entry_after_launch_error(
-                    &error,
-                    endpoint,
-                    &registry_endpoints,
-                ) {
-                    remove_vscode_bridge_registry_endpoint(endpoint);
-                }
-                bridge_debug(&format!("endpoint {} failed: {error}", endpoint.url));
-                last_error = Some(anyhow::Error::from(error));
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no VS Code bridge endpoints available")))
-}
-
-async fn launch_vscode_session(
-    client: &reqwest::Client,
-    endpoint: &BridgeEndpoint,
-    launch: &BridgeLaunchRequest,
-) -> Result<BridgeLaunchResponse, BridgeLaunchError> {
-    let launch_url = format!("{}/launch", endpoint.url.trim_end_matches('/'));
-    let response = match client
-        .post(launch_url)
-        .bearer_auth(&endpoint.token)
-        .json(launch)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(error) if error.is_connect() || error.is_timeout() => {
-            return Err(BridgeLaunchError::Connect(error.to_string()));
-        }
-        Err(error) => return Err(BridgeLaunchError::Request(error.to_string())),
-    };
-    if !response.status().is_success() {
-        let status = response.status();
-        let message = bridge_error_response_message(response).await;
-        return Err(BridgeLaunchError::Http { status, message });
-    }
-    response
-        .json::<BridgeLaunchResponse>()
-        .await
-        .map_err(|error| BridgeLaunchError::Decode(error.to_string()))
-}
-
-async fn bridge_error_response_message(response: reqwest::Response) -> String {
-    let status = response.status();
-    let Ok(text) = response.text().await else {
-        return status.to_string();
-    };
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(error) = value.get("error").and_then(|value| value.as_str()) {
-            return error.to_string();
-        }
-    }
-    if text.is_empty() {
-        status.to_string()
-    } else {
-        text
-    }
-}
-
-fn should_remove_registry_entry_after_launch_error(
-    error: &BridgeLaunchError,
-    endpoint: &BridgeEndpoint,
-    registry_endpoints: &[BridgeEndpoint],
-) -> bool {
-    matches!(error, BridgeLaunchError::Connect(_)) && registry_endpoints.contains(endpoint)
-}
-
-async fn wait_for_launched_vscode_session(
-    client: &reqwest::Client,
-    endpoint: &BridgeEndpoint,
-    launch_response: BridgeLaunchResponse,
-) -> Result<i32> {
-    println!("dcmview: opened in VS Code at {}", launch_response.url);
-    let wait_url = format!(
-        "{}/sessions/{}/wait",
-        endpoint.url.trim_end_matches('/'),
-        launch_response.session_id
-    );
-    let stop_url = format!(
-        "{}/sessions/{}/stop",
-        endpoint.url.trim_end_matches('/'),
-        launch_response.session_id
-    );
-    let ctrl_c = tokio::signal::ctrl_c();
-
-    #[cfg(windows)]
-    let ctrl_break = async {
-        let mut signal =
-            tokio::signal::windows::ctrl_break().context("failed to listen for Ctrl+Break")?;
-        signal.recv().await;
-        Ok::<(), anyhow::Error>(())
-    };
-
-    #[cfg(not(windows))]
-    let ctrl_break = std::future::pending::<Result<()>>();
-
-    tokio::select! {
-        wait_result = wait_for_vscode_session(client, &wait_url, &endpoint.token) => wait_result,
-        signal_result = ctrl_c => {
-            signal_result.context("failed to listen for Ctrl+C")?;
-            let _ = client
-                .post(stop_url)
-                .bearer_auth(&endpoint.token)
-                .timeout(Duration::from_secs(5))
-                .send()
-                .await;
-            Ok(130)
-        },
-        signal_result = ctrl_break => {
-            signal_result?;
-            let _ = client
-                .post(stop_url)
-                .bearer_auth(&endpoint.token)
-                .timeout(Duration::from_secs(5))
-                .send()
-                .await;
-            Ok(130)
-        }
-    }
-}
-
-async fn wait_for_vscode_session(
-    client: &reqwest::Client,
-    wait_url: &str,
-    token: &str,
-) -> Result<i32> {
-    let response = client
-        .get(wait_url)
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("failed to wait for VS Code dcmview session")?;
-    if !response.status().is_success() {
-        return Ok(1);
-    }
-    let wait_response = response.json::<BridgeWaitResponse>().await?;
-    Ok(wait_response.exit_code.unwrap_or(0))
-}
-
-fn fallback_to_local_viewer(args: &[String]) -> Result<i32> {
-    let status = Command::new(env::current_exe().context("failed to resolve current executable")?)
-        .args(args)
-        .env(VSCODE_BRIDGE_BYPASS_ENV, "1")
-        .status()
-        .context("failed to run local dcmview fallback")?;
-    Ok(status.code().unwrap_or(1))
 }
 
 struct ProgressiveDiscovery {
@@ -702,37 +471,5 @@ mod tests {
                 flags.insert(flag);
             }
         }
-    }
-
-    #[test]
-    fn bridge_launch_cleanup_uses_typed_error_signal() {
-        let registry_endpoint = BridgeEndpoint {
-            url: "http://127.0.0.1:1111".to_string(),
-            token: "registry-token".to_string(),
-        };
-        let env_endpoint = BridgeEndpoint {
-            url: "http://127.0.0.1:2222".to_string(),
-            token: "env-token".to_string(),
-        };
-        let registry_endpoints = vec![registry_endpoint.clone()];
-
-        assert!(should_remove_registry_entry_after_launch_error(
-            &BridgeLaunchError::Connect("connection refused".to_string()),
-            &registry_endpoint,
-            &registry_endpoints,
-        ));
-        assert!(!should_remove_registry_entry_after_launch_error(
-            &BridgeLaunchError::Connect("connection refused".to_string()),
-            &env_endpoint,
-            &registry_endpoints,
-        ));
-        assert!(!should_remove_registry_entry_after_launch_error(
-            &BridgeLaunchError::Http {
-                status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-                message: "failed".to_string(),
-            },
-            &registry_endpoint,
-            &registry_endpoints,
-        ));
     }
 }

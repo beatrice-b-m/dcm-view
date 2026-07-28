@@ -2,26 +2,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BridgeLaunchRequest {
-    pub(crate) program: String,
-    pub(crate) args: Vec<String>,
-    pub(crate) cwd: String,
-    pub(crate) wait: bool,
+pub(super) struct BridgeLaunchRequest {
+    pub(super) program: String,
+    pub(super) args: Vec<String>,
+    pub(super) cwd: String,
+    pub(super) wait: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) binary_path: Option<String>,
+    pub(super) binary_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BridgeLaunchResponse {
-    pub(crate) session_id: String,
-    pub(crate) url: String,
+pub(super) struct BridgeLaunchResponse {
+    pub(super) session_id: String,
+    pub(super) url: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BridgeWaitResponse {
-    pub(crate) exit_code: Option<i32>,
+pub(super) struct BridgeWaitResponse {
+    pub(super) exit_code: Option<i32>,
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 const VSCODE_BRIDGE_URL_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_URL";
 const VSCODE_BRIDGE_TOKEN_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_TOKEN";
-pub(crate) const VSCODE_BRIDGE_BYPASS_ENV: &str = "DCMVIEW_VSCODE_BYPASS";
+pub(super) const VSCODE_BRIDGE_BYPASS_ENV: &str = "DCMVIEW_VSCODE_BYPASS";
 const VSCODE_BRIDGE_REGISTRY_DIR_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR";
 const VSCODE_BRIDGE_DEBUG_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_DEBUG";
 const BRIDGE_REGISTRY_MAX_AGE_MS: u64 = 3 * 60 * 60 * 1000;
@@ -168,7 +168,7 @@ fn select_bridge_endpoints(
     endpoints
 }
 
-pub(crate) fn discover_vscode_bridge_registry_endpoints(
+pub(super) fn discover_vscode_bridge_registry_endpoints(
     cwd: &Path,
     registry_match: RegistryMatch,
     now_ms: u64,
@@ -372,7 +372,7 @@ fn is_expired_registry_entry(created_at_ms: u64, now_ms: u64) -> bool {
         || now_ms.saturating_sub(created_at_ms) > BRIDGE_REGISTRY_MAX_AGE_MS
 }
 
-pub(crate) fn remove_vscode_bridge_registry_endpoint(endpoint: &BridgeEndpoint) {
+pub(super) fn remove_vscode_bridge_registry_endpoint(endpoint: &BridgeEndpoint) {
     let environment = RegistryEnvironment::capture();
     remove_vscode_bridge_registry_endpoint_in_environment(endpoint, &environment);
 }
@@ -496,7 +496,7 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     result
 }
 
-pub(crate) fn bridge_debug(message: &str) {
+pub(super) fn bridge_debug(message: &str) {
     log_bridge_debug(
         env::var(VSCODE_BRIDGE_DEBUG_ENV).as_deref() == Ok("1"),
         message,
