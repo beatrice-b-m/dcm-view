@@ -1,5 +1,6 @@
 import type { FilesResponse, FrameInfo, TagNode, WindowMode } from "./generated/api-types";
 import { RAW_FRAME_HEADERS } from "./generated/api-types";
+import type { RawFrame, RawFrameMetadata } from "./rawFrame";
 
 export type {
 	ErrorResponse,
@@ -11,6 +12,7 @@ export type {
 	WindowMode,
 	WindowPreset,
 } from "./generated/api-types";
+export type { RawFrame, RawFrameMetadata } from "./rawFrame";
 
 export interface EmbedRoiAnnotations {
 	num_roi: number;
@@ -81,13 +83,15 @@ export function annotationsExportUrl(): string {
 
 export function frameUrl(fileIndex: number, frame: number, wc?: number | null, ww?: number | null, windowMode?: WindowMode | null): string {
 	const url = new URL(`/api/file/${fileIndex}/frame/${frame}`, window.location.origin);
-	if (wc !== undefined && wc !== null) {
-		url.searchParams.set("wc", String(wc));
+	if (windowMode !== "full_dynamic") {
+		if (wc !== undefined && wc !== null) {
+			url.searchParams.set("wc", String(wc));
+		}
+		if (ww !== undefined && ww !== null) {
+			url.searchParams.set("ww", String(ww));
+		}
 	}
-	if (ww !== undefined && ww !== null) {
-		url.searchParams.set("ww", String(ww));
-	}
-	if (windowMode === 'full_dynamic') {
+	if (windowMode === "full_dynamic") {
 		url.searchParams.set("mode", "full_dynamic");
 	}
 	return `${url.pathname}${url.search}`;
@@ -99,15 +103,24 @@ export interface DisplayFrameWindowOptions {
 	windowMode?: WindowMode | null;
 }
 
+export function displayFrameWindowCacheKey(
+	options: DisplayFrameWindowOptions = {},
+): string {
+	if (options.windowMode === "full_dynamic") {
+		return "full_dynamic:none:none";
+	}
+	const wc = options.wc === null || options.wc === undefined ? "none" : String(options.wc);
+	const ww = options.ww === null || options.ww === undefined ? "none" : String(options.ww);
+	const mode = options.windowMode ?? "default";
+	return `${mode}:${wc}:${ww}`;
+}
+
 export function displayFrameCacheKey(
 	fileIndex: number,
 	frame: number,
 	options: DisplayFrameWindowOptions = {},
 ): string {
-	const wc = options.wc === null || options.wc === undefined ? 'none' : options.wc.toFixed(4);
-	const ww = options.ww === null || options.ww === undefined ? 'none' : options.ww.toFixed(4);
-	const mode = options.windowMode ?? 'default';
-	return `${fileIndex}:${frame}:${mode}:${wc}:${ww}`;
+	return `${fileIndex}:${frame}:${displayFrameWindowCacheKey(options)}`;
 }
 
 export async function fetchDisplayFrameBlob(
@@ -126,24 +139,6 @@ export async function fetchDisplayFrameBlob(
 	return response.blob();
 }
 
-export interface RawFrameMetadata {
-	rows: number;
-	columns: number;
-	bitsAllocated: number;
-	pixelRepresentation: number;
-	samplesPerPixel: number;
-	photometricInterpretation: string;
-	rescaleSlope: number;
-	rescaleIntercept: number;
-	defaultWc: number | null;
-	defaultWw: number | null;
-}
-
-export interface RawFrame {
-	metadata: RawFrameMetadata;
-	buffer: ArrayBuffer;
-}
-
 function requiredHeader(headers: Headers, name: string): string {
 	const value = headers.get(name);
 	if (value === null || value.trim() === "") {
@@ -153,15 +148,15 @@ function requiredHeader(headers: Headers, name: string): string {
 }
 
 function parseRequiredIntHeader(headers: Headers, name: string): number {
-	const value = Number.parseInt(requiredHeader(headers, name), 10);
-	if (!Number.isFinite(value)) {
+	const value = Number(requiredHeader(headers, name));
+	if (!Number.isInteger(value)) {
 		throw new Error(`raw frame response has invalid integer header ${name}`);
 	}
 	return value;
 }
 
 function parseRequiredFloatHeader(headers: Headers, name: string): number {
-	const value = Number.parseFloat(requiredHeader(headers, name));
+	const value = Number(requiredHeader(headers, name));
 	if (!Number.isFinite(value)) {
 		throw new Error(`raw frame response has invalid numeric header ${name}`);
 	}
@@ -173,7 +168,7 @@ function parseOptionalFloatHeader(headers: Headers, name: string): number | null
 	if (raw === null || raw.trim() === "") {
 		return null;
 	}
-	const value = Number.parseFloat(raw);
+	const value = Number(raw);
 	if (!Number.isFinite(value)) {
 		throw new Error(`raw frame response has invalid numeric header ${name}`);
 	}

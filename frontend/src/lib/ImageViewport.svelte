@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		displayFrameCacheKey,
+		displayFrameWindowCacheKey,
 		fetchAnnotations,
 		fetchDisplayFrameBlob,
 		fetchRawFrame,
@@ -25,7 +26,17 @@
 		type RoiCoord,
 		type RoiHandle,
 	} from "./annotationGeometry";
+	import {
+		renderRawFrameToRgba,
+		resolveDisplayWindow,
+		validateRenderableRawFrame,
+	} from "./rawWindowing";
 	import { DEFAULT_ORIENTATION, type ActiveTool, type ImageOrientation } from "./viewerTools";
+	import type {
+		WlRendererRequest,
+		WlRendererResponse,
+		WlRendererSuccess,
+	} from "./workers/wlRendererProtocol";
 
 	type PipelineMode = "cine" | "diagnostic_wl";
 	type TransformState = { scale: number; tx: number; ty: number; fit: boolean };
@@ -60,6 +71,7 @@
 		xmax: number;
 		frames: number[] | null;
 	};
+	type WlRenderedFrame = Pick<WlRendererSuccess, "width" | "height" | "bitmap">;
 
 	let {
 		files,
@@ -129,7 +141,7 @@
 	let workerAvailable = false;
 	let workerMessageId = 0;
 	let pendingWorkerResponses = new Map<number, {
-		resolve: (value: { width: number; height: number; bitmap: ImageBitmap }) => void;
+		resolve: (value: WlRenderedFrame) => void;
 		reject: (error: Error) => void;
 	}>();
 
@@ -137,7 +149,6 @@
 	const MAX_ZOOM = 64;
 	const ZOOM_STEPS = [0.05, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
 	const DEFAULT_TRANSFORM: TransformState = { scale: 1, tx: 0, ty: 0, fit: false };
-	const MAX_RENDER_PIXELS = 20_000_000;
 	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
 	const RAW_RING_RADIUS = 10;
 	const DISPLAY_CACHE_BYTE_BUDGET = 320 * 1024 * 1024;
@@ -222,14 +233,14 @@
 		for (let idx = 0; idx < annotations.roi_coords.length; idx += 1) {
 			const [ymin, xmin, ymax, xmax] = annotations.roi_coords[idx];
 			const frames = appliesToAllFrames ? null : annotations.roi_frames[idx] ?? [];
-			if (!appliesToAllFrames && !frames.includes(frameIndex)) continue;
+			if (frames !== null && !frames.includes(frameIndex)) continue;
 			visible.push({ index: idx, ymin, xmin, ymax, xmax, frames });
 		}
 		return visible;
 	}
 
 	function formatRoiFrames(frames: number[] | null): string {
-		if (isAllFrames(frames, activeFile?.frame_count ?? 0)) return "all frames";
+		if (frames === null || isAllFrames(frames, activeFile?.frame_count ?? 0)) return "all frames";
 		if (frames.length === 0) return "no frame mapping";
 		const preview = frames.slice(0, 6).join(", ");
 		return frames.length > 6 ? `frames ${preview}, …` : `frames ${preview}`;
@@ -353,10 +364,8 @@
 		workerInitAttempted = true;
 		try {
 			wlWorker = new Worker(new URL("./workers/wlRenderer.worker.ts", import.meta.url), { type: "module" });
-			wlWorker.onmessage = (event: MessageEvent) => {
-				const payload = event.data as
-					| { type: "rendered"; id: number; width: number; height: number; bitmap: ImageBitmap }
-					| { type: "error"; id: number; message: string };
+			wlWorker.onmessage = (event: MessageEvent<WlRendererResponse>) => {
+				const payload = event.data;
 				if (payload.type === "error") {
 					const pending = pendingWorkerResponses.get(payload.id);
 					if (!pending) return;
@@ -392,20 +401,18 @@
 		}
 		const id = ++workerMessageId;
 		const copiedBuffer = frame.buffer.slice(0);
-		const pending = new Promise<{ width: number; height: number; bitmap: ImageBitmap }>((resolve, reject) => {
+		const pending = new Promise<WlRenderedFrame>((resolve, reject) => {
 			pendingWorkerResponses.set(id, { resolve, reject });
 		});
-		wlWorker.postMessage(
-			{
-				type: "render",
-				id,
-				metadata: frame.metadata,
-				wc,
-				ww,
-				buffer: copiedBuffer,
-			},
-			[copiedBuffer],
-		);
+		const request: WlRendererRequest = {
+			type: "render",
+			id,
+			metadata: frame.metadata,
+			wc,
+			ww,
+			buffer: copiedBuffer,
+		};
+		wlWorker.postMessage(request, [copiedBuffer]);
 		const result = await pending;
 		return result.bitmap;
 	}
@@ -554,73 +561,7 @@
 	}
 
 	function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOptions): string {
-		const wc = options.wc === null || options.wc === undefined ? "none" : options.wc.toFixed(4);
-		const ww = options.ww === null || options.ww === undefined ? "none" : options.ww.toFixed(4);
-		const mode = options.windowMode ?? "default";
-		return `${fileIndex}:${mode}:${wc}:${ww}`;
-	}
-
-	function validateRenderableRawFrame(frame: RawFrame): string | null {
-		const { rows, columns, bitsAllocated, samplesPerPixel } = frame.metadata;
-		if (rows <= 0 || columns <= 0) {
-			return "Invalid raw frame dimensions";
-		}
-		if (samplesPerPixel !== 1) {
-			return `Unsupported SamplesPerPixel: ${samplesPerPixel}`;
-		}
-		if (bitsAllocated !== 8 && bitsAllocated !== 16) {
-			return `Unsupported BitsAllocated for viewport: ${bitsAllocated}`;
-		}
-		const numPixels = rows * columns;
-		if (!Number.isFinite(numPixels) || numPixels <= 0) {
-			return "Invalid raw frame pixel count";
-		}
-		if (numPixels > MAX_RENDER_PIXELS) {
-			return `Frame too large to render safely (${rows}×${columns})`;
-		}
-		const minExpectedBytes = numPixels * (bitsAllocated / 8);
-		if (frame.buffer.byteLength < minExpectedBytes) {
-			return "Raw frame buffer is shorter than expected for declared metadata";
-		}
-		return null;
-	}
-
-	function buildLut(
-		bitsAllocated: number,
-		pixelRepresentation: number,
-		rescaleSlope: number,
-		rescaleIntercept: number,
-		wc: number,
-		ww: number,
-		invert: boolean,
-	): Uint8Array {
-		const low = wc - ww / 2;
-		const high = wc + ww / 2;
-		const range = Math.max(high - low, 1e-10);
-
-		let minRaw: number;
-		let size: number;
-		if (bitsAllocated === 8) {
-			minRaw = 0;
-			size = 256;
-		} else if (pixelRepresentation === 1) {
-			minRaw = -32768;
-			size = 65536;
-		} else {
-			minRaw = 0;
-			size = 65536;
-		}
-
-		const lut = new Uint8Array(size);
-		for (let i = 0; i < size; i++) {
-			const raw = i + minRaw;
-			const modal = raw * rescaleSlope + rescaleIntercept;
-			let val = (modal - low) / range;
-			val = val < 0 ? 0 : val > 1 ? 1 : val;
-			if (invert) val = 1 - val;
-			lut[i] = Math.round(val * 255);
-		}
-		return lut;
+		return `${fileIndex}:${displayFrameWindowCacheKey(options)}`;
 	}
 
 	function renderRawFrameOnMainThread(
@@ -629,48 +570,13 @@
 		wc: number,
 		ww: number,
 	): void {
-		const { rows, columns, bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, photometricInterpretation } = frame.metadata;
+		const { rows, columns } = frame.metadata;
 		canvas.width = columns;
 		canvas.height = rows;
 		const ctx = canvas.getContext("2d", { alpha: false });
 		if (!ctx) return;
-		const invert = photometricInterpretation === "MONOCHROME1";
-		const lut = buildLut(bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, wc, Math.max(ww, 1), invert);
-		const numPixels = rows * columns;
 		const imageData = ctx.createImageData(columns, rows);
-		const rgba = imageData.data;
-
-		if (bitsAllocated === 8) {
-			const view = new Uint8Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) {
-				const g = lut[view[i]];
-				const o = i * 4;
-				rgba[o] = g;
-				rgba[o + 1] = g;
-				rgba[o + 2] = g;
-				rgba[o + 3] = 255;
-			}
-		} else if (pixelRepresentation === 1) {
-			const view = new Int16Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) {
-				const g = lut[view[i] + 32768];
-				const o = i * 4;
-				rgba[o] = g;
-				rgba[o + 1] = g;
-				rgba[o + 2] = g;
-				rgba[o + 3] = 255;
-			}
-		} else {
-			const view = new Uint16Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) {
-				const g = lut[view[i]];
-				const o = i * 4;
-				rgba[o] = g;
-				rgba[o + 1] = g;
-				rgba[o + 2] = g;
-				rgba[o + 3] = 255;
-			}
-		}
+		imageData.data.set(renderRawFrameToRgba(frame, wc, ww));
 		ctx.putImageData(imageData, 0, 0);
 	}
 
@@ -751,83 +657,6 @@
 		} finally {
 			URL.revokeObjectURL(fallbackUrl);
 		}
-	}
-
-	function resolveDisplayWindow(
-		frame: RawFrame,
-		liveWc: number | null,
-		liveWw: number | null,
-		wc: number | null,
-		ww: number | null,
-		mode: WindowMode,
-	): { wc: number; ww: number } {
-		if (mode === "full_dynamic") {
-			return computeFullDynamicWindow(frame);
-		}
-		if (liveWc !== null && liveWw !== null) {
-			return { wc: liveWc, ww: liveWw };
-		}
-		if (wc !== null && ww !== null) {
-			return { wc, ww };
-		}
-		const { defaultWc, defaultWw } = frame.metadata;
-		if (defaultWc !== null && defaultWw !== null) {
-			return { wc: defaultWc, ww: defaultWw };
-		}
-		return computePercentileWindow(frame);
-	}
-
-	function computeFullDynamicWindow(frame: RawFrame): { wc: number; ww: number } {
-		const { bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, rows, columns } = frame.metadata;
-		const numPixels = rows * columns;
-		let min = Infinity;
-		let max = -Infinity;
-		if (bitsAllocated === 8) {
-			const view = new Uint8Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) {
-				const v = view[i] * rescaleSlope + rescaleIntercept;
-				if (v < min) min = v;
-				if (v > max) max = v;
-			}
-		} else if (pixelRepresentation === 1) {
-			const view = new Int16Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) {
-				const v = view[i] * rescaleSlope + rescaleIntercept;
-				if (v < min) min = v;
-				if (v > max) max = v;
-			}
-		} else {
-			const view = new Uint16Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) {
-				const v = view[i] * rescaleSlope + rescaleIntercept;
-				if (v < min) min = v;
-				if (v > max) max = v;
-			}
-		}
-		if (!isFinite(min) || !isFinite(max)) return { wc: 128, ww: 256 };
-		const width = Math.max(max - min, 1);
-		return { wc: min + width / 2, ww: width };
-	}
-
-	function computePercentileWindow(frame: RawFrame): { wc: number; ww: number } {
-		const { bitsAllocated, pixelRepresentation, rescaleSlope, rescaleIntercept, rows, columns } = frame.metadata;
-		const numPixels = rows * columns;
-		const values = new Float64Array(numPixels);
-		if (bitsAllocated === 8) {
-			const view = new Uint8Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) values[i] = view[i] * rescaleSlope + rescaleIntercept;
-		} else if (pixelRepresentation === 1) {
-			const view = new Int16Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) values[i] = view[i] * rescaleSlope + rescaleIntercept;
-		} else {
-			const view = new Uint16Array(frame.buffer);
-			for (let i = 0; i < numPixels; i++) values[i] = view[i] * rescaleSlope + rescaleIntercept;
-		}
-		values.sort();
-		const p1 = values[Math.floor(numPixels * 0.01)];
-		const p99 = values[Math.min(Math.ceil(numPixels * 0.99), numPixels - 1)];
-		const width = Math.max(p99 - p1, 1);
-		return { wc: p1 + width / 2, ww: width };
 	}
 
 	function buildDirectionalFrameOrder(
@@ -1215,13 +1044,14 @@ function startDisplayPrefetch(
 
 	$effect(() => {
 		if (!viewportEl) return;
+		const element = viewportEl;
 		const updateViewportSize = () => {
-			const rect = viewportEl.getBoundingClientRect();
+			const rect = element.getBoundingClientRect();
 			viewportSize = { width: rect.width, height: rect.height };
 		};
 		updateViewportSize();
 		const observer = new ResizeObserver(updateViewportSize);
-		observer.observe(viewportEl);
+		observer.observe(element);
 		return () => observer.disconnect();
 	});
 
