@@ -16,9 +16,10 @@ python -m pip install dcmview-py
 python -m dcmview_py --help
 ```
 
-Supported wheels bundle the `dcmview` binary. On unsupported platforms, or when
-testing a local build, set `DCMVIEW_BINARY` to an absolute or user-expanded path
-to a compatible `dcmview` executable.
+Release automation builds bundled wheels for Linux x86_64
+(`manylinux_2_28_x86_64`), macOS x86_64, macOS arm64, and Windows x86_64. On
+other platforms, or when testing a local build, set `DCMVIEW_BINARY` to an
+absolute or user-expanded path to a compatible `dcmview` executable.
 
 ## Basic Use
 
@@ -61,6 +62,10 @@ provide:
 | Context manager | Calls `stop()` automatically on context exit. |
 
 `stop()` is idempotent for local handles after the process has already exited.
+It first requests graceful process shutdown and waits; the Rust startup
+lifecycle cancels and awaits any in-progress DICOM discovery before a normal
+server exit completes. If the process does not stop within the requested
+timeout, the wrapper escalates to terminate and then kill.
 
 ## Context Manager
 

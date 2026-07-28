@@ -1,10 +1,11 @@
 # Releasing `dcmview`
 
-Release automation is split across two workflows:
+Release automation spans two GitHub Actions workflows and one Azure pipeline:
 
-- `.github/workflows/ci.yml` runs Linux and Windows tests on pushes and pull requests
+- `.github/workflows/ci.yml` runs frontend, Rust, Python, packaging, and VS Code
+  checks on Linux, with Rust coverage on macOS and Windows
 - `.github/workflows/release.yml` builds tagged release artifacts for Linux,
-  macOS, and Windows x64
+  macOS Intel, macOS Apple Silicon, and Windows x64
 - `azure-pipelines/vscode-marketplace.yml` publishes VS Code Marketplace
   packages from GitHub Release assets
 
@@ -14,7 +15,15 @@ Release automation is split across two workflows:
 - **PyPI wheels** are the preferred Python install path when `PUBLISH_PYPI=1`
 - **VSIX files** are target-specific Marketplace packages attached to GitHub
   Releases and published by Azure Pipelines
-- **Homebrew** formula generation is always part of the release job, and tap publication is enabled when `HOMEBREW_TAP_REPOSITORY` is configured
+- **Homebrew** formula generation is always part of the release job; publication
+  to a separate tap is conditional on `HOMEBREW_TAP_REPOSITORY`
+
+## Release toolchain
+
+Local release checks and CI require Rust 1.88+, Node.js 20.19+ with npm, and
+Python 3.9+. Packaging jobs use Python 3.11. CI pins Rust 1.88 for compatibility
+checks, while tagged native builds and the manylinux container install the
+current stable Rust toolchain.
 
 ## Required repository configuration
 
@@ -37,13 +46,15 @@ VS Code Marketplace publishing is handled in Azure DevOps:
 The Azure pipeline uses Microsoft Entra ID with workload identity federation and
 publishes only VSIX assets that already exist on the GitHub Release.
 
-## Homebrew v0.2.7 checklist
+## Homebrew tap publication checklist
 
-Homebrew publication is planned for `v0.2.7`, but public install commands should
-not be added to the README or release notes until the tap exists and a release
-has published a formula successfully.
+Every tagged release renders a dual-architecture macOS formula and attaches it
+to the GitHub Release. The separate tap publication job runs only when
+`HOMEBREW_TAP_REPOSITORY` is configured. Do not add public install commands to
+the README or release notes until the named tap exists and has published a
+working formula.
 
-Before tagging `v0.2.7`:
+Before the first release intended for a public tap:
 
 - Create or select the Homebrew tap repository that will receive
   `Formula/dcmview.rb`.
@@ -56,7 +67,7 @@ Before tagging `v0.2.7`:
 - Confirm the generated formula artifact from a dry run or previous release
   contains both macOS archive URLs and SHA-256 checksums.
 
-During the `v0.2.7` release:
+During that release:
 
 - Verify the `Render Homebrew formula` step uploads the `homebrew-formula`
   artifact.
@@ -70,18 +81,28 @@ During the `v0.2.7` release:
 ## Standard release flow
 
 1. Regenerate fixtures if they changed:
-   `cargo run --example generate_test_fixtures`
-2. Run the local checks:
-   `python scripts/check_versions.py`
-   `cargo fmt --all -- --check`
-   `cargo test`
-   `python -m unittest discover -s python/tests`
-   `npm --prefix vscode run compile`
-3. Tag the exact version declared in `Cargo.toml`, `pyproject.toml`, and
+   `cargo run --locked --example generate_test_fixtures`
+2. Run the CI-aligned core profile:
+   `python scripts/check.py core --install`
+3. Where the host can launch the VS Code test runtime, run the end-to-end
+   profile:
+   `python scripts/check.py e2e --install`
+   On headless Linux, prefix that command with `xvfb-run -a`.
+4. Run network-backed, feature-gated remote fixtures separately when needed:
+   `python scripts/check.py external --install`
+5. Tag the exact version declared in `Cargo.toml`, `pyproject.toml`, and
    `vscode/package.json`:
    `VERSION="$(python scripts/check_versions.py --print-version)"`
    `git tag "v${VERSION}"`
    `git push origin "v${VERSION}"`
+
+`core` checks version parity, generated frontend contracts, frontend
+types/tests/build, Rust formatting and strict Clippy, deterministic fixture
+freshness, the locked Rust suite, Python unit/package-helper tests, and VS Code
+compilation. `e2e` runs `core` and then adds real-binary Python integration,
+release smoke coverage, and VS Code integration. Individual profiles such as
+`frontend`, `rust`, `python-unit`, `python-integration`, `vscode`, and
+`vscode-integration` are available for targeted iteration.
 
 The release workflow will:
 

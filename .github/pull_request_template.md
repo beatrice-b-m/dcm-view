@@ -23,13 +23,11 @@ List the commands or inspections you ran, and note any checks that were not run.
 
 ## Area Checklist
 
-- [ ] Rust changes were formatted with `cargo fmt --all`.
-- [ ] Rust source or Cargo changes were checked with `DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked`.
-- [ ] Rust behavior changes have targeted `cargo test --locked ...` coverage.
-- [ ] Frontend TypeScript or Svelte changes were checked with `npm --prefix frontend run typecheck`.
-- [ ] Frontend runtime or build changes were checked with `npm --prefix frontend run build` when feasible.
-- [ ] Python wrapper or packaging changes were checked with `python -m unittest discover -s python/tests`.
-- [ ] VS Code extension changes were checked with `npm --prefix vscode run compile`.
+- [ ] I ran `python scripts/check.py quick --install`, or listed the equivalent targeted checks above.
+- [ ] Frontend changes were checked with `python scripts/check.py frontend --install`.
+- [ ] Rust changes were checked with `python scripts/check.py rust --install` or focused tests plus `python scripts/check.py rust-lint --install`.
+- [ ] Python wrapper or packaging changes were checked with `python scripts/check.py python-unit` and, when they affect binary launch, `python scripts/check.py python-integration --install`.
+- [ ] VS Code extension changes were checked with `python scripts/check.py vscode --install` and, when they affect runtime behavior, `python scripts/check.py vscode-integration --install`.
 - [ ] `debug-api` or server API exposure changes were checked with `DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --features debug-api --locked`.
 
 ## Follow-Up

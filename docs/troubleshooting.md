@@ -32,19 +32,29 @@ If the console script directory is not on `PATH`, invoke the module form or add
 that directory to `PATH`. On unsupported platforms, build or download a matching
 `dcmview` binary and set `DCMVIEW_BINARY` to its absolute path.
 
-### Source builds fail because Node or npm is missing
+### Source builds fail because Rust, Node, or npm is missing or outdated
 
 Symptom: `cargo build`, `cargo install --path .`, or `cargo check` fails while
 building frontend assets.
 
-Likely cause: source builds need Node.js 18+ and npm so `build.rs` can produce
-`frontend/dist/` for embedding in the Rust binary.
+Likely cause: source builds require Rust 1.88+ plus Node.js 20.19+ and npm.
+`build.rs` uses Node and npm to produce `frontend/dist/` for embedding in the
+Rust binary.
 
-Fix: install Node.js 18+ and npm, then rerun the Cargo command. If
-`frontend/dist/index.html` already exists and you only need a Rust check, use:
+Fix: confirm the active tool versions, install or select newer tools as needed,
+then rerun the Cargo command:
 
 ```bash
-DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check
+rustc --version
+node --version
+npm --version
+```
+
+If `frontend/dist/index.html` already exists and you only need a Rust check,
+use:
+
+```bash
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
 ```
 
 For custom tool locations, set `DCMVIEW_NODE_PATH` and `DCMVIEW_NPM_PATH` to
@@ -70,8 +80,9 @@ inside the selected directory.
 
 Symptom: startup or the viewer file registry reports skipped files.
 
-Likely cause: the scan encountered non-DICOM files, unreadable paths, invalid
-DICOM objects, or files excluded by metadata filters.
+Likely cause: the scan encountered non-DICOM files, unreadable paths, or invalid
+DICOM objects. Files excluded by metadata filters are counted separately as
+filtered.
 
 Fix: skipped non-DICOM sidecar files are usually harmless. If an expected DICOM
 file is skipped, check file permissions and try opening that file directly:
@@ -82,6 +93,17 @@ dcmview ./expected-file.dcm
 
 If filters are in use, confirm that the field name and value match the file's
 metadata. Filter matching is case-insensitive substring matching.
+
+### The viewer opens before every file appears
+
+Symptom: the server URL is available and the viewer opens, but a large
+directory is still adding files.
+
+Expected behavior: `dcmview` binds the local server before starting progressive
+discovery so the UI and wrappers do not wait for the entire directory scan.
+The file list updates while discovery is active and reports completion when the
+scan finishes. Normal server shutdown cancels and awaits any remaining
+discovery work before the process exits.
 
 ### Port already in use
 

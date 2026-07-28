@@ -157,8 +157,9 @@ trusted on Unix: owned by the current user and not group- or world-writable.
 
 ## Build and Development Environment Variables
 
-These variables affect source builds only. They are read by `build.rs` while
-Cargo prepares embedded frontend assets.
+Source builds require Rust 1.88+ and Node.js 20.19+ with npm. These variables
+affect source builds only; `build.rs` reads them while Cargo prepares embedded
+frontend assets.
 
 | Variable | Behavior |
 |---|---|

@@ -57,9 +57,11 @@ The package installs both `dcmview` and `dcmview-py`; `dcmview` is the primary
 command. If you are using an unsupported platform or a local debug binary, set
 `DCMVIEW_BINARY` to an absolute path to a compatible `dcmview` executable.
 
-Homebrew distribution is planned for the `v0.2.7` release but is not configured
-yet. Until then, use PyPI, the VS Code extension, GitHub Releases, or a source
-build.
+Tagged releases always include a generated Homebrew formula. Publishing that
+formula to a tap is conditional on the maintainers configuring a separate tap
+repository; this repository does not currently advertise a public tap command.
+Use PyPI, the VS Code extension, GitHub Releases, or a source build unless a
+release announcement names a working tap.
 
 Source builds are available for contributors and unsupported platforms:
 
@@ -69,8 +71,8 @@ cargo install --path .
 
 Build prerequisites for source installs:
 
-- Rust stable 1.75+
-- Node.js 18+ and npm at build time
+- Rust 1.88+
+- Node.js 20.19+ and npm at build time
 - `ssh` on `PATH` only when using SSH forwarding helpers
 
 If install or binary discovery fails, see the
@@ -276,14 +278,19 @@ dcmview --no-browser --host 127.0.0.1 --port 8888 tests/fixtures
 npm --prefix frontend run dev
 ```
 
-Common checks:
+The repository check driver mirrors CI profiles. For a fast development pass
+and the full local core suite:
 
 ```bash
-cargo fmt --all
-DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
-cargo test --locked
-npm --prefix frontend run typecheck
+python scripts/check.py quick --install
+python scripts/check.py core --install
 ```
+
+`quick` checks version parity, generated frontend contracts, frontend types and
+behavior, the production frontend build, strict Rust formatting/lints, and
+Python unit tests; it does not run the Rust test suite. `core` additionally
+regenerates and verifies DICOM fixtures, runs the locked Rust suite, and
+compiles the VS Code extension.
 
 See the [development reference](docs/development.md) for source builds, frontend
 proxy behavior, fixture policy, test commands, architecture notes, and cache
