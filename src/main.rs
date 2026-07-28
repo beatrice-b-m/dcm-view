@@ -1,14 +1,9 @@
+mod application;
 mod bridge;
 mod startup;
 
-use anyhow::Result;
-use bridge::{
-    discover_vscode_bridge_endpoints, run_vscode_bridge_client, run_vscode_bridge_launch,
-    RegistryMatch,
-};
 use clap::Parser;
 use dcmview::loader;
-use startup::{LocalViewerOptions, LocalViewerOutcome};
 use std::env;
 use std::path::PathBuf;
 
@@ -133,7 +128,11 @@ fn parse_scan_filter(raw: &str) -> std::result::Result<loader::ScanFilter, Strin
 
 #[tokio::main]
 async fn main() {
-    match run().await {
+    let program_name = env::args().next().unwrap_or_else(|| "dcmview".to_string());
+    let raw_args = env::args().skip(1).collect::<Vec<_>>();
+    let cli = Cli::parse_from(std::iter::once(program_name).chain(raw_args.clone()));
+
+    match application::run(cli, &raw_args).await {
         Ok(exit_code) => {
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -144,50 +143,6 @@ async fn main() {
             std::process::exit(1);
         }
     }
-}
-
-async fn run() -> Result<i32> {
-    let program_name = env::args().next().unwrap_or_else(|| "dcmview".to_string());
-    let raw_args = env::args().skip(1).collect::<Vec<_>>();
-    let cli = Cli::parse_from(std::iter::once(program_name).chain(raw_args.clone()));
-
-    if let Some(bridge_args) = cli.vscode_bridge_client {
-        return run_vscode_bridge_client(bridge_args).await;
-    }
-
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let bridge_endpoints = discover_vscode_bridge_endpoints(&cwd, RegistryMatch::RequireWorkspace);
-    if !bridge_endpoints.is_empty() {
-        match run_vscode_bridge_launch("dcmview", &raw_args, &bridge_endpoints).await {
-            Ok(exit_code) => return Ok(exit_code),
-            Err(error) => {
-                eprintln!(
-                    "dcmview: VS Code bridge unavailable ({error}); falling back to local viewer"
-                );
-            }
-        }
-    }
-
-    tracing_subscriber::fmt()
-        .with_env_filter("info,jpeg2k=warn")
-        .init();
-
-    let outcome = startup::run_local_viewer(LocalViewerOptions {
-        input_paths: cli.paths,
-        recursive: !cli.no_recursive,
-        filters: cli.filters,
-        annotation_path: cli.annotations,
-        host: cli.host,
-        port: cli.port,
-        timeout_seconds: cli.timeout,
-        open_browser: !cli.no_browser,
-        startup_json: cli.startup_json,
-        tunnel_enabled: cli.tunnel,
-        tunnel_host: cli.tunnel_host,
-        tunnel_port: cli.tunnel_port,
-    })
-    .await?;
-    Ok(LocalViewerOutcome::exit_code(outcome))
 }
 
 #[cfg(test)]
