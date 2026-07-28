@@ -18,23 +18,17 @@ async fn decodes_jpeg_display_frame_to_png_and_sets_cache_hit_on_repeat() {
         vec![frame0.clone(), frame1.clone()],
     );
 
-    let files = vec![support::file_entry(
-        path.clone(),
-        "1.2.840.10008.1.2.4.50",
-        2,
-    )];
+    let file = support::file_entry(path.clone(), "1.2.840.10008.1.2.4.50", 2);
     let cache = new_cache();
 
     let first = load_frame(
-        &files,
+        file.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 1,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/jpeg".to_string()),
         },
     )
     .await
@@ -54,15 +48,13 @@ async fn decodes_jpeg_display_frame_to_png_and_sets_cache_hit_on_repeat() {
     assert!(!first.cache_hit);
 
     let second = load_frame(
-        &files,
+        file,
         cache,
         FrameRequest {
-            file_index: 0,
             frame: 1,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/jpeg".to_string()),
         },
     )
     .await

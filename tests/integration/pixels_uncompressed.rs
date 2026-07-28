@@ -28,19 +28,16 @@ async fn decodes_uncompressed_png_and_tracks_window_cache_keys() {
         width: 3000.0,
     });
 
-    let files = vec![entry];
     let cache = new_cache();
 
     let first = load_frame(
-        &files,
+        entry.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -55,15 +52,13 @@ async fn decodes_uncompressed_png_and_tracks_window_cache_keys() {
     assert_eq!(first_image.height(), 2);
 
     let second = load_frame(
-        &files,
+        entry.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -71,15 +66,13 @@ async fn decodes_uncompressed_png_and_tracks_window_cache_keys() {
     assert!(second.cache_hit);
 
     let overridden = load_frame(
-        &files,
+        entry,
         cache,
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: Some(800.0),
             window_width: Some(1000.0),
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -111,31 +104,21 @@ async fn monochrome1_display_png_matches_raw_renderer_inversion_semantics() {
         width: 3000.0,
     });
 
-    let files = vec![entry];
     let display = load_frame(
-        &files,
+        entry.clone(),
         new_cache(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
     .expect("monochrome1 display frame");
-    let raw = load_raw_frame(
-        &files,
-        new_raw_cache(),
-        RawFrameRequest {
-            file_index: 0,
-            frame: 0,
-        },
-    )
-    .await
-    .expect("monochrome1 raw frame");
+    let raw = load_raw_frame(entry, new_raw_cache(), RawFrameRequest { frame: 0 })
+        .await
+        .expect("monochrome1 raw frame");
 
     assert_eq!(raw.metadata.photometric_interpretation, "MONOCHROME1");
     assert_eq!(
@@ -178,32 +161,27 @@ async fn monochrome1_inversion_preserves_default_and_full_dynamic_window_modes()
         width: 1000.0,
     });
 
-    let files = vec![entry];
     let cache = new_cache();
     let default = load_frame(
-        &files,
+        entry.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
     .expect("monochrome1 default window");
     let dynamic = load_frame(
-        &files,
+        entry,
         cache,
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: Some(42.0),
             window_width: Some(42.0),
             window_mode: dcmview::types::WindowMode::FullDynamic,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -263,20 +241,17 @@ async fn full_dynamic_mode_produces_distinct_output_and_has_independent_cache_ke
         width: 1000.0, // narrow: clips [0, 3000] range at both ends
     });
 
-    let files = vec![entry];
     let cache = new_cache();
 
     // Default mode: first request is a MISS.
     let default_first = load_frame(
-        &files,
+        entry.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -288,15 +263,13 @@ async fn full_dynamic_mode_produces_distinct_output_and_has_independent_cache_ke
 
     // Default mode: repeat is a HIT.
     let default_repeat = load_frame(
-        &files,
+        entry.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -308,15 +281,13 @@ async fn full_dynamic_mode_produces_distinct_output_and_has_independent_cache_ke
 
     // FullDynamic mode: same frame+wc+ww — must be a MISS because the cache key differs.
     let dynamic_first = load_frame(
-        &files,
+        entry.clone(),
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::FullDynamic,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -328,15 +299,13 @@ async fn full_dynamic_mode_produces_distinct_output_and_has_independent_cache_ke
 
     // FullDynamic mode: repeat is a HIT.
     let dynamic_repeat = load_frame(
-        &files,
+        entry,
         cache.clone(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::FullDynamic,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
@@ -377,15 +346,13 @@ async fn applies_big_endian_byte_order_for_uncompressed_pixels() {
     });
 
     let response = load_frame(
-        &[entry],
+        entry,
         new_cache(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await

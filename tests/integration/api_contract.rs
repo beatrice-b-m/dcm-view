@@ -1,6 +1,7 @@
 use super::support;
-use axum::http::header;
-use axum_test::TestServer;
+use axum::http::{header, HeaderValue, StatusCode};
+use axum_test::{TestResponse, TestServer};
+use bytes::Bytes;
 use dcmview::annotations::{AnnotationStore, EmbedRoiAnnotations};
 use dcmview::server;
 use dcmview::types::WindowPreset;
@@ -182,6 +183,106 @@ async fn raw_frame_endpoint_exposes_frontend_metadata_header_contract() {
             "raw response missing {header_name}"
         );
     }
+}
+
+#[tokio::test]
+async fn api_boundary_rejections_use_the_json_error_envelope() {
+    let test_server = TestServer::new(server::router(support::app_state(Vec::new())));
+
+    let cases = vec![
+        (
+            "malformed path",
+            test_server.get("/api/file/not-a-number/info").await,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "malformed query",
+            test_server.get("/api/file/0/frame/0?wc=not-a-number").await,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "malformed JSON",
+            test_server
+                .put("/api/file/0/annotations")
+                .bytes(Bytes::from_static(b"{"))
+                .add_header(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )
+                .await,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "invalid JSON shape",
+            test_server
+                .put("/api/file/0/annotations")
+                .json(&serde_json::json!({}))
+                .await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "missing JSON content type",
+            test_server
+                .put("/api/file/0/annotations")
+                .bytes(Bytes::from_static(b"{}"))
+                .await,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            "unknown API route",
+            test_server.get("/api/not-a-route").await,
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "wrong API method",
+            test_server.post("/api/files").await,
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+    ];
+
+    for (name, response, expected_status) in cases {
+        assert_json_error(name, &response, expected_status);
+    }
+}
+
+#[tokio::test]
+async fn display_frame_rejects_invalid_window_queries_as_json() {
+    let entry = support::file_entry("window-validation.dcm".into(), "1.2.840.10008.1.2.1", 1);
+    let test_server = TestServer::new(server::router(support::app_state(vec![entry])));
+
+    for query in [
+        "wc=10",
+        "ww=20",
+        "wc=NaN&ww=20",
+        "wc=10&ww=NaN",
+        "wc=10&ww=0",
+        "wc=10&ww=-1",
+    ] {
+        let response = test_server
+            .get(&format!("/api/file/0/frame/0?{query}"))
+            .await;
+        assert_json_error(query, &response, StatusCode::BAD_REQUEST);
+    }
+}
+
+fn assert_json_error(name: &str, response: &TestResponse, expected_status: StatusCode) {
+    assert_eq!(response.status_code(), expected_status, "{name}");
+    assert!(
+        response
+            .header(header::CONTENT_TYPE)
+            .to_str()
+            .expect("content type")
+            .starts_with("application/json"),
+        "{name} must return JSON"
+    );
+    let payload: Value = response.json();
+    assert_object_keys(&payload, &["error"]);
+    assert!(
+        payload["error"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "{name} must include a non-empty error message"
+    );
 }
 
 fn assert_tag_node_shape(value: &Value) {

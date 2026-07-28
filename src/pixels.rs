@@ -1,6 +1,6 @@
 use crate::types::{
     FileEntry, FrameCacheKey, RawFrameCacheKey, RawFrameMetadata, ResolvedWindow,
-    TransferSyntaxClass, WindowMode,
+    TransferSyntaxClass, WindowMode, WindowRequest,
 };
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
@@ -24,14 +24,16 @@ pub const RAW_CACHE_MAX_BYTES: usize = 384 * 1024 * 1024; // 384 MiB
 
 #[derive(Debug, Error)]
 pub enum PixelError {
-    #[error("file index out of range")]
-    FileIndexOutOfRange,
     #[error("no pixel data")]
     NoPixelData,
     #[error("frame out of range")]
     FrameOutOfRange,
     #[error("unsupported transfer syntax: {0}")]
     UnsupportedTransferSyntax(String),
+    #[error("unsupported pixel layout: {0}")]
+    UnsupportedLayout(String),
+    #[error("invalid window request: {0}")]
+    InvalidWindow(String),
     #[error("{context}: {source}")]
     Decode {
         context: &'static str,
@@ -154,7 +156,6 @@ pub fn new_raw_cache() -> Arc<Mutex<RawFrameCache>> {
 
 #[derive(Debug, Clone)]
 pub struct RawFrameRequest {
-    pub file_index: usize,
     pub frame: u32,
 }
 
@@ -166,14 +167,10 @@ pub struct RawFrameResponse {
 }
 
 pub async fn load_raw_frame(
-    files: &[FileEntry],
+    file: FileEntry,
     cache: Arc<Mutex<RawFrameCache>>,
     request: RawFrameRequest,
 ) -> PixelResult<RawFrameResponse> {
-    let file = files
-        .get(request.file_index)
-        .ok_or(PixelError::FileIndexOutOfRange)?;
-
     if !file.has_pixels {
         return Err(PixelError::NoPixelData);
     }
@@ -192,7 +189,7 @@ pub async fn load_raw_frame(
     }
 
     let key = RawFrameCacheKey {
-        file_index: request.file_index,
+        file_index: file.index,
         frame: request.frame,
     };
 
@@ -210,12 +207,12 @@ pub async fn load_raw_frame(
         TransferSyntaxClass::Jpeg => read_raw_jpeg_samples(file.clone(), request.frame)
             .await
             .map_err(PixelError::raw_decode)?,
-        TransferSyntaxClass::JpegLossless => decode_raw_jpeg_lossless(file.clone(), request.frame)
-            .await
-            .map_err(PixelError::raw_decode)?,
-        TransferSyntaxClass::Jpeg2000 => decode_raw_jp2_samples(file.clone(), request.frame)
-            .await
-            .map_err(PixelError::raw_decode)?,
+        TransferSyntaxClass::JpegLossless => {
+            decode_raw_jpeg_lossless(file.clone(), request.frame).await?
+        }
+        TransferSyntaxClass::Jpeg2000 => {
+            decode_raw_jp2_samples(file.clone(), request.frame).await?
+        }
         TransferSyntaxClass::Uncompressed => read_raw_uncompressed(file.clone(), request.frame)
             .await
             .map_err(PixelError::raw_decode)?,
@@ -235,12 +232,10 @@ pub async fn load_raw_frame(
 
 #[derive(Debug, Clone)]
 pub struct FrameRequest {
-    pub file_index: usize,
     pub frame: u32,
     pub window_center: Option<f64>,
     pub window_width: Option<f64>,
     pub window_mode: WindowMode,
-    pub accept_header: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -251,14 +246,10 @@ pub struct FrameResponse {
 }
 
 pub async fn load_frame(
-    files: &[FileEntry],
+    file: FileEntry,
     cache: Arc<Mutex<FrameCache>>,
     request: FrameRequest,
 ) -> PixelResult<FrameResponse> {
-    let file = files
-        .get(request.file_index)
-        .ok_or(PixelError::FileIndexOutOfRange)?;
-
     if !file.has_pixels {
         return Err(PixelError::NoPixelData);
     }
@@ -266,13 +257,19 @@ pub async fn load_frame(
         return Err(PixelError::FrameOutOfRange);
     }
 
-    let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
-    let key = FrameCacheKey::new(
-        request.file_index,
-        request.frame,
+    let window = WindowRequest::new(
         request.window_center,
         request.window_width,
         request.window_mode,
+    )
+    .map_err(|error| PixelError::InvalidWindow(error.to_string()))?;
+    let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
+    let key = FrameCacheKey::new(
+        file.index,
+        request.frame,
+        window.center(),
+        window.width(),
+        window.mode(),
     );
 
     if let Ok(mut lock) = cache.lock() {
@@ -290,9 +287,9 @@ pub async fn load_frame(
             decode_compressed_frame_to_png(
                 file.clone(),
                 request.frame,
-                request.window_center,
-                request.window_width,
-                request.window_mode,
+                window.center(),
+                window.width(),
+                window.mode(),
             )
             .await
             .map_err(PixelError::frame_decode)?,
@@ -302,9 +299,9 @@ pub async fn load_frame(
             decode_compressed_frame_to_png(
                 file.clone(),
                 request.frame,
-                request.window_center,
-                request.window_width,
-                request.window_mode,
+                window.center(),
+                window.width(),
+                window.mode(),
             )
             .await
             .map_err(PixelError::frame_decode)?,
@@ -314,9 +311,9 @@ pub async fn load_frame(
             decode_jp2_fragment_to_png(
                 file.clone(),
                 request.frame,
-                request.window_center,
-                request.window_width,
-                request.window_mode,
+                window.center(),
+                window.width(),
+                window.mode(),
             )
             .await
             .map_err(PixelError::frame_decode)?,
@@ -326,9 +323,9 @@ pub async fn load_frame(
             decode_uncompressed_to_png(
                 file.clone(),
                 request.frame,
-                request.window_center,
-                request.window_width,
-                request.window_mode,
+                window.center(),
+                window.width(),
+                window.mode(),
             )
             .await
             .map_err(PixelError::frame_decode)?,
@@ -821,58 +818,72 @@ fn read_raw_jpeg_samples_blocking(
     let (columns, rows) = (img.width(), img.height());
     let samples = img.into_raw();
 
-    let metadata = file.raw_metadata(rows, columns, 8, 1);
+    let metadata = file.normalized_grayscale_u8_metadata(rows, columns);
     Ok((Bytes::from(samples), metadata))
 }
 
 async fn decode_raw_jpeg_lossless(
     file: FileEntry,
     frame: u32,
-) -> Result<(Bytes, RawFrameMetadata)> {
+) -> PixelResult<(Bytes, RawFrameMetadata)> {
     task::spawn_blocking(move || decode_raw_jpeg_lossless_blocking(&file, frame))
         .await
-        .context("raw JPEG Lossless decode task failed")?
+        .map_err(|error| {
+            PixelError::raw_decode(anyhow!("raw JPEG Lossless decode task failed: {error}"))
+        })?
 }
 
 fn decode_raw_jpeg_lossless_blocking(
     file: &FileEntry,
     frame: u32,
-) -> Result<(Bytes, RawFrameMetadata)> {
-    let obj = open_file(&file.path).with_context(|| {
-        format!(
-            "failed to open DICOM for raw JPEG Lossless decode: {}",
-            file.path.display()
-        )
-    })?;
+) -> PixelResult<(Bytes, RawFrameMetadata)> {
+    let obj = open_file(&file.path)
+        .with_context(|| {
+            format!(
+                "failed to open DICOM for raw JPEG Lossless decode: {}",
+                file.path.display()
+            )
+        })
+        .map_err(PixelError::raw_decode)?;
 
-    let decoded = obj.decode_pixel_data().with_context(|| {
-        format!(
-            "unsupported transfer syntax: {}",
-            obj.meta().transfer_syntax()
-        )
-    })?;
+    let decoded = obj
+        .decode_pixel_data()
+        .with_context(|| {
+            format!(
+                "unsupported transfer syntax: {}",
+                obj.meta().transfer_syntax()
+            )
+        })
+        .map_err(PixelError::raw_decode)?;
     if decoded.samples_per_pixel() != 1 {
-        return Err(anyhow!(
-            "raw JPEG Lossless decode failed: unsupported SamplesPerPixel {}",
+        return Err(PixelError::UnsupportedLayout(format!(
+            "raw JPEG Lossless requires one sample per pixel, decoded {}",
             decoded.samples_per_pixel()
-        ));
+        )));
     }
 
     let bits_allocated = decoded.bits_allocated() as u32;
     let sample_bytes = match bits_allocated {
-        8 => Bytes::copy_from_slice(decoded.frame_data(frame)?),
+        8 => Bytes::copy_from_slice(
+            decoded
+                .frame_data(frame)
+                .map_err(anyhow::Error::from)
+                .map_err(PixelError::raw_decode)?,
+        ),
         16 => {
             let bytes = decoded
-                .frame_data_ow(frame)?
+                .frame_data_ow(frame)
+                .map_err(anyhow::Error::from)
+                .map_err(PixelError::raw_decode)?
                 .into_iter()
                 .flat_map(|value| value.to_le_bytes())
                 .collect::<Vec<_>>();
             Bytes::from(bytes)
         }
         _ => {
-            return Err(anyhow!(
-                "raw JPEG Lossless decode failed: unsupported BitsAllocated {bits_allocated}"
-            ));
+            return Err(PixelError::UnsupportedLayout(format!(
+                "raw JPEG Lossless does not support BitsAllocated {bits_allocated}"
+            )));
         }
     };
 
@@ -880,31 +891,40 @@ fn decode_raw_jpeg_lossless_blocking(
     Ok((sample_bytes, metadata))
 }
 
-async fn decode_raw_jp2_samples(file: FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+async fn decode_raw_jp2_samples(
+    file: FileEntry,
+    frame: u32,
+) -> PixelResult<(Bytes, RawFrameMetadata)> {
     task::spawn_blocking(move || decode_raw_jp2_samples_blocking(&file, frame))
         .await
-        .context("raw JP2 decode task failed")?
+        .map_err(|error| PixelError::raw_decode(anyhow!("raw JP2 decode task failed: {error}")))?
 }
 
 fn decode_raw_jp2_samples_blocking(
     file: &FileEntry,
     frame: u32,
-) -> Result<(Bytes, RawFrameMetadata)> {
-    let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
+) -> PixelResult<(Bytes, RawFrameMetadata)> {
+    let fragment =
+        read_encapsulated_fragment_blocking(&file.path, frame).map_err(PixelError::raw_decode)?;
 
     let jp2_image = jpeg2k::Image::from_bytes(&fragment)
         .map_err(anyhow::Error::from)
-        .context("failed to decode JP2 fragment for raw samples")?;
+        .context("failed to decode JP2 fragment for raw samples")
+        .map_err(PixelError::raw_decode)?;
 
     let comps = jp2_image.components();
     if comps.is_empty() {
-        return Err(anyhow!("JP2 image has no components"));
+        return Err(PixelError::raw_decode(anyhow!(
+            "JP2 image has no components"
+        )));
     }
 
     // Only grayscale (single component) is supported for the raw path.
-    // Multi-component (RGB) JP2 images are rare in DICOM and are 422 here.
     if comps.len() != 1 {
-        return Err(anyhow!("unsupported JP2 component layout for raw decode"));
+        return Err(PixelError::UnsupportedLayout(format!(
+            "raw JPEG 2000 requires one component, decoded {}",
+            comps.len()
+        )));
     }
 
     let width = comps[0].width();

@@ -10,6 +10,7 @@ use crate::types::{
     RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
 };
 use anyhow::{Context, Result};
+use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -25,7 +26,7 @@ use std::collections::HashMap;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::{futures::Notified, Notify};
 #[cfg(feature = "debug-api")]
@@ -40,7 +41,6 @@ pub struct AppState {
     pub annotations: AnnotationStore,
     pub tunnel_info: Option<Arc<TunnelInfo>>,
     pub tunnel_handle: Option<Arc<TunnelHandle>>,
-    pub server_start: Instant,
     pub server_start_ms: u64,
     pub last_request: Arc<AtomicU64>,
 }
@@ -167,8 +167,10 @@ impl FileRegistry {
     }
 }
 
-pub fn file_summaries(files: &[FileEntry]) -> Vec<FileSummary> {
-    files.iter().map(FileSummary::from).collect()
+impl Default for FileRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -301,26 +303,25 @@ fn is_non_loopback_bind(ip: std::net::IpAddr) -> bool {
 }
 
 pub fn router(state: AppState) -> Router {
+    let api = Router::new()
+        .route("/health", get(health_handler))
+        .route("/files", get(files_handler))
+        .route("/file/{index}/info", get(info_handler))
+        .route("/file/{index}/frame/{frame}", get(frame_handler))
+        .route("/file/{index}/frame/{frame}/raw", get(raw_frame_handler))
+        .route(
+            "/file/{index}/annotations",
+            get(annotations_handler).put(update_annotations_handler),
+        )
+        .route("/annotations/export.csv", get(export_annotations_handler))
+        .route("/file/{index}/tags", get(tags_handler))
+        .fallback(api_not_found_handler)
+        .method_not_allowed_fallback(api_method_not_allowed_handler);
+
     let router = Router::new()
         .route("/", get(index_handler))
         .route("/assets/{*path}", get(asset_handler))
-        .route("/api/health", get(health_handler))
-        .route("/api/files", get(files_handler))
-        .route("/api/file/{index}/info", get(info_handler))
-        .route("/api/file/{index}/frame/{frame}", get(frame_handler))
-        .route(
-            "/api/file/{index}/frame/{frame}/raw",
-            get(raw_frame_handler),
-        )
-        .route(
-            "/api/file/{index}/annotations",
-            get(annotations_handler).put(update_annotations_handler),
-        )
-        .route(
-            "/api/annotations/export.csv",
-            get(export_annotations_handler),
-        )
-        .route("/api/file/{index}/tags", get(tags_handler))
+        .nest("/api", api)
         .with_state(state);
 
     #[cfg(feature = "debug-api")]
@@ -336,6 +337,14 @@ pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json
         host,
         port,
     })
+}
+
+async fn api_not_found_handler() -> ApiError {
+    ApiError::not_found("API route not found")
+}
+
+async fn api_method_not_allowed_handler() -> ApiError {
+    ApiError::method_not_allowed("method not allowed")
 }
 
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -365,9 +374,10 @@ async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {
 
 async fn info_handler(
     State(state): State<AppState>,
-    Path(index): Path<usize>,
+    path: std::result::Result<Path<usize>, PathRejection>,
 ) -> Result<Json<FrameInfo>, ApiError> {
     touch_request(&state);
+    let Path(index) = path.map_err(api_path_rejection)?;
     let file = state
         .registry
         .get(index)
@@ -384,9 +394,10 @@ async fn info_handler(
 
 async fn annotations_handler(
     State(state): State<AppState>,
-    Path(index): Path<usize>,
+    path: std::result::Result<Path<usize>, PathRejection>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
     touch_request(&state);
+    let Path(index) = path.map_err(api_path_rejection)?;
     if state.registry.get(index).is_none() {
         return Err(ApiError::not_found("file index out of range"));
     }
@@ -401,10 +412,12 @@ async fn annotations_handler(
 
 async fn update_annotations_handler(
     State(state): State<AppState>,
-    Path(index): Path<usize>,
-    Json(annotations): Json<EmbedRoiAnnotations>,
+    path: std::result::Result<Path<usize>, PathRejection>,
+    payload: std::result::Result<Json<EmbedRoiAnnotations>, JsonRejection>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
     touch_request(&state);
+    let Path(index) = path.map_err(api_path_rejection)?;
+    let Json(annotations) = payload.map_err(api_json_rejection)?;
     let file = state
         .registry
         .get(index)
@@ -440,27 +453,25 @@ async fn export_annotations_handler(State(state): State<AppState>) -> Result<Res
 
 async fn frame_handler(
     State(state): State<AppState>,
-    Path((index, frame)): Path<(usize, u32)>,
-    Query(query): Query<FrameQuery>,
-    headers: HeaderMap,
+    path: std::result::Result<Path<(usize, u32)>, PathRejection>,
+    query: std::result::Result<Query<FrameQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
     touch_request(&state);
-    let accept_header = headers
-        .get(header::ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string);
+    let Path((index, frame)) = path.map_err(api_path_rejection)?;
+    let Query(query) = query.map_err(api_query_rejection)?;
+    let file = state
+        .registry
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
 
-    let files = state.registry.files_snapshot();
     let frame_response = pixels::load_frame(
-        files.as_slice(),
+        file,
         state.pixel_cache.clone(),
         FrameRequest {
-            file_index: index,
             frame,
             window_center: query.wc,
             window_width: query.ww,
             window_mode: query.mode.unwrap_or_default(),
-            accept_header,
         },
     )
     .await
@@ -484,21 +495,19 @@ async fn frame_handler(
 
 async fn raw_frame_handler(
     State(state): State<AppState>,
-    Path((index, frame)): Path<(usize, u32)>,
+    path: std::result::Result<Path<(usize, u32)>, PathRejection>,
 ) -> Result<Response, ApiError> {
     touch_request(&state);
+    let Path((index, frame)) = path.map_err(api_path_rejection)?;
+    let file = state
+        .registry
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
 
-    let files = state.registry.files_snapshot();
-    let raw_response = pixels::load_raw_frame(
-        files.as_slice(),
-        state.raw_cache.clone(),
-        RawFrameRequest {
-            file_index: index,
-            frame,
-        },
-    )
-    .await
-    .map_err(pixel_error_to_api_error)?;
+    let raw_response =
+        pixels::load_raw_frame(file, state.raw_cache.clone(), RawFrameRequest { frame })
+            .await
+            .map_err(pixel_error_to_api_error)?;
 
     let meta = &raw_response.metadata;
     let cache_header = if raw_response.cache_hit {
@@ -558,9 +567,10 @@ async fn raw_frame_handler(
 
 async fn tags_handler(
     State(state): State<AppState>,
-    Path(index): Path<usize>,
+    path: std::result::Result<Path<usize>, PathRejection>,
 ) -> Result<Json<Vec<TagNode>>, ApiError> {
     touch_request(&state);
+    let Path(index) = path.map_err(api_path_rejection)?;
     let file = state
         .registry
         .get(index)
@@ -919,6 +929,13 @@ struct ApiError {
 }
 
 impl ApiError {
+    fn from_rejection(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -929,6 +946,13 @@ impl ApiError {
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn method_not_allowed(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::METHOD_NOT_ALLOWED,
             message: message.into(),
         }
     }
@@ -948,14 +972,26 @@ impl ApiError {
     }
 }
 
+fn api_path_rejection(error: PathRejection) -> ApiError {
+    ApiError::from_rejection(error.status(), error.body_text())
+}
+
+fn api_query_rejection(error: QueryRejection) -> ApiError {
+    ApiError::from_rejection(error.status(), error.body_text())
+}
+
+fn api_json_rejection(error: JsonRejection) -> ApiError {
+    ApiError::from_rejection(error.status(), error.body_text())
+}
+
 fn pixel_error_to_api_error(error: pixels::PixelError) -> ApiError {
     match error {
-        pixels::PixelError::FileIndexOutOfRange
-        | pixels::PixelError::NoPixelData
-        | pixels::PixelError::FrameOutOfRange => ApiError::not_found(error.to_string()),
-        pixels::PixelError::UnsupportedTransferSyntax(_) => {
-            ApiError::unprocessable(error.to_string())
+        pixels::PixelError::NoPixelData | pixels::PixelError::FrameOutOfRange => {
+            ApiError::not_found(error.to_string())
         }
+        pixels::PixelError::InvalidWindow(_) => ApiError::bad_request(error.to_string()),
+        pixels::PixelError::UnsupportedTransferSyntax(_)
+        | pixels::PixelError::UnsupportedLayout(_) => ApiError::unprocessable(error.to_string()),
         pixels::PixelError::Decode { .. } => ApiError::internal(error.to_string()),
     }
 }

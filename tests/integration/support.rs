@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragments: Vec<Vec<u8>>) {
     let frame_count = fragments.len().max(1) as u32;
@@ -134,7 +133,6 @@ pub fn app_state_with_registry(registry: FileRegistry) -> AppState {
         annotations: AnnotationStore::empty(),
         tunnel_info: None,
         tunnel_handle: None,
-        server_start: Instant::now(),
         server_start_ms: now_unix_ms(),
         last_request: Arc::new(AtomicU64::new(now_unix_ms())),
     }

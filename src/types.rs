@@ -58,6 +58,21 @@ impl FileEntry {
             default_ww: self.default_window.map(|window| window.width),
         }
     }
+
+    pub fn normalized_grayscale_u8_metadata(&self, rows: u32, columns: u32) -> RawFrameMetadata {
+        RawFrameMetadata {
+            rows,
+            columns,
+            bits_allocated: 8,
+            pixel_representation: 0,
+            samples_per_pixel: 1,
+            photometric_interpretation: "MONOCHROME2".to_string(),
+            rescale_slope: self.rescale_slope,
+            rescale_intercept: self.rescale_intercept,
+            default_wc: self.default_window.map(|window| window.center),
+            default_ww: self.default_window.map(|window| window.width),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,6 +173,10 @@ impl FrameCacheKey {
         window_width: Option<f64>,
         window_mode: WindowMode,
     ) -> Self {
+        let (window_center, window_width) = match window_mode {
+            WindowMode::Default => (window_center, window_width),
+            WindowMode::FullDynamic => (None, None),
+        };
         Self {
             file_index,
             frame,
@@ -168,18 +187,121 @@ impl FrameCacheKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowRequest {
+    center: Option<f64>,
+    width: Option<f64>,
+    mode: WindowMode,
+}
+
+impl WindowRequest {
+    pub fn new(
+        center: Option<f64>,
+        width: Option<f64>,
+        mode: WindowMode,
+    ) -> Result<Self, WindowRequestError> {
+        match (center, width) {
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(WindowRequestError::IncompletePair);
+            }
+            (Some(center), Some(width)) => {
+                if !center.is_finite() {
+                    return Err(WindowRequestError::NonFiniteCenter);
+                }
+                if !width.is_finite() {
+                    return Err(WindowRequestError::NonFiniteWidth);
+                }
+                if width <= 0.0 {
+                    return Err(WindowRequestError::NonPositiveWidth);
+                }
+            }
+        }
+
+        Ok(Self {
+            center,
+            width,
+            mode,
+        })
+    }
+
+    pub fn center(self) -> Option<f64> {
+        self.center
+    }
+
+    pub fn width(self) -> Option<f64> {
+        self.width
+    }
+
+    pub fn mode(self) -> WindowMode {
+        self.mode
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowRequestError {
+    IncompletePair,
+    NonFiniteCenter,
+    NonFiniteWidth,
+    NonPositiveWidth,
+}
+
+impl std::fmt::Display for WindowRequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::IncompletePair => "window center and width must be provided together",
+            Self::NonFiniteCenter => "window center must be finite",
+            Self::NonFiniteWidth => "window width must be finite",
+            Self::NonPositiveWidth => "window width must be greater than zero",
+        })
+    }
+}
+
+impl std::error::Error for WindowRequestError {}
+
 #[cfg(test)]
 mod tests {
-    use super::{FrameCacheKey, WindowMode};
+    use super::{FrameCacheKey, WindowMode, WindowRequest, WindowRequestError};
 
     #[test]
-    fn frame_cache_key_distinguishes_absent_and_zero_window_params() {
+    fn frame_cache_key_distinguishes_absent_and_explicit_window_params() {
         let default_window = FrameCacheKey::new(0, 0, None, None, WindowMode::Default);
-        let explicit_zero = FrameCacheKey::new(0, 0, Some(0.0), Some(0.0), WindowMode::Default);
+        let explicit = FrameCacheKey::new(0, 0, Some(0.0), Some(1.0), WindowMode::Default);
 
-        assert_ne!(default_window, explicit_zero);
-        assert_eq!(explicit_zero.window_center_bits, Some(0));
-        assert_eq!(explicit_zero.window_width_bits, Some(0));
+        assert_ne!(default_window, explicit);
+        assert_eq!(explicit.window_center_bits, Some(0));
+        assert_eq!(explicit.window_width_bits, Some(1.0_f64.to_bits()));
+    }
+
+    #[test]
+    fn full_dynamic_cache_key_ignores_explicit_window_values() {
+        let first = FrameCacheKey::new(0, 0, Some(10.0), Some(20.0), WindowMode::FullDynamic);
+        let second = FrameCacheKey::new(0, 0, Some(30.0), Some(40.0), WindowMode::FullDynamic);
+
+        assert_eq!(first, second);
+        assert_eq!(first.window_center_bits, None);
+        assert_eq!(first.window_width_bits, None);
+    }
+
+    #[test]
+    fn window_request_requires_a_finite_positive_pair() {
+        assert_eq!(
+            WindowRequest::new(Some(10.0), None, WindowMode::Default),
+            Err(WindowRequestError::IncompletePair)
+        );
+        assert_eq!(
+            WindowRequest::new(Some(f64::INFINITY), Some(20.0), WindowMode::Default),
+            Err(WindowRequestError::NonFiniteCenter)
+        );
+        assert_eq!(
+            WindowRequest::new(Some(10.0), Some(f64::NAN), WindowMode::Default),
+            Err(WindowRequestError::NonFiniteWidth)
+        );
+        assert_eq!(
+            WindowRequest::new(Some(10.0), Some(0.0), WindowMode::Default),
+            Err(WindowRequestError::NonPositiveWidth)
+        );
+        assert!(WindowRequest::new(Some(10.0), Some(20.0), WindowMode::Default).is_ok());
     }
 }
 

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
 const VSCODE_BRIDGE_URL_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_URL";
@@ -278,7 +278,6 @@ async fn run() -> Result<i32> {
         annotations: annotation_store.clone(),
         tunnel_info: None,
         tunnel_handle: None,
-        server_start: Instant::now(),
         server_start_ms: now_unix_ms(),
         last_request: Arc::new(AtomicU64::new(now_unix_ms())),
     };

@@ -334,7 +334,7 @@ async fn default_and_full_dynamic_modes_occupy_independent_cache_slots() {
 
     // Default mode is now cached — full_dynamic must still be a MISS.
     let dynamic_first = test_server
-        .get("/api/file/0/frame/0?mode=full_dynamic")
+        .get("/api/file/0/frame/0?mode=full_dynamic&wc=10&ww=20")
         .await;
     dynamic_first.assert_status_ok();
     assert_eq!(
@@ -345,7 +345,7 @@ async fn default_and_full_dynamic_modes_occupy_independent_cache_slots() {
 
     // Subsequent full_dynamic request: HIT.
     let dynamic_second = test_server
-        .get("/api/file/0/frame/0?mode=full_dynamic")
+        .get("/api/file/0/frame/0?mode=full_dynamic&wc=30&ww=40")
         .await;
     dynamic_second.assert_status_ok();
     assert_eq!(

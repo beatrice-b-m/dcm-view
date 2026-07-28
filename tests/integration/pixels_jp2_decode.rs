@@ -3,7 +3,7 @@ use dcmview::pixels::{load_frame, new_cache, FrameRequest};
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn decodes_jp2_even_when_accept_header_supports_jp2() {
+async fn invalid_jp2_payload_surfaces_server_side_decode_error() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("jp2-frames.dcm");
     let frame = vec![
@@ -11,17 +11,15 @@ async fn decodes_jp2_even_when_accept_header_supports_jp2() {
     ];
     support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.91", vec![frame.clone()]);
 
-    let files = vec![support::file_entry(path, "1.2.840.10008.1.2.4.91", 1)];
+    let file = support::file_entry(path, "1.2.840.10008.1.2.4.91", 1);
     let error = load_frame(
-        &files,
+        file,
         new_cache(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/jp2,image/*;q=0.8".to_string()),
         },
     )
     .await
@@ -34,22 +32,20 @@ async fn decodes_jp2_even_when_accept_header_supports_jp2() {
 }
 
 #[tokio::test]
-async fn falls_back_to_decode_when_accept_lacks_jp2_and_surfaces_error_on_invalid_data() {
+async fn invalid_jp2_codestream_surfaces_decode_context() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("jp2-fallback.dcm");
     support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.91", vec![vec![1, 2, 3, 4]]);
 
-    let files = vec![support::file_entry(path, "1.2.840.10008.1.2.4.91", 1)];
+    let file = support::file_entry(path, "1.2.840.10008.1.2.4.91", 1);
     let error = load_frame(
-        &files,
+        file,
         new_cache(),
         FrameRequest {
-            file_index: 0,
             frame: 0,
             window_center: None,
             window_width: None,
             window_mode: dcmview::types::WindowMode::Default,
-            accept_header: Some("image/png".to_string()),
         },
     )
     .await
