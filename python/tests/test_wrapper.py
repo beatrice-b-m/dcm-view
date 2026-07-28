@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import importlib.util
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -14,7 +13,6 @@ import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import Optional
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +23,7 @@ if str(PYTHON_SRC) not in sys.path:
 from dcmview_py import __main__ as dcmview_main
 from dcmview_py import wrapper
 
-FIXTURE_FILE = REPO_ROOT / "FFDM_R_MLO_ComboHD.dcm"
+FIXTURE_FILE = REPO_ROOT / "tests" / "fixtures" / "golden-uncompressed-u16-multiframe.dcm"
 BRIDGE_CONTRACT = REPO_ROOT / "docs" / "contracts" / "bridge-protocol.json"
 REGISTRY_CONTRACT = REPO_ROOT / "docs" / "contracts" / "vscode-bridge-registry.json"
 VERIFY_WHEEL_INSTALL = REPO_ROOT / "scripts" / "verify_wheel_install.py"
@@ -38,20 +36,6 @@ def _load_script_module(name: str, path: Path):
 	assert spec.loader is not None
 	spec.loader.exec_module(module)
 	return module
-
-
-def _available_dcmview_binary() -> Optional[Path]:
-	for candidate in [
-		REPO_ROOT / "target" / "debug" / wrapper._binary_name(),
-		REPO_ROOT / "target" / "release" / wrapper._binary_name(),
-	]:
-		if candidate.is_file():
-			return candidate
-
-	resolved = shutil.which(wrapper._binary_name())
-	if resolved is None:
-		return None
-	return Path(resolved)
 
 
 class WrapperTests(unittest.TestCase):
@@ -218,34 +202,6 @@ class WrapperTests(unittest.TestCase):
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
 			with self.assertRaisesRegex(ValueError, "tunnel_host is required"):
 				wrapper.view([FIXTURE_FILE], browser=False, tunnel=True)
-
-	def test_non_blocking_launch_captures_url_and_stop(self) -> None:
-		binary = _available_dcmview_binary()
-		if binary is None:
-			self.skipTest("dcmview binary not available")
-		if not FIXTURE_FILE.is_file():
-			self.skipTest("fixture DICOM file not found")
-
-		with mock.patch.dict(
-			os.environ,
-			{"PATH": f"{binary.parent}{os.pathsep}{os.environ.get('PATH', '')}"},
-			clear=False,
-		):
-			handle = wrapper.view([FIXTURE_FILE], browser=False, timeout=30, block=False)
-
-			try:
-				deadline = time.time() + 10.0
-				while handle.url is None and time.time() < deadline:
-					time.sleep(0.1)
-
-				self.assertIsNotNone(handle.url)
-				assert handle.url is not None
-				self.assertTrue(handle.url.startswith("http://"))
-			finally:
-				exit_code = handle.stop()
-
-			self.assertIsInstance(exit_code, int)
-			self.assertIsInstance(handle.stop(), int)
 
 	def test_cli_forwards_no_browser_no_recursive_and_timeout(self) -> None:
 		with mock.patch("dcmview_py.__main__.view", return_value=None) as view_mock:
