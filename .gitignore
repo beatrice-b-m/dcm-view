@@ -15,6 +15,9 @@ devscripts/
 !tests/fixtures/golden-jpeg-baseline-multiframe-bot.dcm
 !tests/fixtures/golden-jpeg-baseline-large-single-frame.dcm
 !tests/fixtures/golden-jpeg-baseline-single-frame.dcm
+!tests/fixtures/golden-jpeg-lossless-u16-single-frame.dcm
+!tests/fixtures/golden-jpeg2000-lossless-u8-single-frame.dcm
+!tests/fixtures/golden-image-no-pixels.dcm
 !tests/fixtures/golden-no-pixels-sr.dcm
 !tests/fixtures/golden-uncompressed-u16-multiframe.dcm
 

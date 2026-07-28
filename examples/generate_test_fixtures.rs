@@ -15,6 +15,12 @@ fn main() {
     write_jpeg_single_frame(&fixture_dir.join("golden-jpeg-baseline-single-frame.dcm"));
     write_large_jpeg_single_frame(&fixture_dir.join("golden-jpeg-baseline-large-single-frame.dcm"));
     write_jpeg_multiframe_with_bot(&fixture_dir.join("golden-jpeg-baseline-multiframe-bot.dcm"));
+    write_jpeg_lossless_single_frame(
+        &fixture_dir.join("golden-jpeg-lossless-u16-single-frame.dcm"),
+    );
+    write_jpeg2000_lossless_single_frame(
+        &fixture_dir.join("golden-jpeg2000-lossless-u8-single-frame.dcm"),
+    );
     write_sr_without_pixels(&fixture_dir.join("golden-no-pixels-sr.dcm"));
     write_image_without_pixels(&fixture_dir.join("golden-image-no-pixels.dcm"));
 }
@@ -166,6 +172,131 @@ fn write_jpeg_multiframe_with_bot(path: &Path) {
             Fragments::new(grayscale_jpeg_fragment_16x16(165), 0),
         ],
     );
+}
+
+fn write_jpeg_lossless_single_frame(path: &Path) {
+    write_grayscale_encapsulated_fixture(
+        path,
+        GrayscaleEncapsulatedSpec {
+            sop_instance_uid: "2.25.2000007",
+            patient_id: "GOLDEN-JPEG-LOSSLESS",
+            transfer_syntax_uid: "1.2.840.10008.1.2.4.70",
+            rows: 4,
+            columns: 4,
+            bits_allocated: 16,
+            default_window: Some(("750", "1500")),
+        },
+        vec![Fragments::new(jpeg_lossless_fragment_4x4_u16(), 0)],
+    );
+}
+
+fn write_jpeg2000_lossless_single_frame(path: &Path) {
+    write_grayscale_encapsulated_fixture(
+        path,
+        GrayscaleEncapsulatedSpec {
+            sop_instance_uid: "2.25.2000008",
+            patient_id: "GOLDEN-JPEG2000",
+            transfer_syntax_uid: "1.2.840.10008.1.2.4.90",
+            rows: 16,
+            columns: 16,
+            bits_allocated: 8,
+            default_window: Some(("127.5", "255")),
+        },
+        vec![Fragments::new(jpeg2000_lossless_fragment_16x16_u8(), 0)],
+    );
+}
+
+struct GrayscaleEncapsulatedSpec<'a> {
+    sop_instance_uid: &'a str,
+    patient_id: &'a str,
+    transfer_syntax_uid: &'a str,
+    rows: u16,
+    columns: u16,
+    bits_allocated: u16,
+    default_window: Option<(&'a str, &'a str)>,
+}
+
+fn write_grayscale_encapsulated_fixture(
+    path: &Path,
+    spec: GrayscaleEncapsulatedSpec<'_>,
+    frames: Vec<Fragments>,
+) {
+    let frame_count = frames.len().max(1);
+    let mut obj = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
+        DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, spec.sop_instance_uid),
+        DataElement::new(
+            tags::PATIENT_ID,
+            VR::LO,
+            PrimitiveValue::from(spec.patient_id),
+        ),
+        DataElement::new(tags::MODALITY, VR::CS, PrimitiveValue::from("CT")),
+        DataElement::new(tags::STUDY_DATE, VR::DA, PrimitiveValue::from("20260608")),
+        DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(spec.rows)),
+        DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(spec.columns)),
+        DataElement::new(
+            tags::BITS_ALLOCATED,
+            VR::US,
+            PrimitiveValue::from(spec.bits_allocated),
+        ),
+        DataElement::new(
+            tags::BITS_STORED,
+            VR::US,
+            PrimitiveValue::from(spec.bits_allocated),
+        ),
+        DataElement::new(
+            tags::HIGH_BIT,
+            VR::US,
+            PrimitiveValue::from(spec.bits_allocated - 1),
+        ),
+        DataElement::new(
+            tags::PIXEL_REPRESENTATION,
+            VR::US,
+            PrimitiveValue::from(0_u16),
+        ),
+        DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(
+            tags::PHOTOMETRIC_INTERPRETATION,
+            VR::CS,
+            PrimitiveValue::from("MONOCHROME2"),
+        ),
+        DataElement::new(
+            tags::NUMBER_OF_FRAMES,
+            VR::IS,
+            PrimitiveValue::from(frame_count.to_string()),
+        ),
+        DataElement::new(tags::RESCALE_SLOPE, VR::DS, PrimitiveValue::from("1")),
+        DataElement::new(tags::RESCALE_INTERCEPT, VR::DS, PrimitiveValue::from("0")),
+    ]);
+
+    if let Some((center, width)) = spec.default_window {
+        obj.put(DataElement::new(
+            tags::WINDOW_CENTER,
+            VR::DS,
+            PrimitiveValue::from(center),
+        ));
+        obj.put(DataElement::new(
+            tags::WINDOW_WIDTH,
+            VR::DS,
+            PrimitiveValue::from(width),
+        ));
+    }
+
+    let pixel_sequence: PixelFragmentSequence<Vec<u8>> = frames.into();
+    obj.put(DataElement::new(tags::PIXEL_DATA, VR::OB, pixel_sequence));
+
+    let file_object = obj
+        .with_meta(
+            FileMetaTableBuilder::new()
+                .transfer_syntax(spec.transfer_syntax_uid)
+                .media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
+                .media_storage_sop_instance_uid(spec.sop_instance_uid),
+        )
+        .expect("build compressed grayscale fixture meta");
+
+    file_object
+        .write_to_file(path)
+        .expect("write compressed grayscale golden fixture");
 }
 
 fn write_jpeg_fixture(
@@ -350,4 +481,43 @@ fn large_grayscale_jpeg_fragment(width: u32, height: u32) -> Vec<u8> {
         .encode_image(&image)
         .expect("encode large grayscale jpeg fixture");
     encoded
+}
+
+fn jpeg_lossless_fragment_4x4_u16() -> Vec<u8> {
+    // Lossless JPEG process 14, selection value 1: 0, 100, ... 1500.
+    decode_hex(concat!(
+        "ffd8ffe000104a46494600010100000100010000ffc3000b100004000401011100",
+        "ffc400160001010100000000000000000000000000070910ffda000801010001",
+        "0000cc8c8c9641919192c8323232590646464fffd9"
+    ))
+}
+
+fn jpeg2000_lossless_fragment_16x16_u8() -> Vec<u8> {
+    // Lossless J2K codestream: sixteen rows with values 0, 17, ... 255.
+    decode_hex(concat!(
+        "ff4fff5100290000000000100000001000000000000000000000001000000010",
+        "00000000000000000001070101ff52000c00000001000104040001ff5c000740",
+        "40484850ff640025000143726561746564206279204f70656e4a504547207665",
+        "7273696f6e20322e352e34ff90000a00000000004b0001ff93df8178128e2ccf",
+        "87f90eb3644a78e066e3b11b89613bda74543e1be0ca9c8c9252739ce666d0d",
+        "f1f932000000000000ac01fa0f9c3803da6345f370603ffd9"
+    ))
+}
+
+fn decode_hex(encoded: &str) -> Vec<u8> {
+    assert_eq!(encoded.len() % 2, 0, "hex fixture must contain byte pairs");
+    encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> u8 {
+    match value {
+        b'0'..=b'9' => value - b'0',
+        b'a'..=b'f' => value - b'a' + 10,
+        b'A'..=b'F' => value - b'A' + 10,
+        _ => panic!("invalid hexadecimal fixture byte"),
+    }
 }

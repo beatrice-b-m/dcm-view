@@ -8,7 +8,13 @@ The committed corpus is intentionally small and synthetic:
 - `golden-jpeg-baseline-single-frame.dcm`
 - `golden-jpeg-baseline-large-single-frame.dcm`
 - `golden-jpeg-baseline-multiframe-bot.dcm`
+- `golden-jpeg-lossless-u16-single-frame.dcm`
+- `golden-jpeg2000-lossless-u8-single-frame.dcm`
+- `golden-image-no-pixels.dcm`
 - `golden-no-pixels-sr.dcm`
 
 The goal is stable decoding and contract coverage. The large single-frame JPEG
 fixture keeps file size small while exercising realistic viewport geometry.
+The JPEG Lossless and JPEG 2000 fixtures contain fixed, losslessly encoded
+grayscale codestreams so successful server-side display and raw-sample paths
+remain covered without network access or external codecs during regeneration.
