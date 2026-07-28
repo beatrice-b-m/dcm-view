@@ -1,6 +1,7 @@
 mod integration {
     mod annotations_endpoint;
     mod api_contract;
+    mod codec_contract;
     mod golden_fixtures;
     mod loader_discovery;
     mod pixels_jp2_decode;
