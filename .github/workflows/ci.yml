@@ -8,6 +8,7 @@ on:
 
 jobs:
   changes:
+    name: Packaging change detection
     runs-on: ubuntu-22.04
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
@@ -19,22 +20,64 @@ jobs:
           filters: |
             packaging:
               - ".github/workflows/**"
+              - "Cargo.lock"
+              - "Cargo.toml"
+              - "LICENSE"
+              - "README.md"
+              - "build.rs"
+              - "frontend/**"
               - "pyproject.toml"
               - "setup.py"
               - "python/**"
               - "scripts/**"
+              - "src/**"
 
-  tests:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Check package versions
+        run: python scripts/check_versions.py
+      - name: Run frontend checks
+        run: python scripts/check.py frontend --install
+
+  rust:
+    name: Rust lint and tests (Linux, Rust 1.88)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Rust formatting, lint, fixture, and test checks
+        run: python scripts/check.py rust --install
+
+  rust-platform:
+    name: Rust tests (${{ matrix.runner }}, Rust 1.88)
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-22.04
-            smoke_binary: target/debug/dcmview
-            run_vscode_tests: true
-          - runner: windows-latest
-            smoke_binary: target/debug/dcmview.exe
-            run_vscode_tests: false
+        runner:
+          - windows-latest
+          - macos-14
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -42,51 +85,95 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: |
-            frontend/package-lock.json
-            vscode/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Check package versions
-        run: python scripts/check_versions.py
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
-      - name: Install frontend dependencies
-        run: npm --prefix frontend ci
-      - name: Check generated frontend API types
-        run: npm --prefix frontend run check:types
-      - name: Typecheck frontend
-        run: npm --prefix frontend run typecheck
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-      - name: Regenerate committed fixtures
-        run: cargo run --example generate_test_fixtures
-      - name: Check fixture drift
-        run: git diff --exit-code tests/fixtures
-      - name: Run Rust tests
-        run: cargo test --locked
-      - name: Run Python wrapper tests
-        run: python -m unittest discover -s python/tests
-      - name: Install VS Code extension dependencies
-        run: npm --prefix vscode ci
-      - name: Compile VS Code extension
-        run: npm --prefix vscode run compile
-      - name: Run VS Code extension tests
-        if: ${{ matrix.run_vscode_tests }}
-        run: xvfb-run -a npm --prefix vscode test
-      - name: Build debug binary
-        run: cargo build --locked
-      - name: Smoke test built binary
-        run: >
-          python scripts/smoke_release_binary.py
-          ${{ matrix.smoke_binary }}
-          tests/fixtures/golden-uncompressed-u16-multiframe.dcm
-          tests/fixtures/golden-no-pixels-sr.dcm
+      - name: Run Rust fixture and test checks
+        run: python scripts/check.py rust-test --install
+
+  python-unit:
+    name: Python unit (${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.9"
+          - "3.x"
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run Python unit tests
+        run: python scripts/check.py python-unit
+
+  python-integration:
+    name: Python real-binary integration
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Run wrapper and HTTP smoke tests against a real binary
+        run: python scripts/check.py python-integration --install
+
+  vscode-compile:
+    name: VS Code compile
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: vscode/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Compile the VS Code extension
+        run: python scripts/check.py vscode --install
+
+  vscode-integration:
+    name: VS Code integration (${{ matrix.vscode-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vscode-version: "1.90.2"
+            experimental: false
+          - vscode-version: "insiders"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: vscode/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run VS Code extension integration
+        env:
+          DCMVIEW_VSCODE_TEST_VERSION: ${{ matrix.vscode-version }}
+        run: xvfb-run -a python scripts/check.py vscode-integration --install
 
   packaging-smoke:
+    name: Python wheel packaging
     needs: changes
     if: needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-22.04
