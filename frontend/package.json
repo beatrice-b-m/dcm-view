@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "check:svelte": "svelte-check --tsconfig ./tsconfig.json",
+    "check:ts": "tsc --noEmit",
+    "typecheck": "npm run check:svelte && npm run check:ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "generate:types": "python ../scripts/generate_frontend_types.py",
     "check:types": "python ../scripts/generate_frontend_types.py --check",
     "preview": "vite preview"
@@ -14,7 +18,9 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "svelte": "^5.56.3",
+    "svelte-check": "^4.4.6",
     "typescript": "^5.7.2",
-    "vite": "^6.4.1"
+    "vite": "^6.4.1",
+    "vitest": "^3.2.4"
   }
 }
