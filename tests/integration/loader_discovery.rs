@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{Seek, Write};
 use std::path::Path;
 use tempfile::tempdir;
+use tokio::sync::mpsc;
 
 fn discover_options(recursive: bool) -> DiscoverOptions {
     DiscoverOptions {
@@ -44,6 +45,58 @@ async fn discovers_valid_files_and_tracks_skips() {
         uids::EXPLICIT_VR_LITTLE_ENDIAN,
         "transfer syntax should come from file meta"
     );
+}
+
+#[tokio::test]
+async fn progressive_discovery_applies_backpressure_and_reports_each_disposition() {
+    let dir = tempdir().expect("temp dir");
+    let accepted = dir.path().join("accepted.dcm");
+    let filtered = dir.path().join("filtered.dcm");
+    let invalid = dir.path().join("not-dicom.bin");
+    write_test_dicom(&accepted, "PAT-CT", "CT", "20260101", 1, true);
+    write_test_dicom(&filtered, "PAT-MR", "MR", "20260102", 1, true);
+    fs::write(&invalid, b"not a dicom file").expect("invalid file");
+
+    // A capacity of one forces the blocking discovery workers to wait for the
+    // async consumer instead of buffering an entire large-directory scan.
+    let (events_tx, mut events_rx) = mpsc::channel(1);
+    let scan_path = dir.path().to_path_buf();
+    let scan = tokio::spawn(async move {
+        loader::discover_progressive(
+            &[scan_path],
+            DiscoverOptions {
+                recursive: true,
+                filters: vec!["modality=CT".parse().expect("filter parses")],
+            },
+            events_tx,
+        )
+        .await
+    });
+
+    let mut accepted_events = 0;
+    let mut skipped_events = 0;
+    let mut filtered_events = 0;
+    while let Some(event) = events_rx.recv().await {
+        match event {
+            loader::DiscoveryEvent::File(file) => {
+                accepted_events += 1;
+                assert_eq!(file.modality, "CT");
+            }
+            loader::DiscoveryEvent::Skipped => skipped_events += 1,
+            loader::DiscoveryEvent::Filtered => filtered_events += 1,
+        }
+    }
+
+    let report = scan
+        .await
+        .expect("progressive scan task should finish")
+        .expect("progressive discovery should succeed");
+    assert_eq!(accepted_events, 1);
+    assert_eq!(skipped_events, 1);
+    assert_eq!(filtered_events, 1);
+    assert_eq!(report.files_found, 1);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.filtered, 1);
 }
 
 #[tokio::test]

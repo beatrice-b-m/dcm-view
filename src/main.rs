@@ -21,6 +21,7 @@ const VSCODE_BRIDGE_BYPASS_ENV: &str = "DCMVIEW_VSCODE_BYPASS";
 const VSCODE_BRIDGE_REGISTRY_DIR_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR";
 const VSCODE_BRIDGE_DEBUG_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_DEBUG";
 const BRIDGE_REGISTRY_MAX_AGE_MS: u64 = 3 * 60 * 60 * 1000;
+const DISCOVERY_EVENT_CAPACITY: usize = 64;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -924,7 +925,7 @@ fn spawn_progressive_discovery(
     exit_code: Arc<AtomicI32>,
 ) {
     tokio::spawn(async move {
-        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        let (events_tx, mut events_rx) = mpsc::channel(DISCOVERY_EVENT_CAPACITY);
         let scan_paths = input_paths.clone();
         let filters_for_message = filters.clone();
         let scan = tokio::spawn(async move {
@@ -937,9 +938,9 @@ fn spawn_progressive_discovery(
         });
 
         while let Some(event) = events_rx.recv().await {
-            registry.record_scanned();
             match event {
                 loader::DiscoveryEvent::File(file) => {
+                    registry.record_scanned();
                     let annotations = if let Some(source) = annotation_source.as_ref() {
                         match source.annotations_for_file(&file) {
                             Ok(annotations) => annotations,
@@ -953,7 +954,7 @@ fn spawn_progressive_discovery(
                     } else {
                         None
                     };
-                    let index = registry.insert(file);
+                    let index = registry.insert(*file);
                     if let Some(annotations) = annotations {
                         if let Err(error) =
                             annotation_store.insert_csv_if_unedited(index, annotations)

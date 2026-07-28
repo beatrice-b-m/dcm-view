@@ -129,7 +129,7 @@ fn scan_filter_parse_error(raw: &str) -> String {
 
 #[derive(Debug)]
 pub enum DiscoveryEvent {
-    File(FileEntry),
+    File(Box<FileEntry>),
     Skipped,
     Filtered,
 }
@@ -152,7 +152,7 @@ pub async fn discover(paths: &[PathBuf], options: DiscoverOptions) -> Result<Loa
 pub async fn discover_progressive(
     paths: &[PathBuf],
     options: DiscoverOptions,
-    events: mpsc::UnboundedSender<DiscoveryEvent>,
+    events: mpsc::Sender<DiscoveryEvent>,
 ) -> Result<DiscoveryReport> {
     let paths = paths.to_vec();
     task::spawn_blocking(move || discover_progressive_blocking(&paths, &options, events))
@@ -244,11 +244,11 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
 fn discover_progressive_blocking(
     paths: &[PathBuf],
     options: &DiscoverOptions,
-    events: mpsc::UnboundedSender<DiscoveryEvent>,
+    events: mpsc::Sender<DiscoveryEvent>,
 ) -> Result<DiscoveryReport> {
     let (candidates, initial_skipped) = collect_candidates(paths, options);
     for _ in 0..initial_skipped {
-        let _ = events.send(DiscoveryEvent::Skipped);
+        let _ = events.blocking_send(DiscoveryEvent::Skipped);
     }
 
     let files_found = AtomicUsize::new(0);
@@ -260,19 +260,19 @@ fn discover_progressive_blocking(
         .for_each_with(events, |events, candidate| match build_entry(candidate) {
             Ok(Some(entry)) if matches_filters(&entry, &options.filters) => {
                 files_found.fetch_add(1, Ordering::Relaxed);
-                let _ = events.send(DiscoveryEvent::File(entry));
+                let _ = events.blocking_send(DiscoveryEvent::File(Box::new(entry)));
             }
             Ok(Some(_)) => {
                 filtered.fetch_add(1, Ordering::Relaxed);
-                let _ = events.send(DiscoveryEvent::Filtered);
+                let _ = events.blocking_send(DiscoveryEvent::Filtered);
             }
             Ok(None) => {
                 skipped.fetch_add(1, Ordering::Relaxed);
-                let _ = events.send(DiscoveryEvent::Skipped);
+                let _ = events.blocking_send(DiscoveryEvent::Skipped);
             }
             Err(error) => {
                 skipped.fetch_add(1, Ordering::Relaxed);
-                let _ = events.send(DiscoveryEvent::Skipped);
+                let _ = events.blocking_send(DiscoveryEvent::Skipped);
                 eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
             }
         });
