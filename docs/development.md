@@ -6,9 +6,42 @@ and a Python wrapper that resolves or bundles the same binary.
 
 ## Prerequisites
 
-- Rust stable 1.75+
-- Node.js 18+ and npm at build time
+- Rust 1.88+
+- Node.js 20.19+ and npm at build time
+- Python 3.9+ for wrappers and the canonical check runner
 - `ssh` on `PATH` only when testing SSH forwarding helpers
+
+The Rust baseline matches `Cargo.toml` and CI. The Node baseline matches CI and
+the frontend and VS Code development toolchains.
+
+## Canonical Check Profiles
+
+Use `scripts/check.py`; local validation and CI share this check runner:
+
+```bash
+# Normal development loop; add --install to run frontend npm ci first
+python scripts/check.py quick
+
+# Full deterministic core checks
+python scripts/check.py core
+
+# Core plus real-process and VS Code Electron integration
+python scripts/check.py e2e
+
+# Opt-in remote fixtures that may use network or cache state
+python scripts/check.py external
+```
+
+| Profile | Runs |
+|---|---|
+| `quick` | Version parity, generated frontend contract checks, Svelte/TypeScript checks, Vitest, frontend build, Rust format and strict all-target Clippy, and Python unit tests. It does not run Rust tests or VS Code tests. |
+| `core` | Frontend checks/build, Rust format and Clippy, deterministic fixture regeneration that must leave the current fixture tree unchanged, the default-feature, non-ignored locked Rust suite, Python unit tests, and VS Code compilation. |
+| `e2e` | `core`, then a real debug-binary build, Python wrapper binary integration, debug-binary HTTP smoke, and VS Code Electron integration. |
+| `external` | Only the feature-gated ignored remote-fixture integration tests after building frontend assets. It is separate from `e2e`. |
+
+Pass `--install` when npm dependencies should be installed from their lockfiles.
+Without it, the profiles reuse existing `node_modules`. CI runs focused
+component profiles in separate jobs for clearer failure attribution.
 
 ## Source Builds
 
@@ -60,7 +93,9 @@ backend on that host and port before using the standalone frontend.
 Frontend checks:
 
 ```bash
+npm --prefix frontend run check:contracts
 npm --prefix frontend run typecheck
+npm --prefix frontend run test
 npm --prefix frontend run build
 ```
 
@@ -72,8 +107,12 @@ Common backend checks:
 cargo fmt --all
 cargo fmt --all -- --check
 DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
-cargo test --locked
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo clippy --all-targets --locked -- -D warnings
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo test --locked
 ```
+
+Prefer `python scripts/check.py quick` or `core` for handoff. The individual
+commands remain useful for targeted iteration.
 
 Use the `debug-api` feature only when debugging the local viewer API from
 another browser origin:
@@ -110,25 +149,29 @@ Integration tests use real DICOM fixtures and cover discovery, display-frame
 decoding, raw-frame transport, cache headers, tag serialization, annotations,
 and tunnel fallback. Do not mock the DICOM layer for integration coverage.
 
-Remote JPEG 2000 coverage is behind the `remote-fixtures` feature and ignored by
-default because it may download or cache files through `dicom-test-files`:
+Two upstream fixture cases are behind the `remote-fixtures` feature and ignored
+by default because they may download or cache files through
+`dicom-test-files`: one loader/API metadata case and one JPEG 2000
+display/cache case. Committed JPEG 2000 fixtures remain in the default suite.
+Run the canonical external profile:
 
 ```bash
-cargo test --features remote-fixtures --test integration -- --ignored
+python scripts/check.py external
 ```
 
 ## Architecture Summary
 
-- Backend: Rust, Axum, Tokio.
-- DICOM: `dicom-rs`, `dicom-pixeldata`, `jpeg2k`.
-- Pixel pipeline: server-side display PNGs, raw sample transport for
-  interactive rendering, and LRU caches.
-- Frontend: Svelte 5, Vite, TypeScript, embedded via `rust-embed`.
-- Distribution: one executable with no runtime frontend assets.
+The [architecture and test model](architecture.md) is normative. In brief:
 
-The CLI walks input paths, loads optional annotation CSVs, starts an Axum server,
-serves embedded frontend assets, and exits when stopped or when an optional idle
-timeout elapses.
+- `main.rs` parses the CLI; `application.rs` chooses bridge or local execution.
+- `startup/` assembles the local viewer, binds before discovery, and owns
+  discovery cancellation and joins through server exit.
+- `api/contracts.rs` owns HTTP wire declarations and generates the checked-in
+  TypeScript contract used by `frontend/src/api.ts`.
+- `server/` separates runtime, lifecycle, catalog, API, tags, and embedded web
+  assets. `pixels/` separates service, codecs, caches, windowing, and rendering.
+- `App.svelte` composes `FileNavigator`, `OpenImageTabs`, the viewer controls,
+  viewport, frame slider, tag panel, and status bar.
 
 ## Cache Budgets
 

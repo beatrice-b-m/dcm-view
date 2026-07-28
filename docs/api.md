@@ -10,10 +10,30 @@ SSH forwarding for remote workflows. API responses can expose DICOM metadata,
 file paths, annotations, and rendered or decoded pixel data.
 
 The authoritative Rust wire declarations and endpoint operations—including
-method, route, query/body types, success status, response media type, and custom
-headers—live in `src/api/contracts.rs` (or a future `src/api/contracts/` module
-directory). Browser-facing TypeScript types and typed endpoint metadata are
-generated from that source.
+method, route, query/body types, success status, response media type, response
+header kind, and error type—live in `src/api/contracts.rs`. Browser-facing
+TypeScript types and typed endpoint metadata are generated from that source into
+`frontend/src/generated/api-types.ts`; `frontend/src/api.ts` is the fetch
+boundary used by Svelte components. See the
+[architecture and test model](architecture.md#executable-http-contract) for
+ownership and dependency direction.
+
+## Contract Enforcement
+
+The endpoint registry is executable rather than documentation-only:
+
+- `src/server/api/routes.rs` registers each declared operation and constrains
+  its handler-facing request, response, header, and error types.
+- Rust unit tests check operation, method/path, query, media, header, and wire
+  type invariants.
+- Axum integration tests execute every declared endpoint and compare its
+  success status, content type, and required headers with the registry.
+- `npm --prefix frontend run check:contracts` rejects generated TypeScript
+  drift and tests the Rust-to-TypeScript generator.
+
+When adding or changing an endpoint, update the Rust declaration first,
+regenerate the checked-in TypeScript, use the typed wrapper in `api.ts`, and
+extend the runtime contract tests.
 
 ## Cross-Origin Debugging
 
@@ -274,7 +294,8 @@ CSV files are not modified.
 
 ## Error Semantics
 
-API errors use a JSON body:
+All API failures—including path, query, and JSON extractor rejections—use a JSON
+body:
 
 ```json
 { "error": "file index out of range" }
@@ -284,9 +305,10 @@ Common statuses:
 
 | Status | Typical cause |
 |---|---|
-| `400` | Invalid annotation payload. |
-| `404` | Missing file index, missing pixel data, or out-of-range frame. |
-| `422` | Unsupported transfer syntax or unsupported raw component layout. |
+| `400` | Malformed path/query input, an invalid window pair, or invalid annotation values. |
+| `404` | Unknown API route or file index, missing pixel data, or out-of-range frame. |
+| `405` | Unsupported method on a known API route. |
+| `422` | Structurally invalid JSON, unsupported transfer syntax, or unsupported raw component layout. |
 | `500` | Decode, filesystem, tag serialization task, or export failure. |
 
 Frame decode errors are returned for the request that failed; the server remains

@@ -59,71 +59,50 @@ commit was recorded before moving to the next task.
 
 ## Architecture & Data Flow
 
+[`docs/architecture.md`](docs/architecture.md) is the normative current-state
+module, contract, lifecycle, and test-profile model. Update it with structural
+changes.
+
 ```text
-CLI / Python wrapper
+CLI / Python wrapper / VS Code
   -> src/main.rs
-       -> loader.rs       walkdir + rayon inside spawn_blocking
-       -> annotations.rs  optional EMBED-style ROI CSV load/export
-       -> server.rs       Axum + Tokio HTTP server
-            GET /api/files
-            GET /api/file/:i/info
-            GET /api/file/:i/tags
-            GET /api/file/:i/frame/:n
-            GET /api/file/:i/frame/:n/raw
-            GET /api/file/:i/annotations
-            PUT /api/file/:i/annotations
-            GET /api/annotations/export.csv
-       -> pixels.rs       display PNGs, raw sample transport, LRU caches
-       -> tunnel.rs       optional ssh -L subprocess and readiness polling
+       -> application.rs   hidden bridge -> workspace bridge -> local viewer
+            -> bridge/     protocol, registry discovery, HTTP/process client
+            -> startup/
+                 -> BoundServer::bind before discovery
+                 -> discovery coordinator
+                      -> loader.rs spawn_blocking + rayon
+                      -> server/catalog.rs FileRegistry
+                      -> annotations.rs AnnotationStore
+                 -> BoundServer::serve
+                      -> server/api/ routes, handlers, state, errors
+                      -> pixels/ display/raw service, codecs, caches
+                      -> server/tags.rs and server/web.rs
+                      -> optional tunnel.rs
 
 Frontend (Svelte 5, compiled into the binary via rust-embed):
   App.svelte
-    -> FileTabs | ViewerToolbar | ImageViewport | TagPanel | FrameSlider | StatusBar
-    -> api.ts typed fetch wrappers
+    -> FileNavigator | OpenImageTabs | ViewerToolbar | ImageViewport
+    -> FrameSlider | TagPanel | StatusBar
+    -> api.ts -> generated/api-types.ts
 ```
 
-### Key data structures
+### Contract and state ownership
 
-`types.rs` owns the shared backend/frontend contract:
-
-```rust
-pub struct FileEntry {
-    pub index: usize,
-    pub path: PathBuf,
-    pub label: String,
-    pub has_pixels: bool,
-    pub frame_count: u32,
-    pub rows: u32,
-    pub columns: u32,
-    pub bits_allocated: u32,
-    pub pixel_representation: u32,
-    pub samples_per_pixel: u32,
-    pub photometric_interpretation: String,
-    pub rescale_slope: f64,
-    pub rescale_intercept: f64,
-    pub transfer_syntax_uid: String,
-    pub default_window: Option<WindowPreset>,
-}
-```
-
-`server.rs` owns shared Axum state. `Clone` is cheap because the large/shared
-members are behind `Arc`:
-
-```rust
-pub struct AppState {
-    pub files: Arc<Vec<FileEntry>>,
-    pub file_summaries: Arc<Vec<FileSummary>>,
-    pub pixel_cache: Arc<Mutex<FrameCache>>,
-    pub raw_cache: Arc<Mutex<RawFrameCache>>,
-    pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
-    pub annotations: AnnotationStore,
-    pub tunnel_info: Option<Arc<TunnelInfo>>,
-    pub tunnel_handle: Option<Arc<TunnelHandle>>,
-    pub server_start: Instant,
-    pub server_start_ms: u64,
-    pub last_request: Arc<AtomicU64>,
-}
-```
+- `src/api/contracts.rs` is the source of truth for HTTP operations, wire
+  structs, query names, response header names, media types, statuses, and the
+  JSON error envelope.
+- `frontend/src/generated/api-types.ts` is generated from the Rust contract;
+  `frontend/src/api.ts` owns browser fetches.
+- `src/types.rs` owns internal DICOM, cache-key, transfer-syntax, and windowing
+  types. It re-exports selected wire types for compatibility but does not own
+  them.
+- `server/api/state.rs` owns private `AppState` resources: `FileRegistry`,
+  display/raw/tag caches, `AnnotationStore`, tunnel resources, server start
+  time, and `RequestActivity`. Construct it through `AppState::new`.
+- `server/catalog.rs` owns progressive registry contents and scan counters.
+- `startup/discovery.rs` owns discovery cancellation, task handles, typed
+  outcomes, registry completion, and failure notification.
 
 ### Pixel pipeline
 
@@ -154,20 +133,25 @@ Both display and raw frame endpoints must include `X-Cache: HIT` or
 ```text
 dcmview/
 |-- src/
-|   |-- lib.rs          Library exports used by integration tests
-|   |-- main.rs         CLI entry point; clap struct; startup orchestration
-|   |-- annotations.rs  EMBED-style ROI CSV parsing, validation, in-memory store
-|   |-- loader.rs       DICOM discovery and FileEntry construction
-|   |-- pixels.rs       Display PNG and raw-frame decode paths; LRU caches
-|   |-- server.rs       Axum router, AppState, handlers, graceful shutdown
-|   |-- tunnel.rs       SSH subprocess management and cleanup
-|   `-- types.rs        Shared structs and API contract types
+|   |-- main.rs          Clap shape and process exit
+|   |-- application.rs   bridge/local dispatch and tracing seam
+|   |-- bridge/          binary-private bridge protocol, registry, client
+|   |-- startup/         local assembly and owned discovery lifecycle
+|   |-- api/contracts.rs canonical HTTP endpoint and wire contract
+|   |-- loader.rs        cancellable DICOM discovery and FileEntry creation
+|   |-- annotations.rs   EMBED-style ROI parsing, validation, memory store
+|   |-- pixels/          service, caches, codecs, rendering, windowing
+|   |-- server/          API, catalog, lifecycle, runtime, tags, web assets
+|   |-- tunnel.rs        SSH subprocess lifecycle
+|   `-- types.rs         internal domain and cache-key types
 |-- frontend/
 |   |-- src/
 |   |   |-- App.svelte
-|   |   |-- api.ts
+|   |   |-- api.ts                    typed fetch boundary
+|   |   |-- generated/api-types.ts    generated Rust wire contract
 |   |   `-- lib/
-|   |       |-- FileTabs.svelte
+|   |       |-- FileNavigator.svelte
+|   |       |-- OpenImageTabs.svelte
 |   |       |-- ViewerToolbar.svelte
 |   |       |-- ImageViewport.svelte
 |   |       |-- TagPanel.svelte
@@ -181,10 +165,12 @@ dcmview/
 |   |-- svelte.config.js
 |   `-- vite.config.ts
 |-- python/dcmview_py/  Python subprocess wrapper and package entrypoint
+|-- vscode/             VS Code extension and Electron integration tests
 |-- tests/
 |   |-- integration.rs  Integration test module root
 |   |-- integration/    Axum and pixel-path integration tests
 |   `-- fixtures/       Small generated DICOM fixtures
+|-- scripts/check.py    Canonical local and CI check profiles
 |-- examples/generate_test_fixtures.rs
 |-- build.rs
 |-- Cargo.toml
@@ -196,41 +182,37 @@ dcmview/
 ## Development Commands
 
 ```bash
-# First-time frontend dependency install
-npm --prefix frontend ci
+# Fast feedback: contracts, frontend, Rust lint, Python unit
+python scripts/check.py quick --install
 
-# Build everything; build.rs builds frontend/dist first
-cargo build
-cargo build --release
+# Deterministic core: quick layers + fixtures/default-feature Rust + VS Code
+python scripts/check.py core --install
 
-# Skip frontend rebuild only when frontend/dist/index.html already exists
-DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo build
+# Real debug binary, wrapper/smoke, and VS Code Electron integration
+python scripts/check.py e2e --install
 
-# Install binary to $CARGO_HOME/bin
-cargo install --path .
+# Independent upstream remote fixtures; may download/cache data
+python scripts/check.py external
 
-# Run all Rust tests
-cargo test
-
-# Run integration tests only
-cargo test --test integration
-
-# Run ignored remote-fixture tests explicitly when network/cache is available
-cargo test --features remote-fixtures --test integration -- --ignored
-
-# Frontend-only workflows
-npm --prefix frontend run build
-npm --prefix frontend run dev
-
-# Python wrapper tests
-python3 -m unittest python.tests.test_wrapper
+# Targeted iteration remains valid
+DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo test --locked
+npm --prefix frontend run test
+npm --prefix frontend run typecheck
 ```
 
 **Prerequisites:**
 
-- Rust stable 1.75+
-- Node.js 18+ and npm at build time
+- Rust 1.88+
+- Node.js 20.19+ and npm at build time
+- Python 3.9+ for wrappers and check profiles
 - `ssh` on `PATH` only when using `--tunnel`
+
+`quick` does not run Rust tests or VS Code tests. `core` adds fixture
+regeneration that must leave the current fixture tree unchanged, the
+default-feature, non-ignored locked Rust suite, and VS Code compilation. `e2e`
+adds real-process coverage. `external` is separate and runs exactly the
+feature-gated ignored remote-fixture tests. See `docs/architecture.md` for the
+complete profile model.
 
 `build.rs` runs `npm ci` only when `frontend/package-lock.json` changes since
 the last successful install stamp, then runs `npm run build`. `DCMVIEW_NODE_PATH`
@@ -255,7 +237,9 @@ requires an existing `frontend/dist/index.html`.
 **Error handling**
 
 - Use `anyhow` for fallible non-API internals.
-- Convert pixel errors through `pixel_error_to_api_error` in `server.rs`.
+- Convert `PixelError` through `server/api/error.rs`; all API errors must use
+  the shared JSON `ErrorResponse` envelope.
+- Path, query, and JSON extractor rejections must also use the JSON envelope.
 - Frame decode errors return HTTP 500 JSON and the server continues.
 - Unsupported transfer syntax returns HTTP 422 JSON and must never panic.
 - Missing pixel data returns 404 for frame endpoints.
@@ -269,7 +253,7 @@ requires an existing `frontend/dist/index.html`.
   values come directly from UI/query/DICOM inputs.
 - Display cache entries are budgeted by `FRAME_CACHE_MAX_BYTES`; raw cache
   entries are budgeted by `RAW_CACHE_MAX_BYTES`.
-- Tag trees are cached per file index in `AppState::tag_cache`.
+- Tag trees are cached per file index behind private `AppState` methods.
 
 **Windowing**
 
@@ -304,8 +288,11 @@ unless one is actually implemented.
 
 - Use Svelte 5 runes (`$state`, `$derived`, `$effect`); avoid legacy `$:`
   reactive declarations.
+- `src/api/contracts.rs` is the HTTP source of truth. Regenerate
+  `frontend/src/generated/api-types.ts`; never hand-edit it.
 - Shared root state lives in `App.svelte`: active file/frame, window settings,
-  active tool, selected preset, orientation, reset count, and tag panel layout.
+  open tabs, active tool, selected preset, orientation, reset count, navigator,
+  and tag panel layout.
 - All backend calls go through `frontend/src/api.ts`; do not add raw `fetch`
   calls in components when a typed wrapper belongs there.
 - The viewport supports two render paths: display PNG blobs for cine mode and
@@ -321,10 +308,10 @@ unless one is actually implemented.
   `annotationGeometry.ts`; keep frame-scoping semantics consistent with backend
   validation.
 - No external CSS frameworks. Use scoped Svelte styles.
-- Dark theme palette remains centered on `#1a1a1a`, `#242424`, `#e0e0e0`, and
-  `#4a9eff`.
-- Use monospace (`JetBrains Mono` / `ui-monospace`) for tag values and
-  `system-ui` for viewer chrome.
+- Theme tokens live as CSS variables in `App.svelte`; reuse them instead of
+  introducing component-local chrome palettes.
+- Use the shared monospace stack for tag values and the shared UI stack for
+  viewer chrome.
 
 ### CLI
 
@@ -339,11 +326,12 @@ dcmview [OPTIONS] <PATH> [PATH ...]
   --timeout <u64>           seconds; no timeout if absent
   --no-recursive
   --annotations <csv>
+  --filter <FIELD=VALUE>    repeatable metadata filter
 ```
 
 The server is unauthenticated. Keep loopback binding as the default and prefer
 SSH forwarding for remote use. If a public bind is added or changed, preserve
-the warning path in `server.rs`.
+the warning path in `server/runtime.rs`.
 
 ---
 
@@ -352,15 +340,21 @@ the warning path in `server.rs`.
 | File | Role |
 |---|---|
 | `README.md` | Public documentation and PyPI long description |
-| `src/main.rs` | CLI struct and startup orchestration |
-| `src/server.rs` | Axum router, API handlers, `AppState`, shutdown |
-| `src/loader.rs` | DICOM discovery and metadata extraction |
-| `src/pixels.rs` | Pixel decode, display PNGs, raw frames, LRU caches |
+| `docs/architecture.md` | Normative architecture, lifecycle, contracts, and check profiles |
+| `src/main.rs` | CLI shape and process exit |
+| `src/application.rs` | Bridge/local dispatch and injectable test seam |
+| `src/startup/` | Local viewer assembly and discovery ownership |
+| `src/api/contracts.rs` | Canonical HTTP endpoint and wire contract |
+| `src/server/` | Axum runtime, lifecycle, catalog, API, tags, and web assets |
+| `src/loader.rs` | Cancellable DICOM discovery and metadata extraction |
+| `src/pixels/` | Pixel service, codecs, display/raw paths, caches, and windowing |
 | `src/annotations.rs` | ROI CSV import/export, validation, in-memory store |
-| `src/types.rs` | Shared backend/frontend contract types |
+| `src/types.rs` | Internal domain, transfer-syntax, and cache-key types |
 | `src/tunnel.rs` | SSH subprocess lifecycle |
 | `build.rs` | Frontend build integration and Cargo fingerprints |
+| `scripts/check.py` | Canonical check profiles used locally and in CI |
 | `frontend/src/api.ts` | Typed frontend fetch wrappers |
+| `frontend/src/generated/api-types.ts` | Generated TypeScript HTTP contract |
 | `frontend/src/App.svelte` | Root frontend state and layout |
 | `frontend/src/lib/ImageViewport.svelte` | Viewer rendering, tools, ROI editing |
 | `python/dcmview_py/wrapper.py` | Python subprocess wrapper |
@@ -370,8 +364,9 @@ the warning path in `server.rs`.
 
 ## Runtime / Tooling
 
-- **Runtime:** Rust stable 1.75+, Tokio async runtime (`features = ["full"]`).
-- **Frontend toolchain:** Vite + Svelte 5 + TypeScript; Node 18+, npm.
+- **Runtime:** Rust 1.88+, Tokio async runtime (`features = ["full"]`).
+- **Frontend toolchain:** Vite + Svelte 5 + TypeScript; Node 20.19+, npm.
+- **Wrapper/check runner:** Python 3.9+.
 - **Rust package manager:** Cargo.
 - **Frontend package manager:** npm. Do not switch to bun or pnpm because
   `build.rs` calls npm.
@@ -382,6 +377,7 @@ the warning path in `server.rs`.
 
 ### Cargo feature flags
 
+- `debug-api`: enables permissive CORS for separate-origin API debugging only.
 - `debug-embed`: enables `rust-embed/debug-embed` so development builds can
   serve `frontend/dist/` from disk.
 - `remote-fixtures`: enables tests that use the `dicom-test-files` crate.
@@ -390,27 +386,31 @@ the warning path in `server.rs`.
 
 ## Testing & QA
 
-**Framework:** `cargo test` plus `axum-test` for HTTP integration tests.
+Use the `scripts/check.py` profiles above; their exact composition and test
+seams are normative in `docs/architecture.md`.
 
-**Committed fixtures:**
+Rust uses unit tests plus `axum-test` HTTP integration tests. Frontend behavior
+uses Vitest, Python separates mock/unit coverage from real-binary integration,
+and VS Code separates compilation from Electron-hosted integration.
 
-- `golden-uncompressed-u16-multiframe.dcm`
-- `golden-jpeg-baseline-single-frame.dcm`
-- `golden-jpeg-baseline-multiframe-bot.dcm`
-- `golden-no-pixels-sr.dcm`
-
-Fixtures are generated by:
+Committed synthetic fixtures cover native, JPEG Baseline, JPEG Lossless, JPEG
+2000, multiframe, and no-pixel objects. They are generated by:
 
 ```bash
 cargo run --example generate_test_fixtures
 ```
 
-Remote JPEG 2000 coverage is behind the `remote-fixtures` feature and ignored
-by default because it may download/cache files through `dicom-test-files`.
+Two upstream loader/API and JPEG 2000 display/cache cases are behind the
+`remote-fixtures` feature and ignored by default because they may
+download/cache files through `dicom-test-files`. Run them only through
+`python scripts/check.py external`; committed JPEG 2000 coverage remains in the
+default suite.
 
 **Key integration test assertions:**
 
 - `X-Cache: MISS` on first frame request; `X-Cache: HIT` on identical repeat.
+- Every declared HTTP endpoint matches its status, media type, response header,
+  and shared JSON error contract at runtime.
 - Cache misses when window parameters or window mode change.
 - Display frames for supported image syntaxes return `Content-Type: image/png`.
 - JPEG 2000 display paths decode server-side rather than returning raw

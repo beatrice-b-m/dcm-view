@@ -19,9 +19,9 @@ possible. Report suspected security vulnerabilities privately; see
 
 Prerequisites:
 
-- Rust stable 1.75+
-- Node.js 18+ and npm for frontend builds
-- Python 3 for wrapper tests
+- Rust 1.88+
+- Node.js 20.19+ and npm for frontend and VS Code builds
+- Python 3.9+ for wrappers and repository checks
 - `ssh` only when testing tunnel behavior
 
 Install frontend dependencies:
@@ -43,26 +43,39 @@ During backend-only development, you may skip the frontend rebuild only when
 DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
 ```
 
-See the [development reference](docs/development.md) for the full source-build,
-frontend proxy, architecture, and release workflow notes.
+See the [development reference](docs/development.md) for source builds and the
+[architecture and test model](docs/architecture.md) for normative module
+ownership, contracts, lifecycle invariants, and test seams.
 
 ## Tests And Checks
 
-Run the checks that match the area you changed:
+Use the canonical profile that matches the highest boundary changed:
 
 ```bash
-cargo fmt --all
-DCMVIEW_SKIP_FRONTEND_BUILD=1 cargo check --locked
-cargo test --locked
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
-python -m unittest discover -s python/tests
-npm --prefix vscode run compile
+# Fast development feedback; add --install when dependencies need npm ci
+python scripts/check.py quick
+
+# Deterministic frontend, Rust, Python-unit, and VS Code-compile coverage
+python scripts/check.py core
+
+# Core plus real binary, HTTP smoke, Python, and VS Code Electron integration
+python scripts/check.py e2e
+
+# Independent opt-in remote-fixture coverage
+python scripts/check.py external
 ```
 
-Use targeted Rust tests while iterating, then broaden coverage when changing
-shared contracts, server behavior, pixel decoding, generated types, packaging,
-or release workflows.
+`quick` does not run Rust tests or VS Code tests. `core` adds deterministic
+fixture regeneration checks, the default-feature, non-ignored locked Rust
+suite, and VS Code compilation. `e2e` adds the real-process layers. `external`
+is separate because it may download or cache remote DICOM fixtures. See the
+[profile reference](docs/development.md#canonical-check-profiles) for the exact
+contents.
+
+Use targeted commands while iterating, then run at least `core` when changing
+shared HTTP contracts, server behavior, pixel decoding, generated types, or
+fixtures. Use `e2e` for process startup, Python wrapper, bridge, smoke, or VS
+Code integration changes.
 
 For `debug-api` changes, also run:
 
@@ -87,7 +100,7 @@ transport behavior.
 Remote fixture coverage is feature-gated because it can download or cache data:
 
 ```bash
-cargo test --features remote-fixtures --test integration -- --ignored
+python scripts/check.py external
 ```
 
 ## Documentation Expectations
@@ -103,6 +116,7 @@ Useful entry points:
 - [Troubleshooting guide](docs/troubleshooting.md)
 - [Python reference](docs/python.md)
 - [Internal API reference](docs/api.md)
+- [Architecture and test model](docs/architecture.md)
 - [Release process](docs/releasing.md)
 
 ## Pull Requests
