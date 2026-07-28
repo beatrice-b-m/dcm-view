@@ -9,6 +9,7 @@ mod integration {
     mod pixels_raw_endpoint;
     mod pixels_uncompressed;
     mod remote_fixtures;
+    mod server_lifecycle;
     mod server_minimal;
     mod support;
     mod tags_endpoint;

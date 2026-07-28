@@ -1,3 +1,9 @@
+pub mod lifecycle;
+pub mod runtime;
+
+pub use lifecycle::{RequestActivity, ShutdownReason};
+pub use runtime::{run, startup_event_json, BoundServer, ServerConfig, ServerExit, TunnelConfig};
+
 use crate::annotations::AnnotationStore;
 use crate::api::contracts::{
     self as api_contracts, ApiEndpointContract, ApiEndpointSpec, ApiMethod, ApiOperation,
@@ -10,12 +16,13 @@ use crate::api::contracts::{
     RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS, RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
 };
 use crate::pixels::{self, FrameCache, FrameRequest, RawFrameCache, RawFrameRequest};
-use crate::tunnel::{self, TunnelHandle};
+use crate::tunnel::TunnelHandle;
 use crate::types::{FileEntry, TunnelInfo};
 use anyhow::{Context, Result};
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
@@ -24,13 +31,10 @@ use dicom_core::header::HasLength;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_object::{open_file, InMemDicomObject};
 use rust_embed::RustEmbed;
-use serde::Serialize;
 use std::collections::HashMap;
-use std::pin::pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::net::TcpListener;
 use tokio::sync::{futures::Notified, Notify};
 #[cfg(feature = "debug-api")]
 use tower_http::cors::CorsLayer;
@@ -45,7 +49,7 @@ pub struct AppState {
     pub tunnel_info: Option<Arc<TunnelInfo>>,
     pub tunnel_handle: Option<Arc<TunnelHandle>>,
     pub server_start_ms: u64,
-    pub last_request: Arc<AtomicU64>,
+    pub activity: RequestActivity,
 }
 
 #[derive(Clone)]
@@ -176,109 +180,9 @@ impl Default for FileRegistry {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TunnelConfig {
-    pub host: String,
-    pub port: u16,
-}
-
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub timeout_seconds: Option<u64>,
-    pub open_browser: bool,
-    pub startup_json: bool,
-    pub tunnel: Option<TunnelConfig>,
-    pub shutdown: Option<Arc<Notify>>,
-}
-
-#[derive(Debug, Serialize)]
-struct StartupEvent<'a> {
-    r#type: &'a str,
-    url: &'a str,
-    host: &'a str,
-    port: u16,
-}
-
 #[derive(RustEmbed)]
 #[folder = "frontend/dist"]
 struct FrontendAssets;
-
-pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
-    let bind_addr = format!("{}:{}", config.host, config.port);
-    let listener = TcpListener::bind(&bind_addr)
-        .await
-        .with_context(|| format!("failed to bind to {bind_addr}"))?;
-    let local_addr = listener
-        .local_addr()
-        .context("failed to read local bind address")?;
-    let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
-
-    if config.startup_json {
-        println!(
-            "{}",
-            startup_event_json(&server_url, &config.host, local_addr.port())
-                .context("failed to serialize startup event")?
-        );
-    }
-    println!("dcmview: server running at {server_url}");
-    if is_non_loopback_bind(local_addr.ip()) {
-        eprintln!(
-			"dcmview: warning — server bound to non-loopback address {}; endpoints are unauthenticated and may expose sensitive DICOM data",
-			local_addr.ip()
-		);
-        eprintln!("dcmview: warning — prefer --host 127.0.0.1 (or ::1) and use --tunnel for remote access");
-    }
-
-    if let Some(tunnel_cfg) = config.tunnel {
-        let runtime =
-            tunnel::start_tunnel(local_addr.port(), tunnel_cfg.host.clone(), tunnel_cfg.port)?;
-        if let Some(warning) = runtime.warning.as_deref() {
-            eprintln!("{warning}");
-            eprintln!("dcmview: to forward manually, run on your local machine:");
-            eprintln!(
-                "dcmview:   ssh -L {0}:localhost:{0} {1}",
-                runtime.info.tunnel_port, runtime.info.tunnel_host
-            );
-        } else {
-            println!(
-                "dcmview: SSH tunnel active — access at http://localhost:{} on your local machine",
-                runtime.info.tunnel_port
-            );
-        }
-        state.tunnel_info = Some(Arc::new(runtime.info));
-        state.tunnel_handle = runtime.handle.map(Arc::new);
-    } else {
-        println!(
-			"dcmview: (on a remote server? run on your local machine: ssh -L {0}:localhost:{0} user@host)",
-			local_addr.port()
-		);
-    }
-
-    if config.open_browser {
-        spawn_browser_opener(server_url.clone(), state.registry.clone());
-    }
-
-    println!("dcmview: press Ctrl+C to stop");
-
-    if let Some(timeout) = config.timeout_seconds {
-        spawn_idle_timeout_watcher(
-            timeout,
-            state.last_request.clone(),
-            state.registry.clone(),
-            state.tunnel_handle.clone(),
-        );
-    }
-
-    let tunnel_handle = state.tunnel_handle.clone();
-    let shutdown_notify = config.shutdown.clone();
-    let app = router(state);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(tunnel_handle, shutdown_notify))
-        .await
-        .context("server failed")
-}
 
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()
@@ -292,6 +196,7 @@ fn is_non_loopback_bind(ip: std::net::IpAddr) -> bool {
 }
 
 pub fn router(state: AppState) -> Router {
+    let activity = state.activity.clone();
     let api = API_ENDPOINTS
         .iter()
         .fold(Router::new(), register_api_endpoint)
@@ -302,12 +207,25 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index_handler))
         .route("/assets/{*path}", get(asset_handler))
         .nest(API_PREFIX, api)
+        .layer(middleware::from_fn_with_state(
+            activity,
+            track_request_activity,
+        ))
         .with_state(state);
 
     #[cfg(feature = "debug-api")]
     let router = router.layer(CorsLayer::permissive());
 
     router
+}
+
+async fn track_request_activity(
+    State(activity): State<RequestActivity>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let _request = activity.request_started();
+    next.run(request).await
 }
 
 trait HandlerResponseContract {
@@ -554,15 +472,6 @@ fn register_api_endpoint(
     }
 }
 
-pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json::Result<String> {
-    serde_json::to_string(&StartupEvent {
-        r#type: "server_started",
-        url: server_url,
-        host,
-        port,
-    })
-}
-
 async fn api_not_found_handler() -> ApiError {
     ApiError::not_found("API route not found")
 }
@@ -572,7 +481,6 @@ async fn api_method_not_allowed_handler() -> ApiError {
 }
 
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
-    touch_request(&state);
     let status = state.registry.status();
     Json(HealthResponse {
         status: "ok",
@@ -582,7 +490,6 @@ async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
 }
 
 async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {
-    touch_request(&state);
     let status = state.registry.status();
     Json(FilesResponse {
         files: state.registry.summaries_snapshot(),
@@ -600,7 +507,6 @@ async fn info_handler(
     State(state): State<AppState>,
     path: std::result::Result<Path<usize>, PathRejection>,
 ) -> Result<Json<FrameInfo>, ApiError> {
-    touch_request(&state);
     let Path(index) = path.map_err(api_path_rejection)?;
     let file = state
         .registry
@@ -620,7 +526,6 @@ async fn annotations_handler(
     State(state): State<AppState>,
     path: std::result::Result<Path<usize>, PathRejection>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
-    touch_request(&state);
     let Path(index) = path.map_err(api_path_rejection)?;
     if state.registry.get(index).is_none() {
         return Err(ApiError::not_found("file index out of range"));
@@ -639,7 +544,6 @@ async fn update_annotations_handler(
     path: std::result::Result<Path<usize>, PathRejection>,
     payload: std::result::Result<Json<EmbedRoiAnnotations>, JsonRejection>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
-    touch_request(&state);
     let Path(index) = path.map_err(api_path_rejection)?;
     let Json(annotations) = payload.map_err(api_json_rejection)?;
     let file = state
@@ -656,7 +560,6 @@ async fn update_annotations_handler(
 }
 
 async fn export_annotations_handler(State(state): State<AppState>) -> Result<Response, ApiError> {
-    touch_request(&state);
     let files = state.registry.files_snapshot();
     let csv = state
         .annotations
@@ -680,7 +583,6 @@ async fn frame_handler(
     path: std::result::Result<Path<(usize, u32)>, PathRejection>,
     query: std::result::Result<Query<FrameQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
-    touch_request(&state);
     let Path((index, frame)) = path.map_err(api_path_rejection)?;
     let Query(query) = query.map_err(api_query_rejection)?;
     let file = state
@@ -721,7 +623,6 @@ async fn raw_frame_handler(
     State(state): State<AppState>,
     path: std::result::Result<Path<(usize, u32)>, PathRejection>,
 ) -> Result<Response, ApiError> {
-    touch_request(&state);
     let Path((index, frame)) = path.map_err(api_path_rejection)?;
     let file = state
         .registry
@@ -793,7 +694,6 @@ async fn tags_handler(
     State(state): State<AppState>,
     path: std::result::Result<Path<usize>, PathRejection>,
 ) -> Result<Json<Vec<TagNode>>, ApiError> {
-    touch_request(&state);
     let Path(index) = path.map_err(api_path_rejection)?;
     let file = state
         .registry
@@ -1044,106 +944,6 @@ fn insert_header_if_valid(headers: &mut HeaderMap, name: &'static str, value: St
     if let Ok(parsed) = HeaderValue::from_str(&value) {
         headers.insert(name, parsed);
     }
-}
-
-fn touch_request(state: &AppState) {
-    state.last_request.store(now_unix_ms(), Ordering::Relaxed);
-}
-
-fn spawn_idle_timeout_watcher(
-    timeout_seconds: u64,
-    last_request: Arc<AtomicU64>,
-    registry: FileRegistry,
-    tunnel_handle: Option<Arc<TunnelHandle>>,
-) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            let status = registry.status();
-            if !status.scan_complete && status.file_count == 0 {
-                continue;
-            }
-            let now = now_unix_ms();
-            let last = last_request.load(Ordering::Relaxed);
-            if last > 0 && now.saturating_sub(last) >= timeout_seconds * 1_000 {
-                if let Some(handle) = &tunnel_handle {
-                    handle.shutdown();
-                }
-                println!("dcmview: shutting down...");
-                std::process::exit(0);
-            }
-        }
-    });
-}
-
-fn spawn_browser_opener(server_url: String, registry: FileRegistry) {
-    tokio::spawn(async move {
-        loop {
-            let changed = registry.changed();
-            let mut changed = pin!(changed);
-            changed.as_mut().enable();
-            let status = registry.status();
-            if status.file_count > 0 {
-                if let Err(error) = open::that(&server_url) {
-                    eprintln!("dcmview: warning — failed to open browser: {error}");
-                }
-                return;
-            }
-            if status.scan_complete {
-                return;
-            }
-            changed.await;
-        }
-    });
-}
-
-async fn shutdown_signal(
-    tunnel_handle: Option<Arc<TunnelHandle>>,
-    shutdown_notify: Option<Arc<Notify>>,
-) {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c().await.expect("ctrl+c handler");
-    };
-
-    #[cfg(windows)]
-    let ctrl_break = async {
-        let mut signal = tokio::signal::windows::ctrl_break().expect("ctrl+break handler");
-        signal.recv().await;
-    };
-
-    #[cfg(not(windows))]
-    let ctrl_break = std::future::pending::<()>();
-
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("sigterm handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    if let Some(shutdown_notify) = shutdown_notify {
-        tokio::select! {
-            _ = ctrl_c => {},
-            _ = ctrl_break => {},
-            _ = terminate => {},
-            _ = shutdown_notify.notified() => {},
-        }
-    } else {
-        tokio::select! {
-            _ = ctrl_c => {},
-            _ = ctrl_break => {},
-            _ = terminate => {},
-        }
-    }
-
-    if let Some(handle) = tunnel_handle {
-        handle.shutdown();
-    }
-    println!("dcmview: shutting down...");
 }
 
 #[derive(Debug)]

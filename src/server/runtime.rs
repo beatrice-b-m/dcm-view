@@ -1,0 +1,320 @@
+//! Bound listener ownership and graceful server resource management.
+
+use super::lifecycle::{wait_for_shutdown, ExternalShutdown, ShutdownReason};
+use super::{is_non_loopback_bind, router, AppState, FileRegistry};
+use crate::tunnel::{self, TunnelHandle};
+use anyhow::{Context, Result};
+use serde::Serialize;
+use std::net::SocketAddr;
+use std::pin::pin;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::sync::{oneshot, Notify};
+use tokio::task::JoinHandle;
+
+#[derive(Debug, Clone)]
+pub struct TunnelConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: Option<u64>,
+    pub open_browser: bool,
+    pub startup_json: bool,
+    pub tunnel: Option<TunnelConfig>,
+    pub shutdown: Option<Arc<Notify>>,
+}
+
+pub struct BoundServer {
+    listener: TcpListener,
+    local_addr: SocketAddr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerExit {
+    pub local_addr: SocketAddr,
+    pub reason: ShutdownReason,
+}
+
+#[derive(Debug, Serialize)]
+struct StartupEvent<'a> {
+    r#type: &'a str,
+    url: &'a str,
+    host: &'a str,
+    port: u16,
+}
+
+impl BoundServer {
+    pub async fn bind(config: &ServerConfig) -> Result<Self> {
+        let bind_addr = format!("{}:{}", config.host, config.port);
+        let listener = TcpListener::bind(&bind_addr)
+            .await
+            .with_context(|| format!("failed to bind to {bind_addr}"))?;
+        let local_addr = listener
+            .local_addr()
+            .context("failed to read local bind address")?;
+        Ok(Self {
+            listener,
+            local_addr,
+        })
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn url(&self) -> String {
+        socket_url(self.local_addr)
+    }
+
+    pub async fn serve(self, config: ServerConfig, mut state: AppState) -> Result<ServerExit> {
+        let external_shutdown = ExternalShutdown::new(config.shutdown.clone());
+        let server_url = self.url();
+
+        if let Some(tunnel_config) = config.tunnel.as_ref() {
+            let tunnel_runtime = tunnel::start_tunnel(
+                self.local_addr.port(),
+                tunnel_config.host.clone(),
+                tunnel_config.port,
+            )?;
+            if let Some(warning) = tunnel_runtime.warning.as_deref() {
+                eprintln!("{warning}");
+                eprintln!("dcmview: to forward manually, run on your local machine:");
+                eprintln!(
+                    "dcmview:   ssh -L {0}:localhost:{0} {1}",
+                    tunnel_runtime.info.tunnel_port, tunnel_runtime.info.tunnel_host
+                );
+            } else {
+                println!(
+                    "dcmview: SSH tunnel active — access at http://localhost:{} on your local machine",
+                    tunnel_runtime.info.tunnel_port
+                );
+            }
+            state.tunnel_info = Some(Arc::new(tunnel_runtime.info));
+            state.tunnel_handle = tunnel_runtime.handle.map(Arc::new);
+        } else {
+            println!(
+                "dcmview: (on a remote server? run on your local machine: ssh -L {0}:localhost:{0} user@host)",
+                self.local_addr.port()
+            );
+        }
+
+        if is_non_loopback_bind(self.local_addr.ip()) {
+            eprintln!(
+                "dcmview: warning — server bound to non-loopback address {}; endpoints are unauthenticated and may expose sensitive DICOM data",
+                self.local_addr.ip()
+            );
+            eprintln!(
+                "dcmview: warning — prefer --host 127.0.0.1 (or ::1) and use --tunnel for remote access"
+            );
+        }
+
+        let mut tunnel_cleanup = TunnelCleanup::new(state.tunnel_handle.clone());
+        let activity = state.activity.clone();
+        let registry = state.registry.clone();
+        let app = router(state);
+        let mut browser_task = BrowserTask::new(
+            config
+                .open_browser
+                .then(|| spawn_browser_opener(server_url.clone(), registry.clone())),
+        );
+
+        let timeout = config.timeout_seconds.map(Duration::from_secs);
+        let (reason_tx, reason_rx) = oneshot::channel();
+        let shutdown = async move {
+            let reason = wait_for_shutdown(
+                activity,
+                registry,
+                timeout,
+                external_shutdown,
+                os_shutdown_signal(),
+            )
+            .await;
+            let _ = reason_tx.send(reason);
+        };
+
+        if config.startup_json {
+            println!(
+                "{}",
+                startup_event_json(&server_url, &config.host, self.local_addr.port())
+                    .context("failed to serialize startup event")?
+            );
+        }
+        println!("dcmview: server running at {server_url}");
+        println!("dcmview: press Ctrl+C to stop");
+
+        let serve_result = axum::serve(self.listener, app)
+            .with_graceful_shutdown(shutdown)
+            .await;
+
+        browser_task.abort();
+        tunnel_cleanup.shutdown();
+        serve_result.context("server failed")?;
+        let reason = reason_rx
+            .await
+            .context("server stopped without a shutdown reason")?;
+        println!("dcmview: shutting down...");
+
+        Ok(ServerExit {
+            local_addr: self.local_addr,
+            reason,
+        })
+    }
+}
+
+pub async fn run(config: ServerConfig, state: AppState) -> Result<()> {
+    BoundServer::bind(&config)
+        .await?
+        .serve(config, state)
+        .await
+        .map(|_| ())
+}
+
+pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json::Result<String> {
+    serde_json::to_string(&StartupEvent {
+        r#type: "server_started",
+        url: server_url,
+        host,
+        port,
+    })
+}
+
+fn socket_url(local_addr: SocketAddr) -> String {
+    format!("http://{local_addr}")
+}
+
+fn spawn_browser_opener(server_url: String, registry: FileRegistry) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let changed = registry.changed();
+            let mut changed = pin!(changed);
+            changed.as_mut().enable();
+            let status = registry.status();
+            if status.file_count > 0 {
+                if let Err(error) = open::that(&server_url) {
+                    eprintln!("dcmview: warning — failed to open browser: {error}");
+                }
+                return;
+            }
+            if status.scan_complete {
+                return;
+            }
+            changed.await;
+        }
+    })
+}
+
+async fn os_shutdown_signal() -> ShutdownReason {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            eprintln!("dcmview: warning — failed to install Ctrl+C handler: {error}");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(windows)]
+    let ctrl_break = async {
+        match tokio::signal::windows::ctrl_break() {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                eprintln!("dcmview: warning — failed to install Ctrl+Break handler: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(windows))]
+    let ctrl_break = std::future::pending::<()>();
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                eprintln!("dcmview: warning — failed to install SIGTERM handler: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = ctrl_break => {}
+        _ = terminate => {}
+    }
+    ShutdownReason::OsSignal
+}
+
+struct BrowserTask {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl BrowserTask {
+    fn new(handle: Option<JoinHandle<()>>) -> Self {
+        Self { handle }
+    }
+
+    fn abort(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for BrowserTask {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+struct TunnelCleanup {
+    handle: Option<Arc<TunnelHandle>>,
+}
+
+impl TunnelCleanup {
+    fn new(handle: Option<Arc<TunnelHandle>>) -> Self {
+        Self { handle }
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.shutdown();
+        }
+    }
+}
+
+impl Drop for TunnelCleanup {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::socket_url;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn socket_urls_are_ipv4_and_ipv6_correct() {
+        assert_eq!(
+            socket_url(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 42)),
+            "http://127.0.0.1:42"
+        );
+        assert_eq!(
+            socket_url(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 42)),
+            "http://[::1]:42"
+        );
+    }
+}

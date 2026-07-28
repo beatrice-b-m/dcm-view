@@ -3,14 +3,14 @@ use clap::Parser;
 use dcmview::annotations;
 use dcmview::loader;
 use dcmview::pixels;
-use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
+use dcmview::server::{self, now_unix_ms, AppState, RequestActivity, ServerConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
@@ -279,7 +279,7 @@ async fn run() -> Result<i32> {
         tunnel_info: None,
         tunnel_handle: None,
         server_start_ms: now_unix_ms(),
-        last_request: Arc::new(AtomicU64::new(now_unix_ms())),
+        activity: RequestActivity::new(),
     };
 
     ProgressiveDiscovery {

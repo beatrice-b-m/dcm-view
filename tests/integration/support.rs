@@ -1,6 +1,6 @@
 use dcmview::annotations::AnnotationStore;
 use dcmview::pixels;
-use dcmview::server::{now_unix_ms, AppState, FileRegistry};
+use dcmview::server::{now_unix_ms, AppState, FileRegistry, RequestActivity};
 use dcmview::types::FileEntry;
 use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR};
@@ -9,7 +9,6 @@ use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
 use image::{GrayImage, Luma};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragments: Vec<Vec<u8>>) {
@@ -134,7 +133,7 @@ pub fn app_state_with_registry(registry: FileRegistry) -> AppState {
         tunnel_info: None,
         tunnel_handle: None,
         server_start_ms: now_unix_ms(),
-        last_request: Arc::new(AtomicU64::new(now_unix_ms())),
+        activity: RequestActivity::new(),
     }
 }
 
