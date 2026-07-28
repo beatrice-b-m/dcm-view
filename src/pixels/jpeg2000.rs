@@ -49,17 +49,21 @@ fn decode_jp2_fragment_to_png_blocking(
         // Grayscale — the common medical imaging case
         let width = comps[0].width();
         let height = comps[0].height();
-        let raw_samples: Vec<f64> = comps[0].data().iter().map(|&v| v as f64).collect();
+        let rescaled_samples: Vec<f64> = comps[0]
+            .data()
+            .iter()
+            .map(|&value| value as f64 * file.rescale_slope + file.rescale_intercept)
+            .collect();
         let resolved_window = resolve_window_with_mode(
             window_mode,
             requested_wc,
             requested_ww,
             file.default_window,
-            &raw_samples,
+            &rescaled_samples,
         )
         .ok_or_else(|| anyhow!("JP2 decode failed: could not resolve window"))?;
         let mut windowed = apply_window(
-            &raw_samples,
+            &rescaled_samples,
             resolved_window.center,
             resolved_window.width.max(1.0),
         );
@@ -152,15 +156,238 @@ fn decode_raw_jp2_samples_blocking(
     let height = comps[0].height();
     let precision = comps[0].precision();
 
-    let (sample_bytes, bits_allocated) = if precision <= 8 {
-        let samples: Vec<u8> = comps[0].data_u8().collect();
-        (Bytes::from(samples), 8u32)
-    } else {
-        // Normalize to u16 LE for any precision 9-16.
-        let bytes: Vec<u8> = comps[0].data_u16().flat_map(|v| v.to_le_bytes()).collect();
-        (Bytes::from(bytes), 16u32)
-    };
+    let (sample_bytes, bits_allocated) = encode_raw_jp2_samples(
+        comps[0].data(),
+        precision,
+        comps[0].is_signed(),
+        file.pixel_representation,
+    )?;
 
     let metadata = file.raw_metadata(height, width, bits_allocated, 1);
-    Ok((sample_bytes, metadata))
+    Ok((Bytes::from(sample_bytes), metadata))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawJp2SampleLayout {
+    Unsigned8,
+    Signed8,
+    Unsigned16,
+    Signed16,
+}
+
+impl RawJp2SampleLayout {
+    fn bits_allocated(self) -> u32 {
+        match self {
+            Self::Unsigned8 | Self::Signed8 => 8,
+            Self::Unsigned16 | Self::Signed16 => 16,
+        }
+    }
+
+    fn is_signed(self) -> bool {
+        matches!(self, Self::Signed8 | Self::Signed16)
+    }
+}
+
+fn raw_jp2_sample_layout(
+    precision: u32,
+    component_signed: bool,
+    pixel_representation: u32,
+) -> PixelResult<RawJp2SampleLayout> {
+    if !(1..=16).contains(&precision) {
+        return Err(PixelError::UnsupportedLayout(format!(
+            "raw JPEG 2000 component precision {precision} is unsupported; expected 1-16 bits"
+        )));
+    }
+
+    let dicom_signed = match pixel_representation {
+        0 => false,
+        1 => true,
+        value => {
+            return Err(PixelError::UnsupportedLayout(format!(
+                "raw JPEG 2000 PixelRepresentation {value} is unsupported; expected 0 or 1"
+            )));
+        }
+    };
+    if component_signed != dicom_signed {
+        let component_kind = if component_signed {
+            "signed"
+        } else {
+            "unsigned"
+        };
+        let dicom_kind = if dicom_signed { "signed" } else { "unsigned" };
+        return Err(PixelError::UnsupportedLayout(format!(
+            "raw JPEG 2000 signedness mismatch: component is {component_kind}, \
+             PixelRepresentation declares {dicom_kind}"
+        )));
+    }
+
+    Ok(match (precision <= 8, component_signed) {
+        (true, false) => RawJp2SampleLayout::Unsigned8,
+        (true, true) => RawJp2SampleLayout::Signed8,
+        (false, false) => RawJp2SampleLayout::Unsigned16,
+        (false, true) => RawJp2SampleLayout::Signed16,
+    })
+}
+
+fn encode_raw_jp2_samples(
+    samples: &[i32],
+    precision: u32,
+    component_signed: bool,
+    pixel_representation: u32,
+) -> PixelResult<(Vec<u8>, u32)> {
+    let layout = raw_jp2_sample_layout(precision, component_signed, pixel_representation)?;
+    let (minimum, maximum) = if layout.is_signed() {
+        let magnitude = 1_i32 << (precision - 1);
+        (-magnitude, magnitude - 1)
+    } else {
+        (0, (1_i32 << precision) - 1)
+    };
+
+    let bytes_per_sample = (layout.bits_allocated() / 8) as usize;
+    let mut encoded = Vec::with_capacity(samples.len().saturating_mul(bytes_per_sample));
+    for &sample in samples {
+        if !(minimum..=maximum).contains(&sample) {
+            let sample_kind = if layout.is_signed() {
+                "signed"
+            } else {
+                "unsigned"
+            };
+            return Err(PixelError::UnsupportedLayout(format!(
+                "raw JPEG 2000 sample {sample} is outside the {sample_kind} {precision}-bit \
+                 range {minimum}..={maximum}"
+            )));
+        }
+
+        match layout {
+            RawJp2SampleLayout::Unsigned8 => encoded.push(sample as u8),
+            RawJp2SampleLayout::Signed8 => encoded.push((sample as i8) as u8),
+            RawJp2SampleLayout::Unsigned16 => {
+                encoded.extend_from_slice(&(sample as u16).to_le_bytes());
+            }
+            RawJp2SampleLayout::Signed16 => {
+                encoded.extend_from_slice(&(sample as i16).to_le_bytes());
+            }
+        }
+    }
+
+    Ok((encoded, layout.bits_allocated()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{encode_raw_jp2_samples, raw_jp2_sample_layout, RawJp2SampleLayout};
+    use crate::pixels::PixelError;
+
+    #[test]
+    fn raw_sample_layout_accepts_supported_precision_and_signedness_boundaries() {
+        let cases = [
+            (1, false, 0, RawJp2SampleLayout::Unsigned8),
+            (1, true, 1, RawJp2SampleLayout::Signed8),
+            (8, false, 0, RawJp2SampleLayout::Unsigned8),
+            (8, true, 1, RawJp2SampleLayout::Signed8),
+            (9, false, 0, RawJp2SampleLayout::Unsigned16),
+            (9, true, 1, RawJp2SampleLayout::Signed16),
+            (16, false, 0, RawJp2SampleLayout::Unsigned16),
+            (16, true, 1, RawJp2SampleLayout::Signed16),
+        ];
+
+        for (precision, component_signed, pixel_representation, expected) in cases {
+            assert_eq!(
+                raw_jp2_sample_layout(precision, component_signed, pixel_representation)
+                    .expect("supported raw JPEG 2000 layout"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn raw_sample_layout_rejects_out_of_range_precisions() {
+        for precision in [0, 17] {
+            let error = raw_jp2_sample_layout(precision, false, 0)
+                .expect_err("unsupported sample precision");
+            assert!(
+                matches!(error, PixelError::UnsupportedLayout(_)),
+                "precision {precision} should be an unsupported layout: {error}"
+            );
+            assert!(
+                error.to_string().contains(&precision.to_string()),
+                "precision should appear in the error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_sample_layout_rejects_invalid_or_mismatched_signedness() {
+        for (component_signed, pixel_representation) in [(false, 1), (true, 0)] {
+            let error = raw_jp2_sample_layout(9, component_signed, pixel_representation)
+                .expect_err("signedness mismatch");
+            assert!(
+                matches!(error, PixelError::UnsupportedLayout(_)),
+                "signedness mismatch should be an unsupported layout: {error}"
+            );
+            assert!(error.to_string().contains("signedness mismatch"));
+        }
+
+        let error = raw_jp2_sample_layout(9, false, 2).expect_err("invalid PixelRepresentation");
+        assert!(
+            matches!(error, PixelError::UnsupportedLayout(_)),
+            "invalid PixelRepresentation should be an unsupported layout: {error}"
+        );
+        assert!(error.to_string().contains("PixelRepresentation 2"));
+    }
+
+    #[test]
+    fn raw_unsigned_source_codes_remain_exact_at_9_and_16_bits() {
+        let (nine_bit, bits_allocated) =
+            encode_raw_jp2_samples(&[0, 1, 256, 511], 9, false, 0).expect("9-bit unsigned samples");
+        assert_eq!(bits_allocated, 16);
+        assert_eq!(nine_bit, [0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0xff, 0x01]);
+
+        let (sixteen_bit, bits_allocated) =
+            encode_raw_jp2_samples(&[0, 1, 32_768, 65_535], 16, false, 0)
+                .expect("16-bit unsigned samples");
+        assert_eq!(bits_allocated, 16);
+        assert_eq!(
+            sixteen_bit,
+            [0x00, 0x00, 0x01, 0x00, 0x00, 0x80, 0xff, 0xff]
+        );
+    }
+
+    #[test]
+    fn raw_signed_source_codes_remain_exact_twos_complement_at_9_and_16_bits() {
+        let (nine_bit, bits_allocated) =
+            encode_raw_jp2_samples(&[-256, -1, 0, 255], 9, true, 1).expect("9-bit signed samples");
+        assert_eq!(bits_allocated, 16);
+        assert_eq!(nine_bit, [0x00, 0xff, 0xff, 0xff, 0x00, 0x00, 0xff, 0x00]);
+
+        let (sixteen_bit, bits_allocated) =
+            encode_raw_jp2_samples(&[-32_768, -1, 0, 32_767], 16, true, 1)
+                .expect("16-bit signed samples");
+        assert_eq!(bits_allocated, 16);
+        assert_eq!(
+            sixteen_bit,
+            [0x00, 0x80, 0xff, 0xff, 0x00, 0x00, 0xff, 0x7f]
+        );
+    }
+
+    #[test]
+    fn raw_sample_conversion_rejects_values_outside_declared_precision() {
+        let cases = [
+            (&[-1][..], 9, false, 0),
+            (&[512][..], 9, false, 0),
+            (&[-257][..], 9, true, 1),
+            (&[256][..], 9, true, 1),
+        ];
+
+        for (samples, precision, component_signed, pixel_representation) in cases {
+            let error =
+                encode_raw_jp2_samples(samples, precision, component_signed, pixel_representation)
+                    .expect_err("sample outside declared range");
+            assert!(
+                matches!(error, PixelError::UnsupportedLayout(_)),
+                "out-of-range sample should be an unsupported layout: {error}"
+            );
+            assert!(error.to_string().contains("outside"));
+        }
+    }
 }

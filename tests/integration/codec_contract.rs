@@ -4,7 +4,7 @@ use axum_test::{TestResponse, TestServer};
 use dcmview::loader::{self, DiscoverOptions};
 use dcmview::pixels;
 use dcmview::server;
-use dcmview::types::TransferSyntaxClass;
+use dcmview::types::{TransferSyntaxClass, WindowMode, WindowPreset};
 use image::ImageFormat;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -146,6 +146,88 @@ async fn jpeg2000_lossless_fixture_satisfies_display_and_raw_contracts() {
         expected_raw,
     )
     .await;
+}
+
+#[tokio::test]
+async fn jpeg2000_display_applies_rescale_before_every_window_mode() {
+    let report = loader::discover(
+        &[fixture_path("golden-jpeg2000-lossless-u8-single-frame.dcm")],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover JPEG 2000 golden fixture");
+    let mut file = report
+        .files
+        .into_iter()
+        .next()
+        .expect("fixture should produce one file");
+
+    // The codestream contains rows 0, 17, ..., 255. A negative affine rescale
+    // reverses that ramp in modality space, making missing or late rescale
+    // application visible for explicit, DICOM-default, and full-dynamic modes.
+    file.rescale_slope = -2.0;
+    file.rescale_intercept = 510.0;
+    file.default_window = Some(WindowPreset {
+        center: 255.0,
+        width: 340.0,
+    });
+
+    let cases = [
+        (
+            pixels::FrameRequest {
+                frame: 0,
+                window_center: Some(255.0),
+                window_width: Some(170.0),
+                window_mode: WindowMode::Default,
+            },
+            [
+                255, 255, 255, 255, 255, 255, 204, 153, 102, 51, 0, 0, 0, 0, 0, 0,
+            ],
+        ),
+        (
+            pixels::FrameRequest {
+                frame: 0,
+                window_center: None,
+                window_width: None,
+                window_mode: WindowMode::Default,
+            },
+            [
+                255, 255, 255, 242, 217, 191, 166, 140, 115, 89, 64, 38, 13, 0, 0, 0,
+            ],
+        ),
+        (
+            pixels::FrameRequest {
+                frame: 0,
+                // Full-dynamic mode must ignore both these values and the DICOM
+                // default while still operating on rescaled samples.
+                window_center: Some(1.0),
+                window_width: Some(1.0),
+                window_mode: WindowMode::FullDynamic,
+            },
+            [
+                255, 238, 221, 204, 187, 170, 153, 136, 119, 102, 85, 68, 51, 34, 17, 0,
+            ],
+        ),
+    ];
+
+    for (request, expected_rows) in cases {
+        let response = pixels::load_frame(file.clone(), pixels::new_cache(), request)
+            .await
+            .expect("JPEG 2000 display decode");
+        let rendered =
+            image::load_from_memory_with_format(response.body.as_ref(), ImageFormat::Png)
+                .expect("display response should be PNG")
+                .to_luma8()
+                .into_raw();
+        let expected = expected_rows
+            .into_iter()
+            .flat_map(|value| [value; 16])
+            .collect::<Vec<_>>();
+        assert_eq!(rendered, expected);
+    }
 }
 
 #[test]
