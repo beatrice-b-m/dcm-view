@@ -372,8 +372,7 @@ fn validate_frames_in_range(
         for frame in frames {
             if *frame >= frame_count {
                 bail!(
-					"annotations CSV row {row_number}: ROI_frames[{roi_idx}] contains frame {frame}, but matched DICOM has {} frame(s)",
-					frame_count
+					"annotations CSV row {row_number}: ROI_frames[{roi_idx}] contains frame {frame}, but matched DICOM has {frame_count} frame(s)"
 				);
             }
         }
@@ -426,8 +425,7 @@ pub fn canonicalize_annotations(
             for frame in frames {
                 if *frame >= frame_count {
                     bail!(
-                        "ROI_frames[{roi_idx}] contains frame {frame}, but DICOM has {} frame(s)",
-                        frame_count
+                        "ROI_frames[{roi_idx}] contains frame {frame}, but DICOM has {frame_count} frame(s)"
                     );
                 }
             }

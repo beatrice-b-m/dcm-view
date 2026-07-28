@@ -373,10 +373,7 @@ fn print_progressive_load_summary(
     if file_count == 1 && skipped == 0 && filtered == 0 && filters.is_empty() {
         println!("dcmview: loaded 1 DICOM file");
     } else {
-        println!(
-            "dcmview: loaded {} DICOM file(s) from {} ({})",
-            file_count, path_label, note
-        );
+        println!("dcmview: loaded {file_count} DICOM file(s) from {path_label} ({note})");
     }
 }
 
