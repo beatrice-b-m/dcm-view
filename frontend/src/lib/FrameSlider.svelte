@@ -2,12 +2,10 @@
 	import type { FileSummary } from "../api";
 
 	let {
-		files,
-		activeFileIndex,
+		activeFile,
 		currentFrame = $bindable(),
 	}: {
-		files: FileSummary[];
-		activeFileIndex: number;
+		activeFile: FileSummary;
 		currentFrame: number;
 	} = $props();
 
@@ -18,8 +16,6 @@
 	let fps = $state(10);
 	let sweepMode = $state(false);
 	let playDirection: 1 | -1 = 1;
-
-	const activeFile = $derived(files[activeFileIndex]);
 
 	function previous() {
 		if (!activeFile || activeFile.frame_count <= 1) {

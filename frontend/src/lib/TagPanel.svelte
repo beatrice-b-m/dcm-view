@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { fetchTags, type FileSummary, type TagNode, type TagValue } from "../api";
-
-	type FlatRow = {
-		key: string;
-		node: TagNode;
-		depth: number;
-	};
+	import { fetchTags, type TagNode } from "../api";
+	import {
+		KeyedAsyncResource,
+		type AsyncResourceSnapshot,
+	} from "./keyedAsyncResource";
+	import {
+		flattenTagRows,
+		isSequenceTag,
+		tagValueDisplay,
+		tagValueToCopyText,
+		type FlatTagRow,
+	} from "./tagRows";
 
 	type ColumnKey = "tag" | "keyword" | "vr";
 
@@ -27,12 +32,10 @@
 	const VR_COLUMN_MIN_PX = 52;
 	const VR_COLUMN_MAX_PX = 140;
 
-	let { files, activeFileIndex }: { files: FileSummary[]; activeFileIndex: number } = $props();
+	let { fileIndex }: { fileIndex: number } = $props();
 
 	let filter = $state("");
-	let tagsByFile = $state<Record<number, TagNode[]>>({});
-	let loading = $state(false);
-	let error = $state<string | null>(null);
+	let tagResourcesByFile = $state<Record<number, AsyncResourceSnapshot<TagNode[]> | undefined>>({});
 	let expandedSequences = $state<Set<string>>(new Set());
 	let expandedLongValues = $state<Set<string>>(new Set());
 	let copiedKey = $state<string | null>(null);
@@ -40,28 +43,29 @@
 	let keywordColumnWidthPx = $state(KEYWORD_COLUMN_DEFAULT_PX);
 	let vrColumnWidthPx = $state(VR_COLUMN_DEFAULT_PX);
 	let columnResizeState = $state<ColumnResizeState | null>(null);
+	const tagResources = new KeyedAsyncResource<number, TagNode[]>({
+		load: fetchTags,
+		onChange: (fileIndex, snapshot) => {
+			tagResourcesByFile = {
+				...tagResourcesByFile,
+				[fileIndex]: snapshot,
+			};
+		},
+	});
 
 	const tableColumns = $derived(
 		`${tagColumnWidthPx}px ${keywordColumnWidthPx}px ${vrColumnWidthPx}px minmax(0, 1fr)`,
 	);
+	const activeTagResource = $derived(tagResourcesByFile[fileIndex]);
+	const loading = $derived(activeTagResource?.status === "loading");
+	const error = $derived(activeTagResource?.error ?? null);
 
 	$effect(() => {
-		void ensureTags(activeFileIndex);
+		void tagResources.ensure(fileIndex).catch(() => {});
 	});
 
-	async function ensureTags(index: number) {
-		if (tagsByFile[index]) {
-			return;
-		}
-		loading = true;
-		error = null;
-		try {
-			tagsByFile[index] = await fetchTags(index);
-		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
-		} finally {
-			loading = false;
-		}
+	function retryTags() {
+		void tagResources.reload(fileIndex).catch(() => {});
 	}
 
 	function toggleSequence(key: string) {
@@ -162,8 +166,8 @@
 		columnResizeState = null;
 	}
 
-	async function copyRow(row: FlatRow) {
-		const text = `${row.node.tag}  ${row.node.keyword}  =  ${valueToCopyText(row.node.value)}`;
+	async function copyRow(row: FlatTagRow) {
+		const text = `${row.node.tag}  ${row.node.keyword}  =  ${tagValueToCopyText(row.node.value)}`;
 		try {
 			await navigator.clipboard.writeText(text);
 			copiedKey = row.key;
@@ -178,118 +182,9 @@
 	}
 
 	const visibleRows = $derived.by(() => {
-		const source = tagsByFile[activeFileIndex] ?? [];
-		const rows: FlatRow[] = [];
-		flattenRows(source, `f${activeFileIndex}`, 0, rows, filter.trim().toLowerCase());
-		return rows;
+		const source = activeTagResource?.value ?? [];
+		return flattenTagRows(source, `f${fileIndex}`, expandedSequences, filter);
 	});
-
-	function flattenRows(
-		nodes: TagNode[],
-		prefix: string,
-		depth: number,
-		out: FlatRow[],
-		needle: string,
-	) {
-		nodes.forEach((node, index) => {
-			const key = `${prefix}-${index}`;
-			const nodeMatches = matchesNeedle(node, needle);
-			const descendantMatches =
-				node.value.type === "sequence" ? sequenceHasNeedle(node.value.items, needle) : false;
-
-			if (!needle || nodeMatches || descendantMatches) {
-				out.push({ key, node, depth });
-			}
-
-			if (node.value.type === "sequence" && expandedSequences.has(key)) {
-				node.value.items.forEach((item, itemIndex) => {
-					flattenRows(item, `${key}:item${itemIndex}`, depth + 1, out, needle);
-				});
-			}
-		});
-	}
-
-	function sequenceHasNeedle(items: TagNode[][], needle: string): boolean {
-		if (!needle) {
-			return true;
-		}
-		return items.some((item) => item.some((node) => matchesNeedle(node, needle) || (node.value.type === "sequence" && sequenceHasNeedle(node.value.items, needle))));
-	}
-
-	function matchesNeedle(node: TagNode, needle: string): boolean {
-		if (!needle) {
-			return true;
-		}
-		const haystack = `${node.tag} ${node.keyword} ${node.vr} ${valuePreview(node.value)}`.toLowerCase();
-		return haystack.includes(needle);
-	}
-
-	function valuePreview(value: TagValue): string {
-		switch (value.type) {
-			case "string":
-				return value.value;
-			case "number":
-				return String(value.value);
-			case "numbers":
-				return `${value.value.join(", ")}${truncatedSuffix(value.value.length, value.total, value.truncated)}`;
-			case "binary":
-				return `${value.length} bytes`;
-			case "sequence":
-				return `${value.items.length} item(s)${truncatedSuffix(value.items.length, value.total, value.truncated)}`;
-			case "error":
-				return value.message;
-		}
-	}
-
-	function valueToCopyText(value: TagValue): string {
-		switch (value.type) {
-			case "binary":
-				return `[binary: ${value.length} bytes]`;
-			case "sequence":
-				return `[sequence: ${value.items.length} item(s)${truncatedSuffix(value.items.length, value.total, value.truncated)}]`;
-			case "numbers":
-				return `${value.value.join(", ")}${truncatedSuffix(value.value.length, value.total, value.truncated)}`;
-			case "number":
-				return String(value.value);
-			case "string":
-				return value.value;
-			case "error":
-				return `error: ${value.message}`;
-		}
-	}
-
-	function isSequence(node: TagNode): boolean {
-		return node.value.type === "sequence";
-	}
-
-	function truncatedSuffix(visible: number, total?: number, truncated?: boolean): string {
-		if (!truncated) {
-			return "";
-		}
-		return total === undefined ? " (truncated)" : ` (first ${visible} of ${total})`;
-	}
-
-	function valueDisplay(row: FlatRow): string {
-		const value = row.node.value;
-		switch (value.type) {
-			case "string": {
-				if (value.value.length > 80 && !expandedLongValues.has(row.key)) {
-					return `${value.value.slice(0, 80)}…`;
-				}
-				return value.value;
-			}
-			case "number":
-				return String(value.value);
-			case "numbers":
-				return value.value.join(", ");
-			case "binary":
-				return `[${row.node.vr} · ${value.length.toLocaleString()} bytes]`;
-			case "sequence":
-				return `[SQ · ${value.items.length} item(s)]`;
-			case "error":
-				return `[error] ${value.message}`;
-		}
-	}
 </script>
 
 <aside class="panel">
@@ -298,7 +193,10 @@
 		<input bind:value={filter} placeholder="filter tags..." />
 	</header>
 	{#if error}
-		<p class="error">{error}</p>
+		<div class="error">
+			<span>{error}</span>
+			<button type="button" onclick={retryTags}>Retry</button>
+		</div>
 	{:else if loading}
 		<p class="loading">Loading tags…</p>
 	{:else}
@@ -359,7 +257,7 @@
 					}}
 				>
 					<div class="tag-cell" style={`--depth:${row.depth}`}>
-						{#if isSequence(row.node)}
+						{#if isSequenceTag(row.node)}
 							<button
 								type="button"
 								class="chevron"
@@ -383,7 +281,7 @@
 								}
 							}}
 						>
-							{valueDisplay(row)}
+							{tagValueDisplay(row, expandedLongValues.has(row.key))}
 						</button>
 						{#if copiedKey === row.key}
 							<span class="copied">Copied ✓</span>
@@ -597,6 +495,19 @@
 	}
 
 	.error {
+		display: grid;
+		justify-items: start;
+		gap: 0.45rem;
 		color: var(--danger);
+	}
+
+	.error button {
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		color: var(--text-secondary);
+		cursor: pointer;
+		font: inherit;
+		padding: 0.25rem 0.55rem;
 	}
 </style>

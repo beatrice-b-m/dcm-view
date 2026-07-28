@@ -8,6 +8,7 @@
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
+	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
 	import { DEFAULT_ORIENTATION, WL_PRESETS, type ActiveTool, type ImageOrientation } from "./lib/viewerTools";
 
 	const TAG_PANEL_DEFAULT_WIDTH_PX = 360;
@@ -54,8 +55,12 @@
 	let tagPanelCollapsed = $state(false);
 	let sidebarResizeState = $state<SidebarResizeState | null>(null);
 
+	const filesById = $derived(indexFilesById(filesResponse?.files ?? []));
+	const activeFile = $derived(
+		activeFileIndex === null ? null : filesById.get(activeFileIndex) ?? null,
+	);
 	const activeOrientation = $derived(activeFileIndex === null ? DEFAULT_ORIENTATION : orientationByFile[activeFileIndex] ?? DEFAULT_ORIENTATION);
-	const openTabIndexes = $derived(openTabs.map((tab) => tab.fileIndex));
+	const openTabFiles = $derived(resolveFilesById(filesById, openTabs.map((tab) => tab.fileIndex)));
 	const fileNavigatorWidthPx = $derived(fileNavigatorCollapsed ? FILE_NAV_COLLAPSED_WIDTH_PX : FILE_NAV_WIDTH_PX);
 	const tagPanelWidth = $derived(tagPanelCollapsed ? TAG_PANEL_COLLAPSED_WIDTH_PX : tagPanelWidthPx);
 
@@ -223,7 +228,7 @@
 	}
 
 	function fileByIndex(fileIndex: number): FilesResponse["files"][number] | null {
-		return filesResponse?.files.find((file) => file.index === fileIndex) ?? null;
+		return filesById.get(fileIndex) ?? null;
 	}
 
 	function applyFilesResponse(response: FilesResponse) {
@@ -367,8 +372,7 @@
 				alt="dcmview"
 			/>
 			<OpenImageTabs
-				files={filesResponse.files}
-				openTabs={openTabIndexes}
+				openFiles={openTabFiles}
 				activeFileIndex={activeFileIndex}
 				onactivate={activateOpenTab}
 				onclose={closeOpenTab}
@@ -393,12 +397,11 @@
 				onopenfile={openOrActivateFile}
 			/>
 			<section class="viewer-column">
-				{#if activeFileIndex === null}
+				{#if activeFile === null}
 					<div class="empty-viewer">Open a file from the sidebar</div>
 				{:else}
 					<ImageViewport
-						files={filesResponse.files}
-						activeFileIndex={activeFileIndex}
+						{activeFile}
 						bind:currentFrame
 						bind:windowCenter
 						bind:windowWidth
@@ -411,8 +414,7 @@
 						onmanualwindowlevel={recordManualWindowLevel}
 					/>
 					<FrameSlider
-						files={filesResponse.files}
-						activeFileIndex={activeFileIndex}
+						{activeFile}
 						bind:currentFrame
 					/>
 				{/if}
@@ -443,10 +445,10 @@
 					{tagPanelCollapsed ? "◀" : "▶"}
 				</button>
 				{#if !tagPanelCollapsed}
-					{#if activeFileIndex === null}
+					{#if activeFile === null}
 						<div class="tag-empty">No file selected</div>
 					{:else}
-						<TagPanel files={filesResponse.files} activeFileIndex={activeFileIndex} />
+						<TagPanel fileIndex={activeFile.index} />
 					{/if}
 				{/if}
 			</aside>

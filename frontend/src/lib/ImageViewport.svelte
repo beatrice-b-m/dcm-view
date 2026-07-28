@@ -27,6 +27,19 @@
 		type RoiHandle,
 	} from "./annotationGeometry";
 	import {
+		ByteBudgetLruCache,
+		createDisplayFrameCache,
+		type DisplayFrameCacheEntry,
+	} from "./frameCache";
+	import {
+		buildDirectionalFrameOrder,
+		planDisplayPrefetchTargets,
+	} from "./prefetchPolicy";
+	import {
+		RevisionedPersistenceController,
+		type PersistenceSnapshot,
+	} from "./revisionedPersistence";
+	import {
 		renderRawFrameToRgba,
 		resolveDisplayWindow,
 		validateRenderableRawFrame,
@@ -56,13 +69,6 @@
 		| { mode: "resize_roi"; roiIndex: number; handle: RoiHandle; original: RoiCoord }
 		| null;
 
-	interface DisplayFrameCacheEntry {
-		blob: Blob;
-		bytes: number;
-		bitmap: ImageBitmap | null;
-		decodePromise: Promise<ImageBitmap> | null;
-	}
-
 	type VisibleRoi = {
 		index: number;
 		ymin: number;
@@ -73,9 +79,11 @@
 	};
 	type WlRenderedFrame = Pick<WlRendererSuccess, "width" | "height" | "bitmap">;
 
+	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
+	const DISPLAY_CACHE_BYTE_BUDGET = 320 * 1024 * 1024;
+
 	let {
-		files,
-		activeFileIndex,
+		activeFile,
 		currentFrame = $bindable(),
 		windowCenter = $bindable(),
 		windowWidth = $bindable(),
@@ -87,8 +95,7 @@
 		onreset,
 		onmanualwindowlevel,
 	}: {
-		files: FileSummary[];
-		activeFileIndex: number;
+		activeFile: FileSummary;
 		currentFrame: number;
 		windowCenter: number | null;
 		windowWidth: number | null;
@@ -115,8 +122,34 @@
 	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
 	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
 	let annotationLoadingByFile = $state<Record<number, boolean | undefined>>({});
+	let annotationPersistenceByFile = $state<
+		Record<number, PersistenceSnapshot<EmbedRoiAnnotations> | undefined>
+	>({});
 	let selectedRoiByFile = $state<Record<number, number | null | undefined>>({});
 	let annotationRequestedByFile: Record<number, boolean> = {};
+	const annotationPersistence = new RevisionedPersistenceController<number, EmbedRoiAnnotations>({
+		save: updateAnnotations,
+		errorMessage: (error) =>
+			error instanceof Error && error.message ? error.message : "Failed to save annotations",
+		onChange: (fileIndex, snapshot) => {
+			const editingRoi = activeFile?.index === fileIndex
+				&& (dragState?.mode === "move_roi" || dragState?.mode === "resize_roi");
+			if (!editingRoi) {
+				annotationsByFile = {
+					...annotationsByFile,
+					[fileIndex]: snapshot.value,
+				};
+			}
+			annotationErrorsByFile = {
+				...annotationErrorsByFile,
+				[fileIndex]: snapshot.error,
+			};
+			annotationPersistenceByFile = {
+				...annotationPersistenceByFile,
+				[fileIndex]: snapshot,
+			};
+		},
+	});
 
 	let rawRequestCtrl: AbortController | null = null;
 	let rawPrefetchCtrl: AbortController | null = null;
@@ -124,10 +157,15 @@
 	let displayPrefetchCtrl: AbortController | null = null;
 	let displayPrefetchSeedFrame: number | null = null;
 	let displayPrefetchScopeKey = "";
-	let rawFrameCache = new Map<string, RawFrame>();
-	let rawCacheBytes = 0;
-	let displayFrameCache = new Map<string, DisplayFrameCacheEntry>();
-	let displayCacheBytes = 0;
+	const rawFrameCache = new ByteBudgetLruCache<string, RawFrame>({
+		maxBytes: RAW_CACHE_BYTE_BUDGET,
+		sizeOf: (frame) => frame.buffer.byteLength,
+	});
+	const displayFrameCache = createDisplayFrameCache(DISPLAY_CACHE_BYTE_BUDGET);
+	const displayDecodePromises = new Map<
+		string,
+		{ entry: DisplayFrameCacheEntry; promise: Promise<ImageBitmap> }
+	>();
 	let fileScopeKey = "";
 	let lastHandledResetCount = 0;
 	let requestGeneration = 0;
@@ -149,9 +187,7 @@
 	const MAX_ZOOM = 64;
 	const ZOOM_STEPS = [0.05, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
 	const DEFAULT_TRANSFORM: TransformState = { scale: 1, tx: 0, ty: 0, fit: false };
-	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
 	const RAW_RING_RADIUS = 10;
-	const DISPLAY_CACHE_BYTE_BUDGET = 320 * 1024 * 1024;
 	const DISPLAY_FULL_PREFETCH_BUDGET_BYTES = 320 * 1024 * 1024;
 	const DISPLAY_NEAR_PREFETCH_DISTANCE = 48;
 	const WORKER_MIN_PIXEL_THRESHOLD = 300_000;
@@ -165,7 +201,6 @@
 	const TRACKPAD_WHEEL_DELTA_THRESHOLD = 50;
 	const MOUSE_WHEEL_ZOOM_SENSITIVITY = 0.0025;
 	const PINCH_ZOOM_SENSITIVITY = 0.01;
-	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(activeFile ? transformsByFile[activeFile.index] ?? DEFAULT_TRANSFORM : DEFAULT_TRANSFORM);
 	const transformCss = $derived.by(() => {
 		const { tx, ty, scale } = activeTransform;
@@ -205,6 +240,9 @@
 	const activeAnnotations = $derived(activeFile ? annotationsByFile[activeFile.index] ?? null : null);
 	const activeAnnotationError = $derived(activeFile ? annotationErrorsByFile[activeFile.index] ?? null : null);
 	const activeAnnotationLoading = $derived(activeFile ? annotationLoadingByFile[activeFile.index] ?? false : false);
+	const activeAnnotationPersistence = $derived(
+		activeFile ? annotationPersistenceByFile[activeFile.index] ?? null : null,
+	);
 	const selectedRoiIndex = $derived(activeFile ? selectedRoiByFile[activeFile.index] ?? null : null);
 	const imageRows = $derived(
 		pipelineMode === "diagnostic_wl" && currentRawFrame
@@ -266,20 +304,10 @@
 	}
 
 	function syncAnnotations(fileIndex: number, annotations: EmbedRoiAnnotations) {
-		annotationErrorsByFile = {
-			...annotationErrorsByFile,
-			[fileIndex]: null,
-		};
-		void updateAnnotations(fileIndex, annotations)
-			.then((canonical) => {
-				setAnnotationsForFile(fileIndex, canonical);
-			})
-			.catch((error) => {
-				annotationErrorsByFile = {
-					...annotationErrorsByFile,
-					[fileIndex]: (error as Error).message || "Failed to save annotations",
-				};
-			});
+		if (!annotationPersistence.get(fileIndex)) {
+			annotationPersistence.initialize(fileIndex, annotations);
+		}
+		annotationPersistence.edit(fileIndex, annotations);
 	}
 
 	function commitAnnotations(annotations: EmbedRoiAnnotations, selectedIndex: number | null = selectedRoiIndex) {
@@ -287,6 +315,17 @@
 		setAnnotationsForFile(activeFile.index, annotations);
 		setSelectedRoi(selectedIndex);
 		syncAnnotations(activeFile.index, annotations);
+	}
+
+	function retryAnnotationSave() {
+		if (!activeFile || !annotationPersistence.get(activeFile.index)) return;
+		annotationPersistence.retry(activeFile.index);
+	}
+
+	function rollbackAnnotationSave() {
+		if (!activeFile || !annotationPersistence.get(activeFile.index)) return;
+		annotationPersistence.rollback(activeFile.index);
+		setSelectedRoi(null);
 	}
 
 	function pointFromPointer(event: PointerEvent): ImagePoint | null {
@@ -428,10 +467,6 @@
 		wlRenderGeneration += 1;
 	}
 
-	function estimateRawFrameBytes(frame: RawFrame): number {
-		return frame.buffer.byteLength;
-	}
-
 	function rawFrameCacheKey(fileIndex: number, frameIndex: number): string {
 		return `${fileIndex}:${frameIndex}`;
 	}
@@ -446,104 +481,32 @@
 
 	function clearRawFrameCache(): void {
 		rawFrameCache.clear();
-		rawCacheBytes = 0;
 	}
 
 	function getCachedRawFrame(fileIndex: number, frameIndex: number): RawFrame | undefined {
-		const key = rawFrameCacheKey(fileIndex, frameIndex);
-		const cached = rawFrameCache.get(key);
-		if (!cached) return undefined;
-		rawFrameCache.delete(key);
-		rawFrameCache.set(key, cached);
-		return cached;
-	}
-
-	function deleteCachedRawFrame(fileIndex: number, frameIndex: number): void {
-		const key = rawFrameCacheKey(fileIndex, frameIndex);
-		deleteCachedRawFrameByKey(key);
+		return rawFrameCache.get(rawFrameCacheKey(fileIndex, frameIndex));
 	}
 
 	function deleteCachedRawFrameByKey(key: string): void {
-		const cached = rawFrameCache.get(key);
-		if (!cached) return;
 		rawFrameCache.delete(key);
-		rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(cached));
 	}
 
 	function cacheRawFrame(fileIndex: number, frameIndex: number, frame: RawFrame): void {
-		const incoming = estimateRawFrameBytes(frame);
-		if (incoming > RAW_CACHE_BYTE_BUDGET) return;
-
-		deleteCachedRawFrame(fileIndex, frameIndex);
-
-		while (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) {
-			const oldestKey = rawFrameCache.keys().next().value as string | undefined;
-			if (oldestKey === undefined) break;
-			const oldest = parseRawFrameCacheKey(oldestKey);
-			if (oldest === null) {
-				rawFrameCache.delete(oldestKey);
-				continue;
-			}
-			deleteCachedRawFrame(oldest.fileIndex, oldest.frameIndex);
-		}
-
-		if (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) return;
 		rawFrameCache.set(rawFrameCacheKey(fileIndex, frameIndex), frame);
-		rawCacheBytes += incoming;
-	}
-
-	function releaseDisplayEntry(entry: DisplayFrameCacheEntry): void {
-		entry.bitmap?.close();
-		entry.bitmap = null;
-		entry.decodePromise = null;
 	}
 
 	function clearDisplayCache(): void {
-		for (const entry of displayFrameCache.values()) {
-			releaseDisplayEntry(entry);
-		}
 		displayFrameCache.clear();
-		displayCacheBytes = 0;
+		displayDecodePromises.clear();
 	}
 
 	function getCachedDisplayFrame(key: string): DisplayFrameCacheEntry | undefined {
-		const cached = displayFrameCache.get(key);
-		if (!cached) return undefined;
-		displayFrameCache.delete(key);
-		displayFrameCache.set(key, cached);
-		return cached;
-	}
-
-	function deleteCachedDisplayFrame(key: string): void {
-		const cached = displayFrameCache.get(key);
-		if (!cached) return;
-		displayFrameCache.delete(key);
-		displayCacheBytes = Math.max(0, displayCacheBytes - cached.bytes);
-		releaseDisplayEntry(cached);
+		return displayFrameCache.get(key);
 	}
 
 	function cacheDisplayFrame(key: string, blob: Blob): DisplayFrameCacheEntry | null {
-		const incoming = blob.size;
-		if (incoming > DISPLAY_CACHE_BYTE_BUDGET) return null;
-
-		deleteCachedDisplayFrame(key);
-
-		while (displayCacheBytes + incoming > DISPLAY_CACHE_BYTE_BUDGET) {
-			const oldestKey = displayFrameCache.keys().next().value as string | undefined;
-			if (!oldestKey) break;
-			deleteCachedDisplayFrame(oldestKey);
-		}
-
-		if (displayCacheBytes + incoming > DISPLAY_CACHE_BYTE_BUDGET) return null;
-		const entry: DisplayFrameCacheEntry = {
-			blob,
-			bytes: incoming,
-			bitmap: null,
-			decodePromise: null,
-		};
-		displayFrameCache.set(key, entry);
-		displayCacheBytes += incoming;
-		return entry;
+		const entry: DisplayFrameCacheEntry = { blob, bitmap: null };
+		return displayFrameCache.set(key, entry) ? entry : null;
 	}
 
 	function currentDisplayWindowOptions(): DisplayFrameWindowOptions {
@@ -604,23 +567,29 @@
 
 	function startDisplayDecode(key: string, entry: DisplayFrameCacheEntry): Promise<ImageBitmap> {
 		if (entry.bitmap) return Promise.resolve(entry.bitmap);
-		if (entry.decodePromise) return entry.decodePromise;
+		const pending = displayDecodePromises.get(key);
+		if (pending?.entry === entry) return pending.promise;
 
 		const promise = createImageBitmap(entry.blob)
 			.then((bitmap) => {
-				if (displayFrameCache.get(key) === entry && entry.bitmap === null) {
-					entry.bitmap = bitmap;
-					return bitmap;
+				const current = displayFrameCache.peek(key);
+				if (current === entry && current.bitmap === null) {
+					const decodedEntry: DisplayFrameCacheEntry = {
+						blob: entry.blob,
+						bitmap,
+					};
+					if (displayFrameCache.set(key, decodedEntry)) return bitmap;
+					throw new Error("decoded display frame exceeded cache budget");
 				}
 				bitmap.close();
 				throw new Error("display image decode superseded");
 			})
 			.finally(() => {
-				if (entry.decodePromise === promise) {
-					entry.decodePromise = null;
+				if (displayDecodePromises.get(key)?.promise === promise) {
+					displayDecodePromises.delete(key);
 				}
 			});
-		entry.decodePromise = promise;
+		displayDecodePromises.set(key, { entry, promise });
 		return promise;
 	}
 
@@ -630,13 +599,11 @@
 		if (!ctx) return;
 
 		if (typeof createImageBitmap === "function") {
-			if (!entry.bitmap) {
-				await startDisplayDecode(key, entry);
-			}
-			if (generation !== requestGeneration || !canvasEl || !entry.bitmap || pipelineMode !== "cine") return;
-			canvasEl.width = entry.bitmap.width;
-			canvasEl.height = entry.bitmap.height;
-			ctx.drawImage(entry.bitmap, 0, 0);
+			const bitmap = entry.bitmap ?? await startDisplayDecode(key, entry);
+			if (generation !== requestGeneration || !canvasEl || pipelineMode !== "cine") return;
+			canvasEl.width = bitmap.width;
+			canvasEl.height = bitmap.height;
+			ctx.drawImage(bitmap, 0, 0);
 			return;
 		}
 
@@ -657,23 +624,6 @@
 		} finally {
 			URL.revokeObjectURL(fallbackUrl);
 		}
-	}
-
-	function buildDirectionalFrameOrder(
-		centerFrame: number,
-		totalFrames: number,
-		maxDistance: number,
-		direction: 1 | -1,
-	): number[] {
-		const result: number[] = [];
-		const distanceCap = Math.min(totalFrames - 1, maxDistance);
-		for (let delta = 1; delta <= distanceCap; delta++) {
-			const preferred = centerFrame + delta * direction;
-			const secondary = centerFrame - delta * direction;
-			if (preferred >= 0 && preferred < totalFrames) result.push(preferred);
-			if (secondary >= 0 && secondary < totalFrames) result.push(secondary);
-		}
-		return result;
 	}
 
 	function isCineLikelyPlaying(): boolean {
@@ -717,11 +667,6 @@
 		}
 	}
 
-	function shouldPrefetchWholeDisplayStack(totalFrames: number, frameBytes: number): boolean {
-		if (totalFrames <= 1 || frameBytes <= 0) return false;
-		return totalFrames * frameBytes <= DISPLAY_FULL_PREFETCH_BUDGET_BYTES;
-	}
-
 	async function runRawRingPrefetch(
 		fileIndex: number,
 		totalFrames: number,
@@ -762,18 +707,16 @@
 		currentBlobSize: number,
 		forwardOnly = false,
 	): Promise<void> {
-		let targets: number[];
-		if (forwardOnly) {
-			targets = [];
-			for (let delta = 1; delta <= CINE_LOOKAHEAD_FRAMES; delta++) {
-				const f = startFrame + delta * direction;
-				if (f >= 0 && f < totalFrames) targets.push(f);
-			}
-		} else {
-			const fullVolume = shouldPrefetchWholeDisplayStack(totalFrames, currentBlobSize);
-			const maxDistance = fullVolume ? totalFrames - 1 : DISPLAY_NEAR_PREFETCH_DISTANCE;
-			targets = buildDirectionalFrameOrder(startFrame, totalFrames, maxDistance, direction);
-		}
+		const targets = planDisplayPrefetchTargets({
+			startFrame,
+			totalFrames,
+			direction,
+			currentBlobBytes: currentBlobSize,
+			fullStackBudgetBytes: DISPLAY_FULL_PREFETCH_BUDGET_BYTES,
+			nearDistance: DISPLAY_NEAR_PREFETCH_DISTANCE,
+			forwardOnly,
+			lookaheadFrames: CINE_LOOKAHEAD_FRAMES,
+		});
 		for (let i = 0; i < targets.length && !signal.aborted; i += prefetchConcurrency) {
 			const batch = targets.slice(i, i + prefetchConcurrency);
 			await Promise.allSettled(
@@ -782,10 +725,7 @@
 					if (signal.aborted || displayFrameCache.has(key)) return;
 					try {
 						const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal);
-						const entry = cacheDisplayFrame(key, blob);
-						if (entry && typeof createImageBitmap === "function" && !entry.bitmap) {
-							void startDisplayDecode(key, entry).catch(() => {});
-						}
+						cacheDisplayFrame(key, blob);
 					} catch {
 						// Ignore network/decode failures during prefetch.
 					}
@@ -936,7 +876,7 @@ function startDisplayPrefetch(
 				frameIndex,
 				direction,
 				windowOptions,
-				cached.bytes,
+				cached.blob.size,
 			);
 			return;
 		}
@@ -1076,10 +1016,7 @@ function startDisplayPrefetch(
 
 		void fetchAnnotations(fileIndex)
 			.then((annotations) => {
-				annotationsByFile = {
-					...annotationsByFile,
-					[fileIndex]: annotations,
-				};
+				annotationPersistence.initialize(fileIndex, annotations);
 			})
 			.catch((error) => {
 				annotationErrorsByFile = {
@@ -1636,11 +1573,26 @@ function startDisplayPrefetch(
 			<span>W: {Math.round(displayWindow.ww)} · C: {Math.round(displayWindow.wc)}</span>
 		</div>
 		<div class="roi-list">
-			<div class="roi-list-title">ROIs {roiListCountLabel}</div>
+			<div class="roi-list-title">
+				<span>ROIs {roiListCountLabel}</span>
+				{#if activeAnnotationPersistence?.status === "saving"}
+					<span class="roi-save-status">saving…</span>
+				{:else if activeAnnotationPersistence?.status === "dirty"}
+					<span class="roi-save-status">unsaved</span>
+				{/if}
+			</div>
 			{#if activeAnnotationLoading}
 				<div class="roi-list-status">Loading annotations…</div>
 			{:else if activeAnnotationError}
-				<div class="roi-list-status error">{activeAnnotationError}</div>
+				<div class="roi-list-status error">
+					<span>{activeAnnotationError}</span>
+					{#if activeAnnotationPersistence?.status === "error"}
+						<div class="roi-error-actions">
+							<button type="button" onclick={retryAnnotationSave}>Retry</button>
+							<button type="button" onclick={rollbackAnnotationSave}>Revert</button>
+						</div>
+					{/if}
+				</div>
 			{:else if visibleRois.length === 0}
 				<div class="roi-list-status">No ROIs for this frame</div>
 			{:else}
@@ -1795,15 +1747,36 @@ function startDisplayPrefetch(
 		scrollbar-width: thin;
 	}
 	.roi-list-title {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.75rem;
 		font-weight: 600;
 		margin-bottom: 0.25rem;
 		color: var(--text-primary);
+	}
+	.roi-save-status {
+		color: var(--text-muted);
+		font-weight: 400;
 	}
 	.roi-list-status {
 		color: var(--text-muted);
 	}
 	.roi-list-status.error {
 		color: var(--danger);
+	}
+	.roi-error-actions {
+		display: flex;
+		gap: 0.25rem;
+		margin-top: 0.35rem;
+	}
+	.roi-error-actions button {
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		color: var(--text-secondary);
+		cursor: pointer;
+		font-size: 0.68rem;
+		padding: 0.15rem 0.35rem;
 	}
 	.roi-list ul {
 		margin: 0;

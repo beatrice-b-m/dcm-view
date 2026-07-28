@@ -2,22 +2,16 @@
 	import type { FileSummary } from "../api";
 
 	let {
-		files,
-		openTabs,
+		openFiles,
 		activeFileIndex,
 		onactivate,
 		onclose,
 	}: {
-		files: FileSummary[];
-		openTabs: number[];
+		openFiles: FileSummary[];
 		activeFileIndex: number | null;
 		onactivate: (index: number) => void;
 		onclose: (index: number) => void;
 	} = $props();
-
-	function fileFor(index: number): FileSummary | undefined {
-		return files.find((file) => file.index === index);
-	}
 
 	function basename(path: string): string {
 		return path.split(/[\\/]/).pop() || path;
@@ -36,35 +30,32 @@
 </script>
 
 <nav class="open-tabs" aria-label="Open images">
-	{#if openTabs.length === 0}
+	{#if openFiles.length === 0}
 		<div class="empty-tabs">No open images</div>
 	{:else}
-		{#each openTabs as fileIndex}
-			{@const file = fileFor(fileIndex)}
-			{#if file}
-				<div
-					class="tab"
-					class:active={file.index === activeFileIndex}
-					title={file.path}
+		{#each openFiles as file (file.index)}
+			<div
+				class="tab"
+				class:active={file.index === activeFileIndex}
+				title={file.path}
+			>
+				<button
+					type="button"
+					class="tab-main"
+					onclick={() => onactivate(file.index)}
 				>
-					<button
-						type="button"
-						class="tab-main"
-						onclick={() => onactivate(file.index)}
-					>
-						<span class="tab-label">{tabLabel(file)}</span>
-						<span class="tab-detail">{file.has_pixels ? `${file.frame_count}f` : "tags"}</span>
-					</button>
-					<button
-						type="button"
-						class="close"
-						onclick={(event) => closeTab(event, file.index)}
-						aria-label={`Close ${tabLabel(file)}`}
-					>
-						x
-					</button>
-				</div>
-			{/if}
+					<span class="tab-label">{tabLabel(file)}</span>
+					<span class="tab-detail">{file.has_pixels ? `${file.frame_count}f` : "tags"}</span>
+				</button>
+				<button
+					type="button"
+					class="close"
+					onclick={(event) => closeTab(event, file.index)}
+					aria-label={`Close ${tabLabel(file)}`}
+				>
+					x
+				</button>
+			</div>
 		{/each}
 	{/if}
 </nav>
