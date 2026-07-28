@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.util
+from dataclasses import FrozenInstanceError
 import pathlib
 import tempfile
 import unittest
 
-GENERATOR_PATH = pathlib.Path(__file__).with_name("generate_frontend_types.py")
-GENERATOR_SPEC = importlib.util.spec_from_file_location(
-	"dcmview_generate_frontend_types",
-	GENERATOR_PATH,
+import frontend_contract as generator
+import frontend_contract.rust_parser as rust_parser
+from frontend_contract import (
+	ApiEndpoint,
+	FrameQueryParameter,
+	RawFrameHeader,
 )
-if GENERATOR_SPEC is None or GENERATOR_SPEC.loader is None:
-	raise RuntimeError(f"could not load frontend type generator from {GENERATOR_PATH}")
-generator = importlib.util.module_from_spec(GENERATOR_SPEC)
-GENERATOR_SPEC.loader.exec_module(generator)
 
 
 class GenerateFrontendTypesTests(unittest.TestCase):
@@ -45,6 +43,18 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("export interface RawFrameMetadata", output)
 		self.assertIn("bitsAllocated: number;", output)
 		self.assertNotIn("bits_allocated: number;", output)
+
+	def test_parsed_contract_records_are_frozen_models(self) -> None:
+		endpoint = generator.parse_api_endpoints(self.source)[0]
+		header = rust_parser.parse_raw_frame_headers(self.source)[0]
+		query = rust_parser.parse_frame_query_parameters(self.source)[0]
+
+		self.assertIsInstance(endpoint, ApiEndpoint)
+		self.assertIsInstance(header, RawFrameHeader)
+		self.assertIsInstance(query, FrameQueryParameter)
+		for record in (endpoint, header, query):
+			with self.assertRaises(FrozenInstanceError):
+				setattr(record, "constant", "CHANGED")
 
 	def test_rejects_an_unclassified_serde_wire_item(self) -> None:
 		source = (
@@ -246,9 +256,9 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 			generator.render(mutated)
 
 	def test_contract_discovery_supports_a_split_contract_directory(self) -> None:
-		original_root = generator.REPO_ROOT
-		original_file = generator.CONTRACTS_FILE
-		original_dir = generator.CONTRACTS_DIR
+		original_root = rust_parser.REPO_ROOT
+		original_file = rust_parser.CONTRACTS_FILE
+		original_dir = rust_parser.CONTRACTS_DIR
 		try:
 			with tempfile.TemporaryDirectory() as temp_dir:
 				root = pathlib.Path(temp_dir)
@@ -256,21 +266,21 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 				contract_dir.mkdir(parents=True)
 				(contract_dir / "dto.rs").write_text("dto", encoding="utf-8")
 				(contract_dir / "routes.rs").write_text("routes", encoding="utf-8")
-				generator.REPO_ROOT = root
-				generator.CONTRACTS_FILE = root / "src" / "api" / "contracts.rs"
-				generator.CONTRACTS_DIR = contract_dir
+				rust_parser.REPO_ROOT = root
+				rust_parser.CONTRACTS_FILE = root / "src" / "api" / "contracts.rs"
+				rust_parser.CONTRACTS_DIR = contract_dir
 
 				self.assertEqual(
-					[path.name for path in generator.contract_source_paths()],
+					[path.name for path in rust_parser.contract_source_paths()],
 					["dto.rs", "routes.rs"],
 				)
-				source = generator.read_contract_source()
+				source = rust_parser.read_contract_source()
 				self.assertIn("dto", source)
 				self.assertIn("routes", source)
 		finally:
-			generator.REPO_ROOT = original_root
-			generator.CONTRACTS_FILE = original_file
-			generator.CONTRACTS_DIR = original_dir
+			rust_parser.REPO_ROOT = original_root
+			rust_parser.CONTRACTS_FILE = original_file
+			rust_parser.CONTRACTS_DIR = original_dir
 
 	def test_serde_scanner_recognizes_restricted_rust_visibilities(self) -> None:
 		source = """
@@ -287,11 +297,11 @@ pub(in crate::protocol) struct ScopedDto {}
 """
 
 		self.assertEqual(
-			generator.serde_items(source, public_only=True),
+			rust_parser.serde_items(source, public_only=True),
 			{"PublicDto", "CrateDto", "ParentDto", "ScopedDto"},
 		)
 		self.assertEqual(
-			generator.serde_items(source, public_only=False),
+			rust_parser.serde_items(source, public_only=False),
 			{"PrivateDto", "PublicDto", "CrateDto", "ParentDto", "ScopedDto"},
 		)
 
@@ -305,7 +315,7 @@ pub(crate) struct StartupEvent {}
 			ValueError,
 			"non-HTTP serde type names must be unique",
 		):
-			generator.validate_non_http_serde_sources(
+			rust_parser.validate_non_http_serde_sources(
 				{
 					pathlib.Path("src/first.rs"): source,
 					pathlib.Path("src/moved.rs"): source,
