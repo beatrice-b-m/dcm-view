@@ -1,4 +1,5 @@
-use crate::types::{FileEntry, LoadReport, WindowPreset};
+use crate::api::contracts::WindowPreset;
+use crate::types::{FileEntry, LoadReport};
 use anyhow::{anyhow, Context, Result};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::OpenFileOptions;

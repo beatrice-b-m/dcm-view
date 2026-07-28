@@ -129,7 +129,7 @@ class CheckRunner:
 		self.install_frontend()
 		run(
 			"Check generated frontend contracts",
-			[self.npm, "--prefix", "frontend", "run", "check:types"],
+			[self.npm, "--prefix", "frontend", "run", "check:contracts"],
 		)
 		run("Typecheck Svelte and TypeScript", [self.npm, "--prefix", "frontend", "run", "typecheck"])
 		run("Run frontend behavior tests", [self.npm, "--prefix", "frontend", "run", "test"])
@@ -219,7 +219,7 @@ class CheckRunner:
 		self.install_frontend()
 		run(
 			"Check generated frontend contracts",
-			[self.npm, "--prefix", "frontend", "run", "check:types"],
+			[self.npm, "--prefix", "frontend", "run", "check:contracts"],
 		)
 		run("Typecheck Svelte and TypeScript", [self.npm, "--prefix", "frontend", "run", "typecheck"])
 		run("Run frontend behavior tests", [self.npm, "--prefix", "frontend", "run", "test"])

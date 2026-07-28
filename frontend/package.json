@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "generate:types": "python ../scripts/generate_frontend_types.py",
     "check:types": "python ../scripts/generate_frontend_types.py --check",
+    "check:contracts": "npm run check:types && python ../scripts/test_generate_frontend_types.py",
     "preview": "vite preview"
   },
   "devDependencies": {

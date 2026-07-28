@@ -1,6 +1,6 @@
+use crate::api::contracts::{RawFrameMetadata, WindowMode, WindowPreset};
 use crate::types::{
-    FileEntry, FrameCacheKey, RawFrameCacheKey, RawFrameMetadata, ResolvedWindow,
-    TransferSyntaxClass, WindowMode, WindowRequest,
+    FileEntry, FrameCacheKey, RawFrameCacheKey, ResolvedWindow, TransferSyntaxClass, WindowRequest,
 };
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
@@ -963,7 +963,7 @@ pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
 pub fn resolve_window(
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
-    default_window: Option<crate::types::WindowPreset>,
+    default_window: Option<WindowPreset>,
     samples: &[f64],
 ) -> Option<ResolvedWindow> {
     if let (Some(center), Some(width)) = (requested_wc, requested_ww) {
@@ -1000,7 +1000,7 @@ pub fn resolve_window_with_mode(
     mode: WindowMode,
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
-    default_window: Option<crate::types::WindowPreset>,
+    default_window: Option<WindowPreset>,
     samples: &[f64],
 ) -> Option<ResolvedWindow> {
     match mode {

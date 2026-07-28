@@ -1,27 +1,10 @@
+pub use crate::api::contracts::EmbedRoiAnnotations;
 use crate::types::FileEntry;
 use anyhow::{anyhow, bail, Context, Result};
 use csv::{ReaderBuilder, StringRecord};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct EmbedRoiAnnotations {
-    pub num_roi: usize,
-    pub roi_coords: Vec<[u32; 4]>,
-    pub roi_frames: Vec<Vec<u32>>,
-}
-
-impl EmbedRoiAnnotations {
-    pub fn empty() -> Self {
-        Self {
-            num_roi: 0,
-            roi_coords: Vec::new(),
-            roi_frames: Vec::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 struct ParsedAnnotationRow {

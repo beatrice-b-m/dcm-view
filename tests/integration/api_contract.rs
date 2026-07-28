@@ -3,6 +3,11 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum_test::{TestResponse, TestServer};
 use bytes::Bytes;
 use dcmview::annotations::{AnnotationStore, EmbedRoiAnnotations};
+use dcmview::api::contracts::{
+    ApiEndpointContract, ApiMethod, ApiResponseHeadersKind, API_ENDPOINTS, API_PREFIX,
+    CACHE_HEADER, CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER,
+    EXPORT_CONTENT_DISPOSITION_VALUE, RAW_FRAME_HEADERS,
+};
 use dcmview::server;
 use dcmview::types::WindowPreset;
 use serde_json::Value;
@@ -94,7 +99,7 @@ async fn json_endpoints_match_frontend_contract_shapes() {
             "frame_count",
             "has_pixels",
             "rows",
-            "transfer_syntax",
+            "transfer_syntax_uid",
         ],
     );
     assert_object_keys(&info["default_window"], &["center", "width"]);
@@ -133,6 +138,58 @@ async fn json_endpoints_match_frontend_contract_shapes() {
 }
 
 #[tokio::test]
+async fn every_declared_endpoint_matches_its_runtime_contract() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("endpoint-registry.dcm");
+    support::write_uncompressed_u16_dicom(
+        &path,
+        "1.2.840.10008.1.2.1",
+        2,
+        2,
+        vec![0, 1000, 2000, 3000],
+        Some("1500"),
+        Some("3000"),
+    );
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 2;
+    entry.columns = 2;
+    entry.default_window = Some(WindowPreset {
+        center: 1500.0,
+        width: 3000.0,
+    });
+    let test_server = TestServer::new(server::router(support::app_state(vec![entry])));
+    let annotation_body = EmbedRoiAnnotations::empty();
+
+    for endpoint in API_ENDPOINTS {
+        let path = format!("{API_PREFIX}{}", endpoint.path)
+            .replace("{index}", "0")
+            .replace("{frame}", "0");
+        let request = match endpoint.method {
+            ApiMethod::Get => test_server.get(&path),
+            ApiMethod::Put => test_server.put(&path).json(&annotation_body),
+        };
+        let response = request.await;
+
+        assert_eq!(
+            response.status_code().as_u16(),
+            endpoint.success_status,
+            "{} status contract",
+            endpoint.id
+        );
+        assert_eq!(
+            response
+                .header(header::CONTENT_TYPE)
+                .to_str()
+                .expect("content type"),
+            endpoint.response_media_type,
+            "{} media-type contract",
+            endpoint.id
+        );
+        assert_declared_response_headers(endpoint, &response);
+    }
+}
+
+#[tokio::test]
 async fn raw_frame_endpoint_exposes_frontend_metadata_header_contract() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("raw-contract.dcm");
@@ -153,6 +210,7 @@ async fn raw_frame_endpoint_exposes_frontend_metadata_header_contract() {
         center: 1500.0,
         width: 3000.0,
     });
+    let has_default_window = entry.default_window.is_some();
 
     let test_server = TestServer::new(server::router(support::app_state(vec![entry])));
     let response = test_server.get("/api/file/0/frame/0/raw").await;
@@ -165,23 +223,18 @@ async fn raw_frame_endpoint_exposes_frontend_metadata_header_contract() {
             .expect("content-type"),
         "application/octet-stream"
     );
-    for header_name in [
-        "X-Cache",
-        "X-Frame-Rows",
-        "X-Frame-Columns",
-        "X-Frame-Bits-Allocated",
-        "X-Frame-Pixel-Representation",
-        "X-Frame-Samples-Per-Pixel",
-        "X-Frame-Photometric-Interpretation",
-        "X-Frame-Rescale-Slope",
-        "X-Frame-Rescale-Intercept",
-        "X-Frame-Default-Wc",
-        "X-Frame-Default-Ww",
-    ] {
-        assert!(
-            response.maybe_header(header_name).is_some(),
-            "raw response missing {header_name}"
-        );
+    assert!(response.maybe_header(CACHE_HEADER).is_some());
+    for header_contract in RAW_FRAME_HEADERS {
+        let present = response.maybe_header(header_contract.name).is_some();
+        if matches!(header_contract.field, "defaultWc" | "defaultWw") {
+            assert_eq!(
+                present, has_default_window,
+                "optional raw header {} presence",
+                header_contract.name
+            );
+        } else {
+            assert!(present, "raw response missing {}", header_contract.name);
+        }
     }
 }
 
@@ -282,6 +335,85 @@ fn assert_json_error(name: &str, response: &TestResponse, expected_status: Statu
             .as_str()
             .is_some_and(|message| !message.is_empty()),
         "{name} must include a non-empty error message"
+    );
+}
+
+fn assert_declared_response_headers(endpoint: &ApiEndpointContract, response: &TestResponse) {
+    match endpoint.response_headers {
+        ApiResponseHeadersKind::None => {
+            assert_no_cache_header(endpoint, response);
+            assert_no_raw_frame_headers(endpoint, response);
+            assert_no_export_header(endpoint, response);
+        }
+        ApiResponseHeadersKind::Cache => {
+            assert_cache_header(endpoint, response);
+            assert_no_raw_frame_headers(endpoint, response);
+            assert_no_export_header(endpoint, response);
+        }
+        ApiResponseHeadersKind::RawFrame => {
+            assert_cache_header(endpoint, response);
+            for raw_header in RAW_FRAME_HEADERS {
+                assert!(
+                    response.maybe_header(raw_header.name).is_some(),
+                    "{} is missing raw-frame header {}",
+                    endpoint.id,
+                    raw_header.name
+                );
+            }
+            assert_no_export_header(endpoint, response);
+        }
+        ApiResponseHeadersKind::Export => {
+            assert_no_cache_header(endpoint, response);
+            assert_no_raw_frame_headers(endpoint, response);
+            assert_eq!(
+                response
+                    .header(EXPORT_CONTENT_DISPOSITION_HEADER)
+                    .to_str()
+                    .expect("content-disposition"),
+                EXPORT_CONTENT_DISPOSITION_VALUE,
+                "{} content-disposition contract",
+                endpoint.id
+            );
+        }
+    }
+}
+
+fn assert_cache_header(endpoint: &ApiEndpointContract, response: &TestResponse) {
+    let header = response.header(CACHE_HEADER);
+    let value = header.to_str().expect("cache header");
+    assert!(
+        matches!(value, CACHE_HIT | CACHE_MISS),
+        "{} returned invalid {CACHE_HEADER} value {value:?}",
+        endpoint.id
+    );
+}
+
+fn assert_no_cache_header(endpoint: &ApiEndpointContract, response: &TestResponse) {
+    assert!(
+        response.maybe_header(CACHE_HEADER).is_none(),
+        "{} unexpectedly returned {CACHE_HEADER}",
+        endpoint.id
+    );
+}
+
+fn assert_no_raw_frame_headers(endpoint: &ApiEndpointContract, response: &TestResponse) {
+    for raw_header in RAW_FRAME_HEADERS {
+        assert!(
+            response.maybe_header(raw_header.name).is_none(),
+            "{} unexpectedly returned raw-frame header {}",
+            endpoint.id,
+            raw_header.name
+        );
+    }
+}
+
+fn assert_no_export_header(endpoint: &ApiEndpointContract, response: &TestResponse) {
+    assert!(
+        response
+            .maybe_header(EXPORT_CONTENT_DISPOSITION_HEADER)
+            .is_none(),
+        "{} unexpectedly returned {EXPORT_CONTENT_DISPOSITION_HEADER}",
+        endpoint.id
     );
 }
 

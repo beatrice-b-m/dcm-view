@@ -9,6 +9,12 @@ The server is unauthenticated. Keep it bound to loopback for normal use and use
 SSH forwarding for remote workflows. API responses can expose DICOM metadata,
 file paths, annotations, and rendered or decoded pixel data.
 
+The authoritative Rust wire declarations and endpoint operations—including
+method, route, query/body types, success status, response media type, and custom
+headers—live in `src/api/contracts.rs` (or a future `src/api/contracts/` module
+directory). Browser-facing TypeScript types and typed endpoint metadata are
+generated from that source.
+
 ## Cross-Origin Debugging
 
 Normal builds do not enable cross-origin browser access to the API. To inspect
@@ -121,14 +127,16 @@ For workflows that only need the first available file, poll until
 
 ## File Info
 
-`GET /api/file/:index/info` returns:
+`GET /api/file/:index/info` is the specialized single-file metadata endpoint.
+It is useful when a client already knows the file index and does not need to
+fetch the complete registry payload. It returns:
 
 ```json
 {
   "frame_count": 60,
   "rows": 3000,
   "columns": 2500,
-  "transfer_syntax": "1.2.840.10008.1.2.4.50",
+  "transfer_syntax_uid": "1.2.840.10008.1.2.4.50",
   "has_pixels": true,
   "default_window": { "center": 200.0, "width": 4000.0 }
 }

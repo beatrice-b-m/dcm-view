@@ -1,4 +1,5 @@
 pub mod annotations;
+pub mod api;
 pub mod loader;
 pub mod pixels;
 pub mod server;

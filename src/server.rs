@@ -1,27 +1,30 @@
-use crate::annotations::{AnnotationStore, EmbedRoiAnnotations};
+use crate::annotations::AnnotationStore;
+use crate::api::contracts::{
+    self as api_contracts, ApiEndpointContract, ApiEndpointSpec, ApiMethod, ApiOperation,
+    EmbedRoiAnnotations, ErrorResponse, FileSummary, FilesResponse, FrameInfo, FrameQuery,
+    HealthResponse, TagNode, TagValue, API_ENDPOINTS, API_PREFIX, CACHE_HEADER, CACHE_HIT,
+    CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
+    RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS, RAW_FRAME_HEADER_DEFAULT_WC,
+    RAW_FRAME_HEADER_DEFAULT_WW, RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
+    RAW_FRAME_HEADER_PIXEL_REPRESENTATION, RAW_FRAME_HEADER_RESCALE_INTERCEPT,
+    RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS, RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
+};
 use crate::pixels::{self, FrameCache, FrameRequest, RawFrameCache, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
-use crate::types::{
-    ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo,
-    WindowMode, RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS,
-    RAW_FRAME_HEADER_DEFAULT_WC, RAW_FRAME_HEADER_DEFAULT_WW,
-    RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION, RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
-    RAW_FRAME_HEADER_RESCALE_INTERCEPT, RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS,
-    RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
-};
+use crate::types::{FileEntry, TunnelInfo};
 use anyhow::{Context, Result};
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
 use dicom_core::header::HasLength;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_object::{open_file, InMemDicomObject};
 use rust_embed::RustEmbed;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -198,20 +201,6 @@ struct StartupEvent<'a> {
     port: u16,
 }
 
-#[derive(Debug, Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    file_count: usize,
-    server_start_ms: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct FrameQuery {
-    wc: Option<f64>,
-    ww: Option<f64>,
-    mode: Option<WindowMode>,
-}
-
 #[derive(RustEmbed)]
 #[folder = "frontend/dist"]
 struct FrontendAssets;
@@ -303,31 +292,266 @@ fn is_non_loopback_bind(ip: std::net::IpAddr) -> bool {
 }
 
 pub fn router(state: AppState) -> Router {
-    let api = Router::new()
-        .route("/health", get(health_handler))
-        .route("/files", get(files_handler))
-        .route("/file/{index}/info", get(info_handler))
-        .route("/file/{index}/frame/{frame}", get(frame_handler))
-        .route("/file/{index}/frame/{frame}/raw", get(raw_frame_handler))
-        .route(
-            "/file/{index}/annotations",
-            get(annotations_handler).put(update_annotations_handler),
-        )
-        .route("/annotations/export.csv", get(export_annotations_handler))
-        .route("/file/{index}/tags", get(tags_handler))
+    let api = API_ENDPOINTS
+        .iter()
+        .fold(Router::new(), register_api_endpoint)
         .fallback(api_not_found_handler)
         .method_not_allowed_fallback(api_method_not_allowed_handler);
 
     let router = Router::new()
         .route("/", get(index_handler))
         .route("/assets/{*path}", get(asset_handler))
-        .nest("/api", api)
+        .nest(API_PREFIX, api)
         .with_state(state);
 
     #[cfg(feature = "debug-api")]
     let router = router.layer(CorsLayer::permissive());
 
     router
+}
+
+trait HandlerResponseContract {
+    type Output;
+}
+
+macro_rules! json_handler_response {
+    ($($response:ty),+ $(,)?) => {
+        $(
+            impl HandlerResponseContract for $response {
+                type Output = Json<$response>;
+            }
+        )+
+    };
+}
+
+json_handler_response!(
+    HealthResponse,
+    FilesResponse,
+    FrameInfo,
+    Vec<TagNode>,
+    EmbedRoiAnnotations,
+);
+
+impl HandlerResponseContract for api_contracts::BlobBody {
+    type Output = Response;
+}
+
+impl HandlerResponseContract for api_contracts::ArrayBufferBody {
+    type Output = Response;
+}
+
+trait HandlerErrorContract {
+    type Output;
+}
+
+impl HandlerErrorContract for ErrorResponse {
+    type Output = ApiError;
+}
+
+macro_rules! handler_response_type {
+    ($spec:ty) => {
+        <<$spec as ApiEndpointSpec>::Response as HandlerResponseContract>::Output
+    };
+}
+
+macro_rules! handler_result_type {
+    ($spec:ty) => {
+        std::result::Result<
+            handler_response_type!($spec),
+            <<$spec as ApiEndpointSpec>::Error as HandlerErrorContract>::Output,
+        >
+    };
+}
+
+fn require_endpoint_spec<Spec>(endpoint: &ApiEndpointContract)
+where
+    Spec: ApiEndpointSpec,
+    Spec::Response: HandlerResponseContract,
+    Spec::Error: HandlerErrorContract,
+{
+    assert_eq!(
+        *endpoint,
+        Spec::CONTRACT,
+        "registered endpoint does not match its typed handler specification"
+    );
+}
+
+fn require_no_query<Spec>()
+where
+    Spec: ApiEndpointSpec<Query = api_contracts::NoQuery>,
+{
+}
+
+fn require_no_request<Spec>()
+where
+    Spec: ApiEndpointSpec<Request = api_contracts::NoRequest>,
+{
+}
+
+fn register_api_endpoint(
+    router: Router<AppState>,
+    endpoint: &ApiEndpointContract,
+) -> Router<AppState> {
+    let require_method = |expected| {
+        assert_eq!(
+            endpoint.method, expected,
+            "API endpoint {} has a method that does not match its handler",
+            endpoint.id
+        );
+    };
+
+    match endpoint.operation {
+        ApiOperation::Health => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::Health>(endpoint);
+            require_no_query::<api_contracts::Health>();
+            require_no_request::<api_contracts::Health>();
+            router.route(
+                endpoint.path,
+                get(|state: State<AppState>| async move {
+                    let response: handler_response_type!(api_contracts::Health) =
+                        health_handler(state).await;
+                    response
+                }),
+            )
+        }
+        ApiOperation::Files => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::Files>(endpoint);
+            require_no_query::<api_contracts::Files>();
+            require_no_request::<api_contracts::Files>();
+            router.route(
+                endpoint.path,
+                get(|state: State<AppState>| async move {
+                    let response: handler_response_type!(api_contracts::Files) =
+                        files_handler(state).await;
+                    response
+                }),
+            )
+        }
+        ApiOperation::FileInfo => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileInfo>(endpoint);
+            require_no_query::<api_contracts::FileInfo>();
+            require_no_request::<api_contracts::FileInfo>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: std::result::Result<Path<usize>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileInfo) =
+                            info_handler(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileFrame => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileFrame>(endpoint);
+            require_no_request::<api_contracts::FileFrame>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: std::result::Result<Path<(usize, u32)>, PathRejection>,
+                     query: std::result::Result<
+                        Query<<api_contracts::FileFrame as ApiEndpointSpec>::Query>,
+                        QueryRejection,
+                    >| async move {
+                        let response: handler_result_type!(api_contracts::FileFrame) =
+                            frame_handler(state, path, query).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileRawFrame => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileRawFrame>(endpoint);
+            require_no_query::<api_contracts::FileRawFrame>();
+            require_no_request::<api_contracts::FileRawFrame>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: std::result::Result<Path<(usize, u32)>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileRawFrame) =
+                            raw_frame_handler(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileTags => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileTags>(endpoint);
+            require_no_query::<api_contracts::FileTags>();
+            require_no_request::<api_contracts::FileTags>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: std::result::Result<Path<usize>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileTags) =
+                            tags_handler(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileAnnotationsGet => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileAnnotationsGet>(endpoint);
+            require_no_query::<api_contracts::FileAnnotationsGet>();
+            require_no_request::<api_contracts::FileAnnotationsGet>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: std::result::Result<Path<usize>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileAnnotationsGet) =
+                            annotations_handler(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileAnnotationsUpdate => {
+            require_method(ApiMethod::Put);
+            require_endpoint_spec::<api_contracts::FileAnnotationsUpdate>(endpoint);
+            require_no_query::<api_contracts::FileAnnotationsUpdate>();
+            router.route(
+                endpoint.path,
+                put(
+                    |state: State<AppState>,
+                     path: std::result::Result<Path<usize>, PathRejection>,
+                     payload: std::result::Result<
+                        Json<<api_contracts::FileAnnotationsUpdate as ApiEndpointSpec>::Request>,
+                        JsonRejection,
+                    >| async move {
+                        let response: handler_result_type!(api_contracts::FileAnnotationsUpdate) =
+                            update_annotations_handler(state, path, payload).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::AnnotationsExport => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::AnnotationsExport>(endpoint);
+            require_no_query::<api_contracts::AnnotationsExport>();
+            require_no_request::<api_contracts::AnnotationsExport>();
+            router.route(
+                endpoint.path,
+                get(|state: State<AppState>| async move {
+                    let response: handler_result_type!(api_contracts::AnnotationsExport) =
+                        export_annotations_handler(state).await;
+                    response
+                }),
+            )
+        }
+    }
 }
 
 pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json::Result<String> {
@@ -386,7 +610,7 @@ async fn info_handler(
         frame_count: file.frame_count,
         rows: file.rows,
         columns: file.columns,
-        transfer_syntax: file.transfer_syntax_uid.clone(),
+        transfer_syntax_uid: file.transfer_syntax_uid.clone(),
         has_pixels: file.has_pixels,
         default_window: file.default_window,
     }))
@@ -445,8 +669,8 @@ async fn export_annotations_handler(State(state): State<AppState>) -> Result<Res
         HeaderValue::from_static("text/csv; charset=utf-8"),
     );
     headers.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("attachment; filename=\"dcmview-annotations.csv\""),
+        EXPORT_CONTENT_DISPOSITION_HEADER,
+        HeaderValue::from_static(EXPORT_CONTENT_DISPOSITION_VALUE),
     );
     Ok(response)
 }
@@ -479,13 +703,13 @@ async fn frame_handler(
 
     let mut response = Response::new(axum::body::Body::from(frame_response.body));
     let cache_header = if frame_response.cache_hit {
-        "HIT"
+        CACHE_HIT
     } else {
-        "MISS"
+        CACHE_MISS
     };
     response
         .headers_mut()
-        .insert("X-Cache", HeaderValue::from_static(cache_header));
+        .insert(CACHE_HEADER, HeaderValue::from_static(cache_header));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(frame_response.content_type),
@@ -511,14 +735,14 @@ async fn raw_frame_handler(
 
     let meta = &raw_response.metadata;
     let cache_header = if raw_response.cache_hit {
-        "HIT"
+        CACHE_HIT
     } else {
-        "MISS"
+        CACHE_MISS
     };
 
     let mut response = Response::new(axum::body::Body::from(raw_response.body));
     let headers = response.headers_mut();
-    headers.insert("X-Cache", HeaderValue::from_static(cache_header));
+    headers.insert(CACHE_HEADER, HeaderValue::from_static(cache_header));
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),

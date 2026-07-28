@@ -1,28 +1,53 @@
-import type { FilesResponse, FrameInfo, TagNode, WindowMode } from "./generated/api-types";
-import { RAW_FRAME_HEADERS } from "./generated/api-types";
-import type { RawFrame, RawFrameMetadata } from "./rawFrame";
+import type {
+	ApiEndpointParams,
+	ApiEndpointQuery,
+	ApiEndpointRequest,
+	ApiEndpointResponse,
+	EmbedRoiAnnotations,
+	ErrorResponse,
+	FilesResponse,
+	FrameInfo,
+	JsonApiEndpointId,
+	RawFrameMetadata,
+	TagNode,
+	WindowMode,
+} from "./generated/api-types";
+import {
+	API_ENDPOINTS,
+	FRAME_QUERY_KEYS,
+	RAW_FRAME_HEADERS,
+	apiEndpointPath,
+	getApiEndpointPath,
+} from "./generated/api-types";
+import type { RawFrame } from "./rawFrame";
 
 export type {
+	ApiEndpointId,
+	ApiEndpointError,
+	ApiEndpointParams,
+	ApiEndpointQuery,
+	ApiEndpointRequest,
+	ApiEndpointResponse,
+	ApiEndpointResponseHeaders,
+	ApiEndpointTypes,
+	EmbedRoiAnnotations,
 	ErrorResponse,
 	FileSummary,
 	FilesResponse,
+	FrameQuery,
 	FrameInfo,
+	HealthResponse,
+	RawFrameMetadata,
 	TagNode,
 	TagValue,
 	WindowMode,
 	WindowPreset,
 } from "./generated/api-types";
-export type { RawFrame, RawFrameMetadata } from "./rawFrame";
-
-export interface EmbedRoiAnnotations {
-	num_roi: number;
-	roi_coords: [number, number, number, number][];
-	roi_frames: number[][];
-}
+export type { RawFrame } from "./rawFrame";
 
 async function readServerError(response: Response): Promise<string | null> {
 	try {
-		const body = (await response.json()) as { error?: unknown };
+		const body = (await response.json()) as Partial<ErrorResponse>;
 		return typeof body.error === "string" && body.error.length > 0 ? body.error : null;
 	} catch {
 		return null;
@@ -34,67 +59,89 @@ async function responseError(response: Response, fallback: string): Promise<Erro
 	return new Error(serverMessage ?? `HTTP ${response.status}: ${fallback}`);
 }
 
-async function requestJson<T>(path: string): Promise<T> {
-	const response = await fetch(path);
-	if (!response.ok) {
-		throw await responseError(response, `request failed: ${path}`);
-	}
-	return (await response.json()) as T;
-}
+type JsonRequestArguments<Id extends JsonApiEndpointId> = [
+	ApiEndpointRequest<Id>,
+] extends [never]
+	? []
+	: [body: ApiEndpointRequest<Id>];
 
-async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
-	const response = await fetch(path, {
-		method,
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(body),
-	});
-	if (!response.ok) {
+async function requestJsonEndpoint<Id extends JsonApiEndpointId>(
+	id: Id,
+	params: ApiEndpointParams<Id>,
+	...requestArguments: JsonRequestArguments<Id>
+): Promise<ApiEndpointResponse<Id>> {
+	const endpoint = API_ENDPOINTS[id];
+	const path = apiEndpointPath(id, params);
+	const init: RequestInit = { method: endpoint.method };
+	if (requestArguments.length > 0) {
+		if (endpoint.requestMediaType === null) {
+			throw new Error(`endpoint ${id} does not declare a request media type`);
+		}
+		init.headers = { "Content-Type": endpoint.requestMediaType };
+		init.body = JSON.stringify(requestArguments[0]);
+	}
+	const response = await fetch(path, init);
+	if (response.status !== endpoint.successStatus) {
 		throw await responseError(response, `request failed: ${path}`);
 	}
-	return (await response.json()) as T;
+	return (await response.json()) as ApiEndpointResponse<Id>;
 }
 
 export function fetchFiles(): Promise<FilesResponse> {
-	return requestJson<FilesResponse>("/api/files");
+	return requestJsonEndpoint("files", {});
 }
 
 export function fetchFrameInfo(fileIndex: number): Promise<FrameInfo> {
-	return requestJson<FrameInfo>(`/api/file/${fileIndex}/info`);
+	return requestJsonEndpoint("fileInfo", { index: fileIndex });
 }
 
 export function fetchTags(fileIndex: number): Promise<TagNode[]> {
-	return requestJson<TagNode[]>(`/api/file/${fileIndex}/tags`);
+	return requestJsonEndpoint("fileTags", { index: fileIndex });
 }
 
 export function fetchAnnotations(fileIndex: number): Promise<EmbedRoiAnnotations> {
-	return requestJson<EmbedRoiAnnotations>(`/api/file/${fileIndex}/annotations`);
+	return requestJsonEndpoint("fileAnnotationsGet", { index: fileIndex });
 }
 
 export function updateAnnotations(
 	fileIndex: number,
 	annotations: EmbedRoiAnnotations,
 ): Promise<EmbedRoiAnnotations> {
-	return sendJson<EmbedRoiAnnotations>(`/api/file/${fileIndex}/annotations`, "PUT", annotations);
+	return requestJsonEndpoint(
+		"fileAnnotationsUpdate",
+		{ index: fileIndex },
+		annotations,
+	);
 }
 
 export function annotationsExportUrl(): string {
-	return "/api/annotations/export.csv";
+	return getApiEndpointPath("annotationsExport", {});
 }
 
-export function frameUrl(fileIndex: number, frame: number, wc?: number | null, ww?: number | null, windowMode?: WindowMode | null): string {
-	const url = new URL(`/api/file/${fileIndex}/frame/${frame}`, window.location.origin);
+export function frameUrl(
+	fileIndex: number,
+	frame: number,
+	wc?: number | null,
+	ww?: number | null,
+	windowMode?: WindowMode | null,
+): string {
+	const path = apiEndpointPath("fileFrame", { index: fileIndex, frame });
+	const query: ApiEndpointQuery<"fileFrame"> = {};
 	if (windowMode !== "full_dynamic") {
 		if (wc !== undefined && wc !== null) {
-			url.searchParams.set("wc", String(wc));
+			query[FRAME_QUERY_KEYS.windowCenter] = wc;
 		}
 		if (ww !== undefined && ww !== null) {
-			url.searchParams.set("ww", String(ww));
+			query[FRAME_QUERY_KEYS.windowWidth] = ww;
 		}
 	}
 	if (windowMode === "full_dynamic") {
-		url.searchParams.set("mode", "full_dynamic");
+		query[FRAME_QUERY_KEYS.mode] = "full_dynamic";
 	}
-	return `${url.pathname}${url.search}`;
+	const encoded = new URLSearchParams(
+		Object.entries(query).map(([name, value]) => [name, String(value)]),
+	).toString();
+	return encoded.length > 0 ? `${path}?${encoded}` : path;
 }
 
 export interface DisplayFrameWindowOptions {
@@ -129,14 +176,15 @@ export async function fetchDisplayFrameBlob(
 	options: DisplayFrameWindowOptions = {},
 	signal?: AbortSignal,
 ): Promise<Blob> {
+	const endpoint = API_ENDPOINTS.fileFrame;
 	const response = await fetch(
 		frameUrl(fileIndex, frame, options.wc, options.ww, options.windowMode),
-		{ signal },
+		{ method: endpoint.method, signal },
 	);
-	if (!response.ok) {
+	if (response.status !== endpoint.successStatus) {
 		throw await responseError(response, "display frame fetch failed");
 	}
-	return response.blob();
+	return (await response.blob()) as ApiEndpointResponse<"fileFrame">;
 }
 
 function requiredHeader(headers: Headers, name: string): string {
@@ -195,10 +243,15 @@ export async function fetchRawFrame(
 	frame: number,
 	signal?: AbortSignal,
 ): Promise<RawFrame> {
-	const response = await fetch(`/api/file/${fileIndex}/frame/${frame}/raw`, { signal });
-	if (!response.ok) {
+	const endpoint = API_ENDPOINTS.fileRawFrame;
+	const response = await fetch(
+		apiEndpointPath("fileRawFrame", { index: fileIndex, frame }),
+		{ method: endpoint.method, signal },
+	);
+	if (response.status !== endpoint.successStatus) {
 		throw await responseError(response, "raw frame fetch failed");
 	}
-	const buffer = await response.arrayBuffer();
-	return { metadata: parseRawFrameMetadata(response.headers), buffer };
+	const buffer = (await response.arrayBuffer()) as ApiEndpointResponse<"fileRawFrame">;
+	const metadata: RawFrameMetadata = parseRawFrameMetadata(response.headers);
+	return { metadata, buffer };
 }

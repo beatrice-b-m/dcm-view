@@ -1,15 +1,6 @@
-export interface RawFrameMetadata {
-	rows: number;
-	columns: number;
-	bitsAllocated: number;
-	pixelRepresentation: number;
-	samplesPerPixel: number;
-	photometricInterpretation: string;
-	rescaleSlope: number;
-	rescaleIntercept: number;
-	defaultWc: number | null;
-	defaultWw: number | null;
-}
+import type { RawFrameMetadata } from "./generated/api-types";
+
+export type { RawFrameMetadata } from "./generated/api-types";
 
 export interface RawFrame {
 	metadata: RawFrameMetadata;

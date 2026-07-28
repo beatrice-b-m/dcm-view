@@ -1,11 +1,12 @@
-use serde::{Deserialize, Serialize};
+pub use crate::api::contracts::{
+    ErrorResponse, FileSummary, FilesResponse, FrameInfo, RawFrameMetadata, TagNode, TagValue,
+    WindowMode, WindowPreset, RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS,
+    RAW_FRAME_HEADER_DEFAULT_WC, RAW_FRAME_HEADER_DEFAULT_WW,
+    RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION, RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
+    RAW_FRAME_HEADER_RESCALE_INTERCEPT, RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS,
+    RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
+};
 use std::path::PathBuf;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct WindowPreset {
-    pub center: f64,
-    pub width: f64,
-}
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -75,30 +76,6 @@ impl FileEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct FileSummary {
-    pub index: usize,
-    pub path: String,
-    pub label: String,
-    pub patient_id: String,
-    pub patient_name: String,
-    pub study_instance_uid: String,
-    pub study_date: String,
-    pub study_description: String,
-    pub series_instance_uid: String,
-    pub series_number: String,
-    pub series_description: String,
-    pub modality: String,
-    pub instance_number: String,
-    pub sop_instance_uid: String,
-    pub has_pixels: bool,
-    pub frame_count: u32,
-    pub rows: u32,
-    pub columns: u32,
-    pub transfer_syntax_uid: String,
-    pub default_window: Option<WindowPreset>,
-}
-
 impl From<&FileEntry> for FileSummary {
     fn from(value: &FileEntry) -> Self {
         Self {
@@ -124,36 +101,6 @@ impl From<&FileEntry> for FileSummary {
             default_window: value.default_window,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FilesResponse {
-    pub files: Vec<FileSummary>,
-    pub tunnelled: bool,
-    pub tunnel_host: Option<String>,
-    pub server_start_ms: u64,
-    pub scan_complete: bool,
-    pub scanned: usize,
-    pub skipped: usize,
-    pub filtered: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FrameInfo {
-    pub frame_count: u32,
-    pub rows: u32,
-    pub columns: u32,
-    pub transfer_syntax: String,
-    pub has_pixels: bool,
-    pub default_window: Option<WindowPreset>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum WindowMode {
-    #[default]
-    Default,
-    FullDynamic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -305,49 +252,6 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct TagNode {
-    pub tag: String,
-    pub vr: String,
-    pub keyword: String,
-    pub value: TagValue,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TagValue {
-    String {
-        value: String,
-    },
-    Number {
-        value: f64,
-    },
-    Numbers {
-        value: Vec<f64>,
-        #[serde(skip_serializing_if = "is_false")]
-        truncated: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        total: Option<usize>,
-    },
-    Binary {
-        length: usize,
-    },
-    Sequence {
-        items: Vec<Vec<TagNode>>,
-        #[serde(skip_serializing_if = "is_false")]
-        truncated: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        total: Option<usize>,
-    },
-    Error {
-        message: String,
-    },
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone)]
 pub struct LoadReport {
     pub files: Vec<FileEntry>,
@@ -379,38 +283,8 @@ pub struct ResolvedWindow {
     pub width: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RawFrameCacheKey {
     pub file_index: usize,
     pub frame: u32,
-}
-
-pub const RAW_FRAME_HEADER_ROWS: &str = "X-Frame-Rows";
-pub const RAW_FRAME_HEADER_COLUMNS: &str = "X-Frame-Columns";
-pub const RAW_FRAME_HEADER_BITS_ALLOCATED: &str = "X-Frame-Bits-Allocated";
-pub const RAW_FRAME_HEADER_PIXEL_REPRESENTATION: &str = "X-Frame-Pixel-Representation";
-pub const RAW_FRAME_HEADER_SAMPLES_PER_PIXEL: &str = "X-Frame-Samples-Per-Pixel";
-pub const RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION: &str = "X-Frame-Photometric-Interpretation";
-pub const RAW_FRAME_HEADER_RESCALE_SLOPE: &str = "X-Frame-Rescale-Slope";
-pub const RAW_FRAME_HEADER_RESCALE_INTERCEPT: &str = "X-Frame-Rescale-Intercept";
-pub const RAW_FRAME_HEADER_DEFAULT_WC: &str = "X-Frame-Default-Wc";
-pub const RAW_FRAME_HEADER_DEFAULT_WW: &str = "X-Frame-Default-Ww";
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RawFrameMetadata {
-    pub rows: u32,
-    pub columns: u32,
-    pub bits_allocated: u32,
-    pub pixel_representation: u32,
-    pub samples_per_pixel: u32,
-    pub photometric_interpretation: String,
-    pub rescale_slope: f64,
-    pub rescale_intercept: f64,
-    pub default_wc: Option<f64>,
-    pub default_ww: Option<f64>,
 }

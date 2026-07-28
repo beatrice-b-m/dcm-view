@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	annotationsExportUrl,
 	displayFrameCacheKey,
 	displayFrameWindowCacheKey,
+	fetchFiles,
+	frameUrl,
 	parseRawFrameMetadata,
+	updateAnnotations,
 } from "./api";
 import { RAW_FRAME_HEADERS } from "./generated/api-types";
 
@@ -20,6 +24,10 @@ function completeRawHeaders(): Headers {
 		[RAW_FRAME_HEADERS.defaultWw]: "80",
 	});
 }
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe("parseRawFrameMetadata", () => {
 	it("maps the generated raw-frame header contract", () => {
@@ -86,5 +94,73 @@ describe("display frame cache keys", () => {
 		const second = displayFrameCacheKey(0, 0, { wc: 1.00002, ww: 2.00002 });
 
 		expect(first).not.toBe(second);
+	});
+});
+
+describe("display frame URLs", () => {
+	it("uses the generated route and query contract", () => {
+		expect(frameUrl(2, 7)).toBe("/api/file/2/frame/7");
+		expect(frameUrl(2, 7, 40, 80, "default")).toBe(
+			"/api/file/2/frame/7?wc=40&ww=80",
+		);
+		expect(frameUrl(2, 7, 40, 80, "full_dynamic")).toBe(
+			"/api/file/2/frame/7?mode=full_dynamic",
+		);
+	});
+
+	it("anchors the annotations export link to the declared GET endpoint", () => {
+		expect(annotationsExportUrl()).toBe("/api/annotations/export.csv");
+	});
+});
+
+describe("generated endpoint fetch wrappers", () => {
+	it("uses the declared GET operation and inferred files response", async () => {
+		const payload = { files: [], scan_complete: true };
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify(payload), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(fetchFiles()).resolves.toEqual(payload);
+		expect(fetchMock).toHaveBeenCalledWith("/api/files", { method: "GET" });
+	});
+
+	it("uses the annotation update verb, body, and inferred response contract", async () => {
+		const annotations = {
+			num_roi: 1,
+			roi_coords: [[1, 2, 3, 4] as [number, number, number, number]],
+			roi_frames: [[0]],
+		};
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify(annotations), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(updateAnnotations(7, annotations)).resolves.toEqual(annotations);
+		expect(fetchMock).toHaveBeenCalledWith("/api/file/7/annotations", {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(annotations),
+		});
+	});
+
+	it("rejects a successful status that differs from the endpoint contract", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				new Response("{}", {
+					status: 201,
+					headers: { "Content-Type": "application/json" },
+				}),
+			),
+		);
+
+		await expect(fetchFiles()).rejects.toThrow("HTTP 201");
 	});
 });

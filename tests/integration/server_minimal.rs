@@ -50,7 +50,7 @@ async fn exposes_files_info_and_frame_endpoints_with_cache_headers() {
     info_response.assert_status_ok();
     let info_json: Value = info_response.json();
     assert_eq!(info_json["frame_count"], 1);
-    assert_eq!(info_json["transfer_syntax"], "1.2.840.10008.1.2.4.50");
+    assert_eq!(info_json["transfer_syntax_uid"], "1.2.840.10008.1.2.4.50");
 
     let first_frame = test_server
         .get("/api/file/0/frame/0")
