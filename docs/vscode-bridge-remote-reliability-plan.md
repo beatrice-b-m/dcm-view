@@ -1,5 +1,12 @@
 # VS Code bridge — remote interception reliability: findings and remediation plan
 
+> **Archival note:** This is a point-in-time, non-normative investigation and
+> remediation plan. Bridge discovery, registry trust, protocol, and lifecycle
+> behavior has changed since it was written; proposals below may be implemented,
+> superseded, or still deferred. See the
+> [configuration reference](configuration.md) and
+> [VS Code local-testing guide](vscode-extension-local-testing.md).
+
 Investigation of the report that `dcmview_py.view(...)` on a shared Ubuntu
 24.04 server (VS Code Remote-SSH) was not intercepted by the VS Code bridge
 and fell back to the local viewer + manual port forwarding. The feature is

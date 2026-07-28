@@ -1,5 +1,10 @@
 # Public-Facing Project Review
 
+> **Archival note:** This dated review is a point-in-time, non-normative record.
+> Installation, security, support, and release documentation has changed since
+> the findings were written. Use the current [README](../README.md) and
+> [documentation index](index.md) for present behavior.
+
 Date: 2026-06-14
 
 ## Scope

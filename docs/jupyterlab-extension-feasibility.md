@@ -1,5 +1,10 @@
 # JupyterLab extension feasibility
 
+> **Archival note:** This is a point-in-time, non-normative feasibility study,
+> not a committed roadmap or description of a shipped JupyterLab integration.
+> Some assumptions may have changed. See the
+> [current architecture](architecture.md) and [Python reference](python.md).
+
 ## Summary
 
 Building a JupyterLab extension for `dcmview` is feasible, and the architecture

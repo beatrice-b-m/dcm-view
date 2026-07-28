@@ -1,5 +1,10 @@
 # VS Code DICOM auto-open feasibility
 
+> **Archival note:** This is a point-in-time, non-normative feasibility study.
+> The repository now includes an opt-in readonly DICOM custom editor, but the
+> body below remains the original design analysis rather than current behavior
+> documentation. See the [VS Code extension README](../vscode/README.md).
+
 ## Summary
 
 Automatically opening DICOM files in `dcmview` when double-clicked in VS Code is

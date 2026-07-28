@@ -1,5 +1,11 @@
 # Large Directory Scalability and Hierarchy Filtering Plan
 
+> **Archival note:** This is a point-in-time, non-normative plan. The current
+> server binds before progressive discovery, and normal shutdown cancels and
+> awaits remaining scan work; other proposals below may be partial or
+> unimplemented. See the [current architecture](architecture.md) and
+> [configuration reference](configuration.md).
+
 This plan addresses the report that `dcmview` hangs and fails to launch when
 pointed at directories with thousands of files, and adds user-facing filtering
 of patient IDs, study attributes, and series attributes. The root causes below

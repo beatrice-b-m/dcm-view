@@ -1,5 +1,11 @@
 # VS Code extension feasibility
 
+> **Archival note:** This is a point-in-time, non-normative study written before
+> the current VS Code extension was implemented. It remains design history, not
+> current extension documentation. See the
+> [VS Code extension README](../vscode/README.md) and
+> [current architecture](architecture.md).
+
 ## Summary
 
 Building a VS Code extension for `dcmview` is feasible, and the lowest-risk path

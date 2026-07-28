@@ -1,5 +1,12 @@
 # VS Code bridge registry — open review findings
 
+> **Archival note:** This is a point-in-time, non-normative review, not the
+> current bridge issue list. The registry and Rust client have since been
+> refactored and hardened; individual findings below should not be assumed open
+> or closed without checking current code. See the
+> [configuration reference](configuration.md) and
+> [current architecture](architecture.md).
+
 Findings from review of commits `0706805` and `6e99a0c`. Each finding is
 self-contained: problem, affected files, required resolution, and acceptance
 criteria. F1 is the only one with user-visible breakage; the rest are

@@ -1,5 +1,11 @@
 # Structural Review Remediation Plan
 
+> **Archival note:** This is a point-in-time, non-normative remediation plan,
+> not a current completion checklist. Several contract, startup, and packaging
+> changes described below have since landed, while other ideas may remain
+> partial or unimplemented. See the [current architecture](architecture.md) and
+> [development reference](development.md).
+
 This plan responds to the structural review findings around rendering semantics,
 contract ownership, wrapper protocols, extension packaging, and development
 workflow drift. I spot-checked the current tree before writing this plan; the
