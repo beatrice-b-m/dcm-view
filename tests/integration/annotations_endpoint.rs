@@ -15,15 +15,17 @@ async fn returns_annotations_for_matching_file_index() {
         "1.2.840.10008.1.2.4.50",
         10,
     );
-    let mut state = support::app_state(vec![entry]);
-    state.annotations = AnnotationStore::new(HashMap::from([(
-        0,
-        EmbedRoiAnnotations {
-            num_roi: 2,
-            roi_coords: vec![[11, 22, 33, 44], [55, 66, 77, 88]],
-            roi_frames: vec![vec![0, 1, 2], vec![3]],
-        },
-    )]));
+    let state = support::app_state_with_annotations(
+        vec![entry],
+        AnnotationStore::new(HashMap::from([(
+            0,
+            EmbedRoiAnnotations {
+                num_roi: 2,
+                roi_coords: vec![[11, 22, 33, 44], [55, 66, 77, 88]],
+                roi_frames: vec![vec![0, 1, 2], vec![3]],
+            },
+        )])),
+    );
 
     let app = server::router(state);
     let test_server = TestServer::new(app);
@@ -106,8 +108,8 @@ async fn serves_annotations_loaded_from_csv_for_matching_file() {
         "annotation_map is empty — CSV path did not match FileEntry path; path normalization may be broken"
     );
 
-    let mut state = support::app_state(vec![entry]);
-    state.annotations = AnnotationStore::new(annotation_map);
+    let state =
+        support::app_state_with_annotations(vec![entry], AnnotationStore::new(annotation_map));
 
     let app = server::router(state);
     let test_server = TestServer::new(app);

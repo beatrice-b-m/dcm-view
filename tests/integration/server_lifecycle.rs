@@ -163,7 +163,7 @@ async fn browser_route_requests_reset_the_idle_timeout() {
 async fn graceful_shutdown_drains_an_in_flight_request() {
     let shutdown = Arc::new(Notify::new());
     let state = support::app_state(Vec::new());
-    let activity: RequestActivity = state.activity.clone();
+    let activity: RequestActivity = state.activity().clone();
     let config = server_config(shutdown.clone(), None);
     let bound = BoundServer::bind(&config).await.expect("bind server");
     let address = bound.local_addr();

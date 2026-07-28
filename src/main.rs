@@ -2,16 +2,14 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use dcmview::annotations;
 use dcmview::loader;
-use dcmview::pixels;
-use dcmview::server::{self, now_unix_ms, AppState, RequestActivity, ServerConfig, TunnelConfig};
+use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
 
@@ -270,17 +268,7 @@ async fn run() -> Result<i32> {
     let shutdown_notify = Arc::new(Notify::new());
     let exit_code = Arc::new(AtomicI32::new(0));
 
-    let state = AppState {
-        registry: registry.clone(),
-        pixel_cache: pixels::new_cache(),
-        raw_cache: pixels::new_raw_cache(),
-        tag_cache: Arc::new(Mutex::new(HashMap::new())),
-        annotations: annotation_store.clone(),
-        tunnel_info: None,
-        tunnel_handle: None,
-        server_start_ms: now_unix_ms(),
-        activity: RequestActivity::new(),
-    };
+    let state = AppState::new(registry.clone(), annotation_store.clone());
 
     ProgressiveDiscovery {
         input_paths: cli.paths.clone(),

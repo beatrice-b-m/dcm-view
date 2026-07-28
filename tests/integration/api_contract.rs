@@ -36,15 +36,17 @@ async fn json_endpoints_match_frontend_contract_shapes() {
         width: 3000.0,
     });
 
-    let mut state = support::app_state(vec![entry]);
-    state.annotations = AnnotationStore::new(HashMap::from([(
-        0,
-        EmbedRoiAnnotations {
-            num_roi: 1,
-            roi_coords: vec![[1, 2, 3, 4]],
-            roi_frames: vec![vec![0]],
-        },
-    )]));
+    let state = support::app_state_with_annotations(
+        vec![entry],
+        AnnotationStore::new(HashMap::from([(
+            0,
+            EmbedRoiAnnotations {
+                num_roi: 1,
+                roi_coords: vec![[1, 2, 3, 4]],
+                roi_frames: vec![vec![0]],
+            },
+        )])),
+    );
 
     let test_server = TestServer::new(server::router(state));
 

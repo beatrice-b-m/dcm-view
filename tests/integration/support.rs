@@ -1,15 +1,12 @@
 use dcmview::annotations::AnnotationStore;
-use dcmview::pixels;
-use dcmview::server::{now_unix_ms, AppState, FileRegistry, RequestActivity};
+use dcmview::server::{AppState, FileRegistry};
 use dcmview::types::FileEntry;
 use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
 use image::{GrayImage, Luma};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragments: Vec<Vec<u8>>) {
     let frame_count = fragments.len().max(1) as u32;
@@ -123,18 +120,12 @@ pub fn app_state(files: Vec<FileEntry>) -> AppState {
     app_state_with_registry(FileRegistry::from_files(files))
 }
 
+pub fn app_state_with_annotations(files: Vec<FileEntry>, annotations: AnnotationStore) -> AppState {
+    AppState::new(FileRegistry::from_files(files), annotations)
+}
+
 pub fn app_state_with_registry(registry: FileRegistry) -> AppState {
-    AppState {
-        registry,
-        pixel_cache: pixels::new_cache(),
-        raw_cache: pixels::new_raw_cache(),
-        tag_cache: Arc::new(Mutex::new(HashMap::new())),
-        annotations: AnnotationStore::empty(),
-        tunnel_info: None,
-        tunnel_handle: None,
-        server_start_ms: now_unix_ms(),
-        activity: RequestActivity::new(),
-    }
+    AppState::new(registry, AnnotationStore::empty())
 }
 
 pub fn write_uncompressed_u16_dicom(

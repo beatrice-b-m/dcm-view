@@ -95,8 +95,7 @@ impl BoundServer {
                     tunnel_runtime.info.tunnel_port
                 );
             }
-            state.tunnel_info = Some(Arc::new(tunnel_runtime.info));
-            state.tunnel_handle = tunnel_runtime.handle.map(Arc::new);
+            state.attach_tunnel(tunnel_runtime.info, tunnel_runtime.handle);
         } else {
             println!(
                 "dcmview: (on a remote server? run on your local machine: ssh -L {0}:localhost:{0} user@host)",
@@ -114,9 +113,9 @@ impl BoundServer {
             );
         }
 
-        let mut tunnel_cleanup = TunnelCleanup::new(state.tunnel_handle.clone());
-        let activity = state.activity.clone();
-        let registry = state.registry.clone();
+        let mut tunnel_cleanup = TunnelCleanup::new(state.tunnel_handle());
+        let activity = state.activity().clone();
+        let registry = state.registry().clone();
         let app = router(state);
         let mut browser_task = BrowserTask::new(
             config
