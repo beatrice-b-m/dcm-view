@@ -313,6 +313,30 @@ unless one is actually implemented.
 - Use the shared monospace stack for tag values and the shared UI stack for
   viewer chrome.
 
+**Frontend design iteration**
+
+- Prefer the real Svelte app against `tests/fixtures` over standalone HTML/CSS
+  mockups, Storybook, or a duplicate mocked API. This preserves actual canvas,
+  tag, annotation, layout, and interaction behavior while keeping startup fast.
+- Run one shared fixture backend on port 8888 with
+  `dcmview --no-browser --host 127.0.0.1 --port 8888 tests/fixtures`, then run
+  each frontend variant in its own Git worktree and on a unique Vite port with
+  `npm --prefix frontend run dev -- --host 127.0.0.1 --port <port>`. All variants
+  may use the existing Vite proxy to the shared backend.
+- Give parallel design agents narrow visual directions and keep each variant on
+  its own branch. Review screenshots before translating the chosen direction
+  into the main implementation; do not mix unrelated alternatives in one
+  worktree or commit.
+- For representative visual review, explicitly open
+  `golden-jpeg-baseline-large-single-frame.dcm`; most other committed image
+  fixtures are intentionally codec-test-sized. Also check a multiframe fixture
+  and a no-pixel fixture when the affected UI includes playback or metadata-only
+  states.
+- Capture consistent desktop, compact, and narrow viewport states when comparing
+  variants. Add screenshot automation only after repeated manual capture becomes
+  a bottleneck; add a frontend-only mock mode only if running the real backend is
+  demonstrably impractical.
+
 ### CLI
 
 ```text
