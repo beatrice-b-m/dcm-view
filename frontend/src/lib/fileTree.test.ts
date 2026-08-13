@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FileSummary } from "../api";
-import { buildFileTree, fileMatchesFilter, patientDetailWithCounts } from "./fileTree";
+import { buildDirectoryTree, buildFileTree, fileMatchesFilter, patientDetailWithCounts } from "./fileTree";
 
 function file(overrides: Partial<FileSummary>): FileSummary {
 	return {
@@ -73,5 +73,16 @@ describe("file tree shaping", () => {
 		expect(tree[0].key).toBe("patient:file-77");
 		expect(tree[0].studies[0].key).toContain("study:file-77");
 		expect(tree[0].studies[0].series[0].key).toContain("series:file-77");
+	});
+
+	it("builds stable directory folders from file paths", () => {
+		const tree = buildDirectoryTree([
+			file({ index: 1, path: "/dataset/train/case-b.dcm" }),
+			file({ index: 2, path: "/dataset/test/case-a.dcm" }),
+		]);
+
+		expect(tree[0]).toMatchObject({ kind: "folder", label: "dataset" });
+		if (tree[0].kind !== "folder") throw new Error("expected dataset folder");
+		expect(tree[0].children.map((node) => node.label)).toEqual(["test", "train"]);
 	});
 });

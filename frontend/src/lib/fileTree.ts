@@ -33,12 +33,32 @@ export type NavPatient = {
 	studies: NavStudy[];
 };
 
+export type DirectoryFile = {
+	kind: "file";
+	key: string;
+	label: string;
+	file: FileSummary;
+};
+
+export type DirectoryFolder = {
+	kind: "folder";
+	key: string;
+	label: string;
+	children: DirectoryNode[];
+};
+
+export type DirectoryNode = DirectoryFolder | DirectoryFile;
+
 function clean(value: string | null | undefined): string {
 	return (value ?? "").trim();
 }
 
 function basename(path: string): string {
 	return path.split(/[\\/]/).pop() || path;
+}
+
+function pathParts(path: string): string[] {
+	return path.replace(/\\/g, "/").split("/").filter(Boolean);
 }
 
 function formatPersonName(value: string): string {
@@ -308,4 +328,43 @@ export function buildFileTree(files: readonly FileSummary[]): NavPatient[] {
 	}
 
 	return Array.from(patients.values());
+}
+
+export function buildDirectoryTree(files: readonly FileSummary[]): DirectoryNode[] {
+	const root: DirectoryFolder = { kind: "folder", key: "directory:root", label: "Files", children: [] };
+	const folders = new Map<string, DirectoryFolder>([[root.key, root]]);
+
+	for (const file of files) {
+		const parts = pathParts(file.path);
+		const fileName = parts.pop() || file.path;
+		let parent = root;
+		let folderPath = "";
+		for (const part of parts) {
+			folderPath = folderPath ? `${folderPath}/${part}` : part;
+			const key = `directory:${folderPath}`;
+			let folder = folders.get(key);
+			if (!folder) {
+				folder = { kind: "folder", key, label: part, children: [] };
+				folders.set(key, folder);
+				parent.children.push(folder);
+			}
+			parent = folder;
+		}
+		parent.children.push({
+			kind: "file",
+			key: `directory:file:${file.index}`,
+			label: fileName,
+			file,
+		});
+	}
+
+	const sortNodes = (nodes: DirectoryNode[]) => {
+		nodes.sort((left, right) => {
+			if (left.kind !== right.kind) return left.kind === "folder" ? -1 : 1;
+			return left.label.localeCompare(right.label, undefined, { numeric: true });
+		});
+		for (const node of nodes) if (node.kind === "folder") sortNodes(node.children);
+	};
+	sortNodes(root.children);
+	return root.children;
 }
