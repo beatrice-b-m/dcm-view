@@ -29,7 +29,7 @@ class VSCodePackagingTests(unittest.TestCase):
 		packaging = _load_packaging_module()
 		with tempfile.TemporaryDirectory(prefix="dcmview-vsix-package-") as temp_dir:
 			root = Path(temp_dir)
-			archive = root / "release-win32-x64" / "dcmview-0.2.7-x86_64-pc-windows-msvc.zip"
+			archive = root / "release-win32-x64" / "dcmview-0.2.8-x86_64-pc-windows-msvc.zip"
 			archive.parent.mkdir()
 			with zipfile.ZipFile(archive, "w") as package:
 				package.writestr("dcmview.exe", b"windows-binary")
@@ -44,7 +44,7 @@ class VSCodePackagingTests(unittest.TestCase):
 	def test_verifies_windows_vsix_contains_only_target_exe(self) -> None:
 		packaging = _load_packaging_module()
 		with tempfile.TemporaryDirectory(prefix="dcmview-vsix-verify-") as temp_dir:
-			vsix = Path(temp_dir) / "dcmview-0.2.7-win32-x64.vsix"
+			vsix = Path(temp_dir) / "dcmview-0.2.8-win32-x64.vsix"
 			with zipfile.ZipFile(vsix, "w") as package:
 				package.writestr("extension/package.json", "{}")
 				package.writestr("extension/resources/bin/win32-x64/dcmview.exe", b"binary")

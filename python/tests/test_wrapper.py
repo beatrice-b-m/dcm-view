@@ -179,11 +179,11 @@ class WrapperTests(unittest.TestCase):
 	def test_wheel_verifier_accepts_windows_bundled_exe(self) -> None:
 		verify_wheel = _load_script_module("verify_wheel_install_for_test", VERIFY_WHEEL_INSTALL)
 		with tempfile.TemporaryDirectory(prefix="dcmview-wheel-test-") as temp_dir:
-			wheel = Path(temp_dir) / "dcmview_py-0.2.7-py3-none-win_amd64.whl"
+			wheel = Path(temp_dir) / "dcmview_py-0.2.8-py3-none-win_amd64.whl"
 			with zipfile.ZipFile(wheel, "w") as archive:
 				archive.writestr("dcmview_py/bin/dcmview.exe", b"binary")
 				archive.writestr(
-					"dcmview_py-0.2.7.dist-info/entry_points.txt",
+					"dcmview_py-0.2.8.dist-info/entry_points.txt",
 					"[console_scripts]\ndcmview = dcmview_py.__main__:main\ndcmview-py = dcmview_py.__main__:main\n",
 				)
 
