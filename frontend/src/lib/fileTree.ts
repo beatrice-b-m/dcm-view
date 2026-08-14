@@ -50,6 +50,47 @@ export type DirectoryFolder = {
 
 export type DirectoryNode = DirectoryFolder | DirectoryFile;
 
+export function activeStudyPathKeys(
+	patients: readonly NavPatient[],
+	activeFileIndex: number | null,
+): ReadonlySet<string> {
+	const activePath = new Set<string>();
+	if (activeFileIndex === null) return activePath;
+
+	for (const patient of patients) {
+		for (const study of patient.studies) {
+			for (const series of study.series) {
+				if (series.files.some((item) => item.file.index === activeFileIndex)) {
+					activePath.add(patient.key);
+					activePath.add(study.key);
+					activePath.add(series.key);
+					return activePath;
+				}
+			}
+		}
+	}
+
+	return activePath;
+}
+
+export function activeDirectoryPathKeys(
+	nodes: readonly DirectoryNode[],
+	activeFileIndex: number | null,
+): ReadonlySet<string> {
+	const activePath = new Set<string>();
+	if (activeFileIndex === null) return activePath;
+
+	function containsActiveFile(node: DirectoryNode): boolean {
+		if (node.kind === "file") return node.file.index === activeFileIndex;
+		if (!node.children.some(containsActiveFile)) return false;
+		activePath.add(node.key);
+		return true;
+	}
+
+	nodes.some(containsActiveFile);
+	return activePath;
+}
+
 function clean(value: string | null | undefined): string {
 	return (value ?? "").trim();
 }

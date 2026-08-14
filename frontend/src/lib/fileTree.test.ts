@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { FileSummary } from "../api";
-import { buildDirectoryTree, buildFileTree, fileMatchesFilter, patientDetailWithCounts } from "./fileTree";
+import {
+	activeDirectoryPathKeys,
+	activeStudyPathKeys,
+	buildDirectoryTree,
+	buildFileTree,
+	fileMatchesFilter,
+	patientDetailWithCounts,
+} from "./fileTree";
 
 function file(overrides: Partial<FileSummary>): FileSummary {
 	return {
@@ -104,5 +111,35 @@ describe("file tree shaping", () => {
 			file({ index: 2, path: "/srv/project/dataset/validation/case.dcm" }),
 		]);
 		expect(tree[0]).toMatchObject({ kind: "folder", label: "dataset" });
+	});
+
+	it("identifies only the active patient, study, and series path", () => {
+		const tree = buildFileTree([
+			file({ index: 1, study_instance_uid: "study-a", series_instance_uid: "series-a" }),
+			file({ index: 2, study_instance_uid: "study-b", series_instance_uid: "series-b" }),
+		]);
+		const keys = activeStudyPathKeys(tree, 2);
+
+		expect(keys).toEqual(new Set([
+			tree[0].key,
+			tree[0].studies[1].key,
+			tree[0].studies[1].series[0].key,
+		]));
+		expect(activeStudyPathKeys(tree, null)).toEqual(new Set());
+	});
+
+	it("identifies every ancestor folder of the active directory file", () => {
+		const tree = buildDirectoryTree([
+			file({ index: 1, path: "/dataset/train/nested/one.dcm" }),
+			file({ index: 2, path: "/dataset/test/two.dcm" }),
+		]);
+		const keys = activeDirectoryPathKeys(tree, 1);
+
+		expect(Array.from(keys)).toEqual(expect.arrayContaining([
+			"directory:dataset",
+			"directory:dataset/train",
+			"directory:dataset/train/nested",
+		]));
+		expect(keys).not.toContain("directory:dataset/test");
 	});
 });

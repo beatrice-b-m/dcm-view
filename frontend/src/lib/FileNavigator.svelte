@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { FileSummary } from "../api";
 	import {
+		activeDirectoryPathKeys,
+		activeStudyPathKeys,
 		buildDirectoryTree,
 		buildFileTree,
 		fileAriaLabel,
@@ -72,6 +74,8 @@
 
 	const tree = $derived(buildFileTree(filteredFiles));
 	const directoryTree = $derived(buildDirectoryTree(filteredFiles));
+	const activeStudyPath = $derived(activeStudyPathKeys(tree, activeFileIndex));
+	const activeDirectoryPath = $derived(activeDirectoryPathKeys(directoryTree, activeFileIndex));
 </script>
 
 {#snippet nodeContent(kind: NavKind, label: string, detail: string)}
@@ -88,6 +92,7 @@
 			<button
 				type="button"
 				class="directory-row folder-row"
+				class:active-path={activeDirectoryPath.has(node.key)}
 				style:--depth={depth}
 				aria-expanded={!isCollapsed(node.key)}
 				onclick={() => toggleNode(node.key)}
@@ -105,6 +110,7 @@
 				type="button"
 				class="directory-row directory-file"
 				class:active={node.file.index === activeFileIndex}
+				aria-current={node.file.index === activeFileIndex ? "true" : undefined}
 				style:--depth={depth}
 				title={node.file.path}
 				onclick={() => onopenfile(node.file.index)}
@@ -163,6 +169,7 @@
 					<button
 						type="button"
 						class="tree-header depth-0"
+						class:active-path={activeStudyPath.has(patient.key)}
 						aria-label={nodeAriaLabel(patient.kind, patient.label, patientDetail, isCollapsed(patient.key))}
 						aria-expanded={!isCollapsed(patient.key)}
 						onclick={() => toggleNode(patient.key)}
@@ -177,6 +184,7 @@
 							<button
 								type="button"
 								class="tree-header depth-1"
+								class:active-path={activeStudyPath.has(study.key)}
 								aria-label={nodeAriaLabel(study.kind, study.label, studyDetail, isCollapsed(study.key))}
 								aria-expanded={!isCollapsed(study.key)}
 								onclick={() => toggleNode(study.key)}
@@ -191,6 +199,7 @@
 									<button
 										type="button"
 										class="tree-header depth-2"
+										class:active-path={activeStudyPath.has(series.key)}
 										aria-label={nodeAriaLabel(series.kind, series.label, seriesDetail, isCollapsed(series.key))}
 										aria-expanded={!isCollapsed(series.key)}
 										onclick={() => toggleNode(series.key)}
@@ -204,6 +213,7 @@
 												type="button"
 												class="file-row depth-3"
 												class:active={item.file.index === activeFileIndex}
+												aria-current={item.file.index === activeFileIndex ? "true" : undefined}
 												onclick={() => onopenfile(item.file.index)}
 												title={item.file.path}
 												aria-label={fileAriaLabel(item)}
@@ -353,7 +363,7 @@
 		margin-bottom: 0.55rem;
 		padding-bottom: 0.34rem;
 		border: 1px solid var(--border-subtle);
-		border-left: 3px solid var(--accent);
+		border-left: 3px solid var(--border-subtle);
 		border-radius: 0.52rem;
 		background: transparent;
 		overflow: hidden;
@@ -405,11 +415,14 @@
 		padding-bottom: 0.42rem;
 		background: transparent;
 	}
+	.study-tree .depth-0.active-path {
+		background: color-mix(in srgb, var(--accent) 6%, transparent);
+	}
 
 	.study-sibling {
 		margin: 0 0.34rem;
-		border: 1px solid rgba(143, 108, 255, 0.18);
-		border-left: 3px solid rgba(143, 108, 255, 0.68);
+		border: 1px solid var(--border-subtle);
+		border-left: 3px solid var(--border-subtle);
 		border-radius: 0.36rem;
 		background: transparent;
 		overflow: hidden;
@@ -418,8 +431,8 @@
 
 	.series-sibling {
 		margin: 0 0.32rem 0.3rem;
-		border: 1px solid rgba(69, 191, 154, 0.16);
-		border-left: 3px solid rgba(69, 191, 154, 0.58);
+		border: 1px solid var(--border-subtle);
+		border-left: 3px solid var(--border-subtle);
 		border-radius: 0.3rem;
 		background: transparent;
 		overflow: hidden;
@@ -427,9 +440,18 @@
 	.series-sibling + .series-sibling { margin-top: 0.3rem; }
 	.study-tree .depth-1,
 	.study-tree .depth-2 { border-left: 0; }
+	.study-tree .depth-1.active-path {
+		background: color-mix(in srgb, var(--accent) 9%, transparent);
+	}
+	.study-tree .depth-2.active-path {
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
+	}
+	.study-tree .tree-header.active-path .node-label {
+		color: var(--text-primary);
+	}
 
 	.file-row.active {
-		background: transparent;
+		background: var(--accent-soft);
 		color: var(--text-primary);
 		box-shadow: inset 3px 0 0 var(--accent);
 	}
@@ -507,6 +529,11 @@
 		cursor: pointer;
 	}
 	.directory-row:hover { background: rgba(255, 255, 255, 0.05); }
+	.directory-row.active-path {
+		background: color-mix(in srgb, var(--accent) 9%, transparent);
+		color: var(--text-primary);
+		box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 58%, transparent);
+	}
 	.directory-row.active { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); color: var(--text-primary); }
 	.folder-row {
 		grid-template-columns: 1rem minmax(0, 1fr) auto 0.65rem;
