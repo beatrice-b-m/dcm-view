@@ -354,7 +354,7 @@
 		padding-bottom: 0.34rem;
 		border: 1px solid var(--border-subtle);
 		border-radius: 0.52rem;
-		background: rgba(255, 255, 255, 0.018);
+		background: transparent;
 		overflow: hidden;
 	}
 
@@ -402,7 +402,7 @@
 		min-height: 2.75rem;
 		padding-top: 0.42rem;
 		padding-bottom: 0.42rem;
-		background: linear-gradient(90deg, rgba(67, 155, 255, 0.13), transparent 82%);
+		background: transparent;
 		border-left: 3px solid var(--accent);
 	}
 
@@ -411,7 +411,7 @@
 		border: 1px solid rgba(143, 108, 255, 0.18);
 		border-left: 3px solid rgba(143, 108, 255, 0.68);
 		border-radius: 0.36rem;
-		background: rgba(143, 108, 255, 0.045);
+		background: transparent;
 		overflow: hidden;
 	}
 	.study-sibling + .study-sibling { margin-top: 0.34rem; }
@@ -421,7 +421,7 @@
 		border: 1px solid rgba(69, 191, 154, 0.16);
 		border-left: 3px solid rgba(69, 191, 154, 0.58);
 		border-radius: 0.3rem;
-		background: rgba(69, 191, 154, 0.035);
+		background: transparent;
 		overflow: hidden;
 	}
 	.series-sibling + .series-sibling { margin-top: 0.3rem; }
@@ -429,7 +429,7 @@
 	.study-tree .depth-2 { border-left: 0; }
 
 	.file-row.active {
-		background: var(--accent-soft);
+		background: transparent;
 		color: var(--text-primary);
 		box-shadow: inset 3px 0 0 var(--accent);
 	}
