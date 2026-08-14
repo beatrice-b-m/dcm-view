@@ -516,7 +516,7 @@
 	}
 	.directory-file {
 		grid-template-columns: 1.75rem minmax(0, 1fr);
-		align-items: start;
+		align-items: center;
 		padding-top: 0.34rem;
 		padding-right: 0.4rem;
 		padding-bottom: 0.34rem;
