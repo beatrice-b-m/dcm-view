@@ -528,6 +528,8 @@
 		display: block;
 		width: 0.92rem;
 		height: 0.65rem;
+		/* Account for the tab extending above the icon's layout box. */
+		transform: translateY(0.1rem);
 		border-radius: 0.12rem;
 		background: #72879e;
 	}
