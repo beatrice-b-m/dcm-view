@@ -353,6 +353,7 @@
 		margin-bottom: 0.55rem;
 		padding-bottom: 0.34rem;
 		border: 1px solid var(--border-subtle);
+		border-left: 3px solid var(--accent);
 		border-radius: 0.52rem;
 		background: transparent;
 		overflow: hidden;
@@ -403,7 +404,6 @@
 		padding-top: 0.42rem;
 		padding-bottom: 0.42rem;
 		background: transparent;
-		border-left: 3px solid var(--accent);
 	}
 
 	.study-sibling {
