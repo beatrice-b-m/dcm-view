@@ -37,6 +37,7 @@ export type DirectoryFile = {
 	kind: "file";
 	key: string;
 	label: string;
+	detail: string;
 	file: FileSummary;
 };
 
@@ -59,6 +60,22 @@ function basename(path: string): string {
 
 function pathParts(path: string): string[] {
 	return path.replace(/\\/g, "/").split("/").filter(Boolean);
+}
+
+function sharedDirectoryPrefix(paths: readonly string[][]): string[] {
+	if (paths.length === 0) return [];
+	const first = paths[0];
+	let length = first.length;
+	for (const path of paths.slice(1)) {
+		length = Math.min(length, path.length);
+		for (let index = 0; index < length; index += 1) {
+			if (first[index] !== path[index]) {
+				length = index;
+				break;
+			}
+		}
+	}
+	return first.slice(0, length);
 }
 
 function formatPersonName(value: string): string {
@@ -333,13 +350,18 @@ export function buildFileTree(files: readonly FileSummary[]): NavPatient[] {
 export function buildDirectoryTree(files: readonly FileSummary[]): DirectoryNode[] {
 	const root: DirectoryFolder = { kind: "folder", key: "directory:root", label: "Files", children: [] };
 	const folders = new Map<string, DirectoryFolder>([[root.key, root]]);
-
-	for (const file of files) {
+	const records = files.map((file) => {
 		const parts = pathParts(file.path);
-		const fileName = parts.pop() || file.path;
+		return { file, directories: parts.slice(0, -1), fileName: parts[parts.length - 1] || file.path };
+	});
+	const common = sharedDirectoryPrefix(records.map((record) => record.directories));
+	// Keep the deepest common directory as recognizable context, while hiding machine-specific prefixes.
+	const trimCount = Math.max(0, common.length - 1);
+
+	for (const { file, directories, fileName } of records) {
 		let parent = root;
 		let folderPath = "";
-		for (const part of parts) {
+		for (const part of directories.slice(trimCount)) {
 			folderPath = folderPath ? `${folderPath}/${part}` : part;
 			const key = `directory:${folderPath}`;
 			let folder = folders.get(key);
@@ -354,6 +376,7 @@ export function buildDirectoryTree(files: readonly FileSummary[]): DirectoryNode
 			kind: "file",
 			key: `directory:file:${file.index}`,
 			label: fileName,
+			detail: fileDetail(file),
 			file,
 		});
 	}

@@ -49,6 +49,18 @@ describe("file tree shaping", () => {
 		expect(patientDetailWithCounts(tree[0])).toContain("3 images");
 	});
 
+	it("keeps sibling studies and sibling series distinct within one patient", () => {
+		const tree = buildFileTree([
+			file({ index: 1, study_instance_uid: "study-a", study_description: "Baseline", series_instance_uid: "a-ax", series_description: "Axial" }),
+			file({ index: 2, study_instance_uid: "study-a", study_description: "Baseline", series_instance_uid: "a-cor", series_description: "Coronal" }),
+			file({ index: 3, study_instance_uid: "study-b", study_description: "Follow-up", series_instance_uid: "b-ax", series_description: "Axial" }),
+		]);
+
+		expect(tree).toHaveLength(1);
+		expect(tree[0].studies.map((study) => study.label)).toEqual(["Baseline", "Follow-up"]);
+		expect(tree[0].studies[0].series.map((series) => series.label)).toEqual(["Axial", "Coronal"]);
+	});
+
 	it("supports scoped terms and combines terms with AND semantics", () => {
 		const image = file({});
 		expect(fileMatchesFilter(image, "patient:jane modality:ct")).toBe(true);
@@ -84,5 +96,13 @@ describe("file tree shaping", () => {
 		expect(tree[0]).toMatchObject({ kind: "folder", label: "dataset" });
 		if (tree[0].kind !== "folder") throw new Error("expected dataset folder");
 		expect(tree[0].children.map((node) => node.label)).toEqual(["test", "train"]);
+	});
+
+	it("trims machine-specific directory prefixes while retaining useful context", () => {
+		const tree = buildDirectoryTree([
+			file({ index: 1, path: "/srv/project/dataset/train/case.dcm" }),
+			file({ index: 2, path: "/srv/project/dataset/validation/case.dcm" }),
+		]);
+		expect(tree[0]).toMatchObject({ kind: "folder", label: "dataset" });
 	});
 });

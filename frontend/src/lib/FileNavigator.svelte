@@ -58,6 +58,12 @@
 		collapsedNodes = { ...collapsedNodes, [key]: !isCollapsed(key) };
 	}
 
+	function directoryFileCount(node: DirectoryNode): number {
+		return node.kind === "file"
+			? 1
+			: node.children.reduce((total, child) => total + directoryFileCount(child), 0);
+	}
+
 	const filterActive = $derived(filterQuery.trim().length > 0);
 	const filteredFiles = $derived.by(() => {
 		if (!filterActive) return files;
@@ -86,10 +92,10 @@
 				aria-expanded={!isCollapsed(node.key)}
 				onclick={() => toggleNode(node.key)}
 			>
-				<span class="folder-twisty">{isCollapsed(node.key) ? "›" : "⌄"}</span>
 				<span class="folder-icon" aria-hidden="true"></span>
 				<span class="directory-label">{node.label}</span>
-				<span class="directory-count">{node.children.length}</span>
+				<span class="directory-count">{directoryFileCount(node)}</span>
+				<span class="folder-twisty">{isCollapsed(node.key) ? "▶" : "▼"}</span>
 			</button>
 			{#if !isCollapsed(node.key)}
 				{@render directoryNodes(node.children, depth + 1)}
@@ -103,8 +109,11 @@
 				title={node.file.path}
 				onclick={() => onopenfile(node.file.index)}
 			>
-				<span></span><span class="file-icon" aria-hidden="true">DCM</span>
-				<span class="directory-label">{node.label}</span>
+				<span class="file-icon" aria-hidden="true">DCM</span>
+				<span class="directory-text">
+					<span class="directory-label">{node.label}</span>
+					<span class="directory-detail">{node.detail}</span>
+				</span>
 			</button>
 		{/if}
 	{/each}
@@ -128,8 +137,8 @@
 
 	{#if !collapsed}
 		<div class="view-switch" role="group" aria-label="Explorer organization">
-			<button class:active={viewMode === "study"} onclick={() => viewMode = "study"}>Study</button>
-			<button class:active={viewMode === "directory"} onclick={() => viewMode = "directory"}>Directory</button>
+			<button class:active={viewMode === "study"} aria-pressed={viewMode === "study"} onclick={() => viewMode = "study"}>Study</button>
+			<button class:active={viewMode === "directory"} aria-pressed={viewMode === "directory"} onclick={() => viewMode = "directory"}>Directory</button>
 		</div>
 		<div class="navigator-filter">
 			<input
@@ -164,6 +173,7 @@
 					{#if !isCollapsed(patient.key)}
 						{#each patient.studies as study}
 							{@const studyDetail = studyDetailWithCounts(study)}
+							<div class="study-sibling">
 							<button
 								type="button"
 								class="tree-header depth-1"
@@ -177,6 +187,7 @@
 							{#if !isCollapsed(study.key)}
 								{#each study.series as series}
 									{@const seriesDetail = seriesDetailWithCounts(series)}
+									<div class="series-sibling">
 									<button
 										type="button"
 										class="tree-header depth-2"
@@ -201,8 +212,10 @@
 											</button>
 										{/each}
 									{/if}
+									</div>
 								{/each}
 							{/if}
+							</div>
 						{/each}
 					{/if}
 				</section>
@@ -292,7 +305,9 @@
 	.collapse-button:focus-visible,
 	.filter-input:focus-visible,
 	.tree-header:focus-visible,
-	.file-row:focus-visible {
+	.file-row:focus-visible,
+	.view-switch button:focus-visible,
+	.directory-row:focus-visible {
 		outline: none;
 		box-shadow: inset var(--focus-ring);
 	}
@@ -336,6 +351,7 @@
 	.study-tree { padding: 0.5rem 0.55rem 0.8rem; }
 	.study-tree .tree-group {
 		margin-bottom: 0.55rem;
+		padding-bottom: 0.34rem;
 		border: 1px solid var(--border-subtle);
 		border-radius: 0.52rem;
 		background: rgba(255, 255, 255, 0.018);
@@ -383,14 +399,34 @@
 		background: rgba(255, 255, 255, 0.05);
 	}
 	.study-tree .depth-0 {
-		min-height: 2.9rem;
+		min-height: 2.75rem;
+		padding-top: 0.42rem;
+		padding-bottom: 0.42rem;
 		background: linear-gradient(90deg, rgba(67, 155, 255, 0.13), transparent 82%);
 		border-left: 3px solid var(--accent);
 	}
-	.study-tree .depth-1 { border-left: 3px solid rgba(143, 108, 255, 0.64); }
-	.study-tree .depth-2 { border-left: 3px solid rgba(69, 191, 154, 0.58); }
+
+	.study-sibling {
+		margin: 0 0.34rem;
+		border: 1px solid rgba(143, 108, 255, 0.18);
+		border-left: 3px solid rgba(143, 108, 255, 0.68);
+		border-radius: 0.36rem;
+		background: rgba(143, 108, 255, 0.045);
+		overflow: hidden;
+	}
+	.study-sibling + .study-sibling { margin-top: 0.34rem; }
+
+	.series-sibling {
+		margin: 0 0.32rem 0.3rem;
+		border: 1px solid rgba(69, 191, 154, 0.16);
+		border-left: 3px solid rgba(69, 191, 154, 0.58);
+		border-radius: 0.3rem;
+		background: rgba(69, 191, 154, 0.035);
+		overflow: hidden;
+	}
+	.series-sibling + .series-sibling { margin-top: 0.3rem; }
 	.study-tree .depth-1,
-	.study-tree .depth-2 { border-top: 1px solid rgba(255, 255, 255, 0.045); }
+	.study-tree .depth-2 { border-left: 0; }
 
 	.file-row.active {
 		background: var(--accent-soft);
@@ -399,9 +435,9 @@
 	}
 
 	.depth-0 { padding-left: 0.48rem; }
-	.depth-1 { padding-left: 0.9rem; }
-	.depth-2 { padding-left: 1.35rem; }
-	.depth-3 { padding-left: 2.82rem; padding-right: 0.65rem; }
+	.depth-1 { padding: 0.36rem 0.5rem; }
+	.depth-2 { padding: 0.32rem 0.42rem; }
+	.depth-3 { padding-left: 2.62rem; padding-right: 0.5rem; }
 
 	.twisty {
 		align-self: center;
@@ -454,32 +490,63 @@
 		font-size: 0.72rem;
 	}
 
-	.directory-tree { padding: 0.35rem 0.5rem 0.75rem; }
+	.directory-tree { padding: 0.45rem 0.55rem 0.8rem; }
 	.directory-row {
 		display: grid;
-		grid-template-columns: 0.9rem 1.6rem minmax(0, 1fr) auto;
 		align-items: center;
-		gap: 0.32rem;
+		gap: 0.35rem;
 		width: 100%;
 		min-height: 2rem;
-		padding: 0.2rem 0.42rem 0.2rem calc(0.42rem + var(--depth) * 0.75rem);
+		padding-left: calc(0.3rem + var(--depth) * 0.72rem);
 		border: 0;
-		border-radius: 0.32rem;
+		border-radius: 0.3rem;
 		background: transparent;
 		color: var(--text-secondary);
-		font: 0.76rem var(--font-ui);
+		font: 0.77rem var(--font-ui);
 		text-align: left;
 		cursor: pointer;
 	}
 	.directory-row:hover { background: rgba(255, 255, 255, 0.05); }
 	.directory-row.active { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); color: var(--text-primary); }
-	.folder-twisty { color: var(--text-muted); font-size: 1rem; text-align: center; }
-	.folder-icon {
-		width: 1.05rem; height: 0.72rem; border-radius: 0.13rem;
-		background: #caa85b; position: relative; opacity: 0.9;
+	.folder-row {
+		grid-template-columns: 1rem minmax(0, 1fr) auto 0.65rem;
+		padding-top: 0.25rem;
+		padding-right: 0.35rem;
+		padding-bottom: 0.25rem;
 	}
-	.folder-icon::before { content: ""; position: absolute; left: 0.08rem; top: -0.22rem; width: 0.48rem; height: 0.25rem; border-radius: 0.1rem 0.1rem 0 0; background: #d9ba70; }
-	.file-icon { color: #73b9ff; font: 700 0.49rem var(--font-ui); letter-spacing: 0.02em; }
+	.directory-file {
+		grid-template-columns: 1.75rem minmax(0, 1fr);
+		align-items: start;
+		padding-top: 0.34rem;
+		padding-right: 0.4rem;
+		padding-bottom: 0.34rem;
+		padding-left: calc(0.42rem + var(--depth) * 0.72rem);
+	}
+	.folder-twisty { color: var(--text-muted); font-size: 0.55rem; text-align: center; }
+	.folder-icon {
+		position: relative;
+		display: block;
+		width: 0.92rem;
+		height: 0.65rem;
+		border-radius: 0.12rem;
+		background: #72879e;
+	}
+	.folder-icon::before { content: ""; position: absolute; left: 0.08rem; top: -0.2rem; width: 0.42rem; height: 0.25rem; border-radius: 0.1rem 0.1rem 0 0; background: #72879e; }
+	.file-icon {
+		display: grid;
+		place-items: center;
+		width: 1.55rem;
+		height: 1.1rem;
+		border: 1px solid rgba(126, 179, 236, 0.28);
+		border-radius: 0.18rem;
+		background: rgba(64, 124, 186, 0.13);
+		color: #8cb9e9;
+		font: 800 0.46rem var(--font-ui);
+		letter-spacing: 0.03em;
+	}
 	.directory-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.directory-count { color: var(--text-muted); font-size: 0.64rem; }
+	.directory-text { display: grid; gap: 0.04rem; min-width: 0; line-height: 1.25; }
+	.directory-detail { color: var(--text-muted); font-size: 0.68rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.folder-row .directory-label { font-weight: 600; }
+	.directory-count { min-width: 1.25rem; padding: 0.08rem 0.28rem; border-radius: 99px; background: rgba(255,255,255,0.06); color: var(--text-muted); font-size: 0.62rem; text-align: center; }
 </style>
