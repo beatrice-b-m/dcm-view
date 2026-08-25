@@ -17,12 +17,12 @@ security issues privately to the maintainers before public disclosure.
 
 For common install, binary resolution, VS Code interception, startup, tunnel,
 and annotation CSV problems, see the main
-[troubleshooting guide](../docs/troubleshooting.md). For settings, binary
+[troubleshooting guide](https://github.com/beatrice-b-m/dcmview/blob/main/docs/troubleshooting.md). For settings, binary
 resolution order, and bridge environment variables, see the
-[configuration reference](../docs/configuration.md). For Python scripts and
+[configuration reference](https://github.com/beatrice-b-m/dcmview/blob/main/docs/configuration.md). For Python scripts and
 notebooks that may route through the VS Code bridge, see the
-[Python reference](../docs/python.md). The main
-[documentation index](../docs/index.md) links the user, configuration,
+[Python reference](https://github.com/beatrice-b-m/dcmview/blob/main/docs/python.md). The main
+[documentation index](https://github.com/beatrice-b-m/dcmview/blob/main/docs/index.md) links the user, configuration,
 troubleshooting, API/debugging, development, and release references.
 
 ## Supported Platforms
@@ -67,6 +67,6 @@ integration for a single shell session.
 - `dcmview.terminalInterception.enabled`: route integrated terminal launches
   into VS Code webviews.
 
-See the main [configuration reference](../docs/configuration.md) for binary
+See the main [configuration reference](https://github.com/beatrice-b-m/dcmview/blob/main/docs/configuration.md) for binary
 resolution order, environment variables, and how these settings map to
 `dcmview` CLI arguments.

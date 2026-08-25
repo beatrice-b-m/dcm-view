@@ -51,6 +51,27 @@ class VSCodePackagingTests(unittest.TestCase):
 
 			packaging.verify_single_bundled_binary(vsix, "win32-x64", "dcmview.exe")
 
+	def test_verifies_marketplace_readme_documentation_urls(self) -> None:
+		packaging = _load_packaging_module()
+		with tempfile.TemporaryDirectory(prefix="dcmview-vsix-readme-") as temp_dir:
+			vsix = Path(temp_dir) / "dcmview-0.2.8-win32-x64.vsix"
+			readme = "\n".join(sorted(packaging.MARKETPLACE_DOCUMENTATION_URLS))
+			with zipfile.ZipFile(vsix, "w") as package:
+				package.writestr("extension/readme.md", readme)
+
+			packaging.verify_marketplace_readme(vsix)
+
+	def test_rejects_repository_relative_marketplace_links(self) -> None:
+		packaging = _load_packaging_module()
+		with tempfile.TemporaryDirectory(prefix="dcmview-vsix-readme-") as temp_dir:
+			vsix = Path(temp_dir) / "dcmview-0.2.8-win32-x64.vsix"
+			readme = "\n".join(sorted(packaging.MARKETPLACE_DOCUMENTATION_URLS))
+			with zipfile.ZipFile(vsix, "w") as package:
+				package.writestr("extension/README.md", f"{readme}\n[broken](../docs/index.md)")
+
+			with self.assertRaisesRegex(RuntimeError, "repository-relative"):
+				packaging.verify_marketplace_readme(vsix)
+
 
 if __name__ == "__main__":
 	unittest.main()

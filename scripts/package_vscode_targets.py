@@ -12,6 +12,12 @@ import zipfile
 from dataclasses import dataclass
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+MARKETPLACE_DOCUMENTATION_URLS = {
+	"https://github.com/beatrice-b-m/dcmview/blob/main/docs/configuration.md",
+	"https://github.com/beatrice-b-m/dcmview/blob/main/docs/index.md",
+	"https://github.com/beatrice-b-m/dcmview/blob/main/docs/python.md",
+	"https://github.com/beatrice-b-m/dcmview/blob/main/docs/troubleshooting.md",
+}
 
 @dataclass(frozen=True)
 class TargetSpec:
@@ -116,6 +122,7 @@ def package_target(
 		check=True,
 	)
 	verify_single_bundled_binary(vsix, target, spec.binary_name)
+	verify_marketplace_readme(vsix)
 	return vsix
 
 
@@ -130,6 +137,23 @@ def verify_single_bundled_binary(vsix: pathlib.Path, target: str, binary_name: s
 		)
 	if bundled != [expected]:
 		raise RuntimeError(f"{vsix} should contain only {expected}; found {bundled}")
+
+
+def verify_marketplace_readme(vsix: pathlib.Path) -> None:
+	with zipfile.ZipFile(vsix) as package:
+		readme_name = next(
+			(name for name in package.namelist() if name.casefold() == "extension/readme.md"),
+			None,
+		)
+		if readme_name is None:
+			raise RuntimeError(f"{vsix} does not contain extension/README.md")
+		readme = package.read(readme_name).decode("utf-8")
+
+	missing = sorted(url for url in MARKETPLACE_DOCUMENTATION_URLS if url not in readme)
+	if missing:
+		raise RuntimeError(f"{vsix} README is missing Marketplace documentation URLs: {missing}")
+	if "../docs/" in readme:
+		raise RuntimeError(f"{vsix} README contains repository-relative documentation links")
 
 
 def main() -> int:
