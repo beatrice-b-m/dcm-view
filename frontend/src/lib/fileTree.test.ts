@@ -36,6 +36,42 @@ function file(overrides: Partial<FileSummary>): FileSummary {
 }
 
 describe("file tree shaping", () => {
+	it("produces identical hierarchy ordering for shuffled discovery results", () => {
+		const files = [
+			file({ index: 9, path: "/z/ten.dcm", patient_id: "P-2", patient_name: "Zulu^Patient", study_instance_uid: "study-old", study_date: "20200101", study_description: "Old", series_instance_uid: "series-10", series_number: "10", series_description: "Late", instance_number: "10" }),
+			file({ index: 3, path: "/z/two.dcm", patient_id: "P-2", patient_name: "Zulu^Patient", study_instance_uid: "study-old", study_date: "20200101", study_description: "Old", series_instance_uid: "series-10", series_number: "10", series_description: "Late", instance_number: "2" }),
+			file({ index: 4, path: "/z/new.dcm", patient_id: "P-2", patient_name: "Zulu^Patient", study_instance_uid: "study-new", study_date: "20250101", study_description: "New", series_instance_uid: "series-2", series_number: "2", series_description: "Early", instance_number: "1" }),
+			file({ index: 1, path: "/a/known.dcm", patient_id: "P-1", patient_name: "Alpha^Patient", study_instance_uid: "alpha-study", study_date: "20240101", series_instance_uid: "alpha-series", series_number: "1", instance_number: "1" }),
+			file({ index: 6, path: "/u/unknown.dcm", patient_id: "", patient_name: "", study_instance_uid: "", study_date: "", series_instance_uid: "", series_number: "", instance_number: "" }),
+		];
+		const orders = [
+			files,
+			[...files].reverse(),
+			[files[2], files[4], files[0], files[3], files[1]],
+		];
+		const studyProjection = (input: FileSummary[]) => buildFileTree(input).map((patient) => ({
+			key: patient.key,
+			studies: patient.studies.map((study) => ({
+				key: study.key,
+				series: study.series.map((series) => ({
+					key: series.key,
+					files: series.files.map((item) => item.file.index),
+				})),
+			})),
+		}));
+		const directoryProjection = (input: FileSummary[]) => JSON.stringify(buildDirectoryTree(input));
+
+		for (const order of orders.slice(1)) {
+			expect(studyProjection(order)).toEqual(studyProjection(orders[0]));
+			expect(directoryProjection(order)).toBe(directoryProjection(orders[0]));
+		}
+		expect(studyProjection(files)[0].key).toContain("P-1");
+		expect(studyProjection(files)[1].studies.map((study) => study.key)).toEqual([
+			"patient:P-2/study:study-new",
+			"patient:P-2/study:study-old",
+		]);
+	});
+
 	it("groups by patient, study, and series while sorting numeric instances", () => {
 		const tree = buildFileTree([
 			file({ index: 42, instance_number: "10", path: "/study/ten.dcm" }),

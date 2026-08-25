@@ -145,6 +145,32 @@ function numericValue(value: string): number | null {
 	return Number.isFinite(parsed) ? parsed : null;
 }
 
+function compareNatural(left: string, right: string): number {
+	return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function compareKnownText(left: string, right: string, descending = false): number {
+	const cleanLeft = clean(left);
+	const cleanRight = clean(right);
+	if (!cleanLeft && !cleanRight) return 0;
+	if (!cleanLeft) return 1;
+	if (!cleanRight) return -1;
+	return descending
+		? compareNatural(cleanRight, cleanLeft)
+		: compareNatural(cleanLeft, cleanRight);
+}
+
+function compareNumericText(left: string, right: string): number {
+	const leftNumber = numericValue(left);
+	const rightNumber = numericValue(right);
+	if (leftNumber !== null && rightNumber !== null && leftNumber !== rightNumber) {
+		return leftNumber - rightNumber;
+	}
+	if (leftNumber !== null && rightNumber === null) return -1;
+	if (leftNumber === null && rightNumber !== null) return 1;
+	return compareKnownText(left, right);
+}
+
 function plural(count: number, singular: string): string {
 	const pluralForms: Record<string, string> = {
 		image: "images",
@@ -374,18 +400,44 @@ export function buildFileTree(files: readonly FileSummary[]): NavPatient[] {
 
 	for (const series of seriesByKey.values()) {
 		series.files.sort((left, right) => {
-			const leftInstance = numericValue(left.file.instance_number);
-			const rightInstance = numericValue(right.file.instance_number);
-			if (leftInstance !== null && rightInstance !== null && leftInstance !== rightInstance) {
-				return leftInstance - rightInstance;
-			}
-			if (leftInstance !== null && rightInstance === null) return -1;
-			if (leftInstance === null && rightInstance !== null) return 1;
-			return left.file.index - right.file.index;
+			return compareNumericText(left.file.instance_number, right.file.instance_number)
+				|| compareNatural(left.file.path, right.file.path)
+				|| left.file.index - right.file.index;
 		});
 	}
 
-	return Array.from(patients.values());
+	for (const study of studies.values()) {
+		study.series.sort((left, right) => {
+			const leftFile = left.files[0]?.file;
+			const rightFile = right.files[0]?.file;
+			if (!leftFile || !rightFile) return compareNatural(left.key, right.key);
+			return compareNumericText(leftFile.series_number, rightFile.series_number)
+				|| compareKnownText(leftFile.series_description, rightFile.series_description)
+				|| compareKnownText(leftFile.series_instance_uid, rightFile.series_instance_uid)
+				|| compareNatural(left.key, right.key);
+		});
+	}
+
+	for (const patient of patients.values()) {
+		patient.studies.sort((left, right) => {
+			const leftFile = left.series[0]?.files[0]?.file;
+			const rightFile = right.series[0]?.files[0]?.file;
+			if (!leftFile || !rightFile) return compareNatural(left.key, right.key);
+			return compareKnownText(leftFile.study_date, rightFile.study_date, true)
+				|| compareKnownText(leftFile.study_description, rightFile.study_description)
+				|| compareKnownText(leftFile.study_instance_uid, rightFile.study_instance_uid)
+				|| compareNatural(left.key, right.key);
+		});
+	}
+
+	return Array.from(patients.values()).sort((left, right) => {
+		const leftFile = left.studies[0]?.series[0]?.files[0]?.file;
+		const rightFile = right.studies[0]?.series[0]?.files[0]?.file;
+		if (!leftFile || !rightFile) return compareNatural(left.key, right.key);
+		return compareKnownText(formatPersonName(leftFile.patient_name), formatPersonName(rightFile.patient_name))
+			|| compareKnownText(leftFile.patient_id, rightFile.patient_id)
+			|| compareNatural(left.key, right.key);
+	});
 }
 
 export function buildDirectoryTree(files: readonly FileSummary[]): DirectoryNode[] {
@@ -425,7 +477,13 @@ export function buildDirectoryTree(files: readonly FileSummary[]): DirectoryNode
 	const sortNodes = (nodes: DirectoryNode[]) => {
 		nodes.sort((left, right) => {
 			if (left.kind !== right.kind) return left.kind === "folder" ? -1 : 1;
-			return left.label.localeCompare(right.label, undefined, { numeric: true });
+			const labelOrder = compareNatural(left.label, right.label);
+			if (labelOrder !== 0) return labelOrder;
+			if (left.kind === "file" && right.kind === "file") {
+				return compareNatural(left.file.path, right.file.path)
+					|| left.file.index - right.file.index;
+			}
+			return compareNatural(left.key, right.key);
 		});
 		for (const node of nodes) if (node.kind === "folder") sortNodes(node.children);
 	};
