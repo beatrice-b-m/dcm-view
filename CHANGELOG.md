@@ -10,6 +10,24 @@ diagnostic viewer.
 
 ## Unreleased
 
+## 0.2.9 - 2026-08-25
+
+### Viewer Reliability
+
+- Matched annotation CSV paths through normalized absolute keys, including
+  relative paths, parent components, and symlink aliases, while moving CSV
+  ingestion behind server startup and keeping unmatched large datasets cheap.
+- Made Study and Directory explorer presentation deterministic without changing
+  progressive file indices or adding CLI sorting controls.
+- Replaced interval-driven cine playback with render-paced Loop and Sweep
+  scheduling, shared in-flight frame work, decoded-frame prefetching, and
+  bounded active-stack retention.
+- Kept Explorer and Tags available in narrow browser and VS Code webview layouts
+  through accessible overlay drawers with Escape/backdrop dismissal and focus
+  restoration.
+- Repaired Marketplace documentation links and added packaged-VSIX README
+  verification so repository-relative links cannot recur in release artifacts.
+
 ### CLI
 
 - Expanded Rust CLI help with clearer option descriptions, value names, and
