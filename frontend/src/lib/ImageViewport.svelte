@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import {
 		displayFrameCacheKey,
 		displayFrameWindowCacheKey,
@@ -31,6 +32,11 @@
 		createDisplayFrameCache,
 		type DisplayFrameCacheEntry,
 	} from "./frameCache";
+	import {
+		runRenderPacedCine,
+		type CineDirection,
+		type CineMode,
+	} from "./cinePlayback";
 	import {
 		buildDirectionalFrameOrder,
 		planDisplayPrefetchTargets,
@@ -94,6 +100,10 @@
 		orientation = DEFAULT_ORIENTATION,
 		onreset,
 		onmanualwindowlevel,
+		cinePlaying = $bindable(),
+		cineFps,
+		cineMode,
+		cineDirection = $bindable(),
 	}: {
 		activeFile: FileSummary;
 		currentFrame: number;
@@ -106,6 +116,10 @@
 		orientation?: ImageOrientation;
 		onreset?: () => void;
 		onmanualwindowlevel?: (center: number, width: number) => void;
+		cinePlaying: boolean;
+		cineFps: number;
+		cineMode: CineMode;
+		cineDirection: CineDirection;
 	} = $props();
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
@@ -153,8 +167,9 @@
 
 	let rawRequestCtrl: AbortController | null = null;
 	let rawPrefetchCtrl: AbortController | null = null;
-	let displayRequestCtrl: AbortController | null = null;
 	let displayPrefetchCtrl: AbortController | null = null;
+	let displayScopeCtrl: AbortController | null = null;
+	let displayFetchScopeKey = "";
 	let displayPrefetchSeedFrame: number | null = null;
 	let displayPrefetchScopeKey = "";
 	const rawFrameCache = new ByteBudgetLruCache<string, RawFrame>({
@@ -166,12 +181,18 @@
 		string,
 		{ entry: DisplayFrameCacheEntry; promise: Promise<ImageBitmap> }
 	>();
+	const displayFetchPromises = new Map<string, Promise<DisplayFrameCacheEntry>>();
+	let lastRenderedDisplayFrame: { fileIndex: number; frameIndex: number } | null = null;
+	const displayRenderWaiters = new Set<{
+		fileIndex: number;
+		frameIndex: number;
+		resolve: (rendered: boolean) => void;
+	}>();
 	let fileScopeKey = "";
 	let lastHandledResetCount = 0;
 	let requestGeneration = 0;
 	let lastFrameForDirection = 0;
 	let frameDirection: 1 | -1 = 1;
-	let lastFrameChangeTime = 0;
 	let wlRenderGeneration = 0;
 
 	let wlWorker: Worker | null = null;
@@ -193,7 +214,6 @@
 	const WORKER_MIN_PIXEL_THRESHOLD = 300_000;
 	const PREFETCH_CONCURRENCY = 3;
 	const CINE_LOOKAHEAD_FRAMES = 16;
-	const CINE_PLAYING_THRESHOLD_MS = 250;
 	const PREFETCH_RESEED_DISTANCE = 6;
 	let prefetchConcurrency = $state(PREFETCH_CONCURRENCY);
 	const FRAME_SCROLL_SPEED_FACTOR = 0.7;
@@ -496,8 +516,12 @@
 	}
 
 	function clearDisplayCache(): void {
+		for (const waiter of displayRenderWaiters) waiter.resolve(false);
+		displayRenderWaiters.clear();
 		displayFrameCache.clear();
 		displayDecodePromises.clear();
+		displayFetchPromises.clear();
+		lastRenderedDisplayFrame = null;
 	}
 
 	function getCachedDisplayFrame(key: string): DisplayFrameCacheEntry | undefined {
@@ -525,6 +549,93 @@
 
 	function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOptions): string {
 		return `${fileIndex}:${displayFrameWindowCacheKey(options)}`;
+	}
+
+	function ensureDisplayFetchScope(fileIndex: number, options: DisplayFrameWindowOptions): AbortSignal {
+		const scopeKey = displayPrefetchScope(fileIndex, options);
+		if (displayScopeCtrl && displayFetchScopeKey === scopeKey) {
+			return displayScopeCtrl.signal;
+		}
+		displayScopeCtrl?.abort();
+		for (const waiter of displayRenderWaiters) waiter.resolve(false);
+		displayRenderWaiters.clear();
+		displayScopeCtrl = new AbortController();
+		displayFetchScopeKey = scopeKey;
+		displayFetchPromises.clear();
+		lastRenderedDisplayFrame = null;
+		return displayScopeCtrl.signal;
+	}
+
+	async function ensureDisplayFrameEntry(
+		fileIndex: number,
+		frameIndex: number,
+		windowOptions: DisplayFrameWindowOptions,
+	): Promise<DisplayFrameCacheEntry> {
+		const key = buildDisplayKey(fileIndex, frameIndex, windowOptions);
+		const cached = getCachedDisplayFrame(key);
+		if (cached) return cached;
+		const existing = displayFetchPromises.get(key);
+		if (existing) return existing;
+
+		const signal = ensureDisplayFetchScope(fileIndex, windowOptions);
+		const request = fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal)
+			.then(async (blob) => {
+				const entry = cacheDisplayFrame(key, blob);
+				if (!entry) throw new Error("Display frame exceeded cache budget");
+				if (typeof createImageBitmap === "function") {
+					await startDisplayDecode(key, entry);
+				}
+				return getCachedDisplayFrame(key) ?? entry;
+			})
+			.finally(() => {
+				if (displayFetchPromises.get(key) === request) {
+					displayFetchPromises.delete(key);
+				}
+			});
+		displayFetchPromises.set(key, request);
+		return request;
+	}
+
+	function markDisplayFrameRendered(fileIndex: number, frameIndex: number): void {
+		lastRenderedDisplayFrame = { fileIndex, frameIndex };
+		for (const waiter of [...displayRenderWaiters]) {
+			if (waiter.fileIndex !== fileIndex || waiter.frameIndex !== frameIndex) continue;
+			displayRenderWaiters.delete(waiter);
+			waiter.resolve(true);
+		}
+	}
+
+	function waitForDisplayFrameRendered(
+		fileIndex: number,
+		frameIndex: number,
+		signal: AbortSignal,
+	): Promise<boolean> {
+		if (
+			lastRenderedDisplayFrame?.fileIndex === fileIndex
+			&& lastRenderedDisplayFrame.frameIndex === frameIndex
+		) return Promise.resolve(true);
+		return new Promise((resolve) => {
+			const waiter = { fileIndex, frameIndex, resolve };
+			displayRenderWaiters.add(waiter);
+			signal.addEventListener("abort", () => {
+				displayRenderWaiters.delete(waiter);
+				resolve(false);
+			}, { once: true });
+		});
+	}
+
+	function waitForCineDeadline(delayMs: number, signal: AbortSignal): Promise<boolean> {
+		return new Promise((resolve) => {
+			if (signal.aborted) {
+				resolve(false);
+				return;
+			}
+			const timer = window.setTimeout(() => resolve(true), Math.max(0, delayMs));
+			signal.addEventListener("abort", () => {
+				window.clearTimeout(timer);
+				resolve(false);
+			}, { once: true });
+		});
 	}
 
 	function renderRawFrameOnMainThread(
@@ -626,10 +737,6 @@
 		}
 	}
 
-	function isCineLikelyPlaying(): boolean {
-		return Date.now() - lastFrameChangeTime < CINE_PLAYING_THRESHOLD_MS;
-	}
-
 	function scheduleIdleOrImmediate(fn: () => void, timeout = 200): void {
 		if (typeof requestIdleCallback === "function") {
 			requestIdleCallback(fn, { timeout });
@@ -705,16 +812,17 @@
 		windowOptions: DisplayFrameWindowOptions,
 		signal: AbortSignal,
 		currentBlobSize: number,
-		forwardOnly = false,
+		playbackMode: CineMode | null = null,
 	): Promise<void> {
+		const decodedBytes = activeFile.rows * activeFile.columns * 4;
 		const targets = planDisplayPrefetchTargets({
 			startFrame,
 			totalFrames,
 			direction,
-			currentBlobBytes: currentBlobSize,
+			currentFrameBytes: currentBlobSize + decodedBytes,
 			fullStackBudgetBytes: DISPLAY_FULL_PREFETCH_BUDGET_BYTES,
 			nearDistance: DISPLAY_NEAR_PREFETCH_DISTANCE,
-			forwardOnly,
+			cineMode: playbackMode,
 			lookaheadFrames: CINE_LOOKAHEAD_FRAMES,
 		});
 		for (let i = 0; i < targets.length && !signal.aborted; i += prefetchConcurrency) {
@@ -724,8 +832,7 @@
 					const key = buildDisplayKey(fileIndex, frameIndex, windowOptions);
 					if (signal.aborted || displayFrameCache.has(key)) return;
 					try {
-						const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal);
-						cacheDisplayFrame(key, blob);
+						await ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions);
 					} catch {
 						// Ignore network/decode failures during prefetch.
 					}
@@ -744,15 +851,22 @@ function startDisplayPrefetch(
 ): void {
 	const scopeKey = displayPrefetchScope(fileIndex, windowOptions);
 
-	if (isCineLikelyPlaying()) {
-		// During active playback: always reseed forward unconditionally, no suppression.
+	if (cinePlaying) {
+		// Playback follows its explicit loop/sweep order and reuses shared in-flight work.
 		displayPrefetchCtrl?.abort();
 		const ctrl = new AbortController();
 		displayPrefetchCtrl = ctrl;
 		displayPrefetchScopeKey = scopeKey;
 		displayPrefetchSeedFrame = frameIndex;
 		void runDisplayPrefetch(
-			fileIndex, totalFrames, frameIndex, direction, windowOptions, ctrl.signal, currentBlobSize, true,
+			fileIndex,
+			totalFrames,
+			frameIndex,
+			direction,
+			windowOptions,
+			ctrl.signal,
+			currentBlobSize,
+			cineMode,
 		).finally(() => {
 			if (displayPrefetchCtrl === ctrl) {
 				displayPrefetchCtrl = null;
@@ -865,38 +979,14 @@ function startDisplayPrefetch(
 	): Promise<void> {
 		const windowOptions = currentDisplayWindowOptions();
 		const cacheKey = buildDisplayKey(fileIndex, frameIndex, windowOptions);
-		const cached = getCachedDisplayFrame(cacheKey);
-		if (cached) {
-			loading = false;
-			loadError = null;
-			await drawDisplayEntry(cacheKey, cached, generation);
-			startDisplayPrefetch(
-				fileIndex,
-				activeFile.frame_count,
-				frameIndex,
-				direction,
-				windowOptions,
-				cached.blob.size,
-			);
-			return;
-		}
-
-		displayRequestCtrl?.abort();
-		displayRequestCtrl = new AbortController();
-		const ctrl = displayRequestCtrl;
-
 		try {
-			const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, ctrl.signal);
-			if (ctrl.signal.aborted || generation !== requestGeneration || pipelineMode !== "cine") return;
-			const entry = cacheDisplayFrame(cacheKey, blob);
-			if (!entry) {
-				loading = false;
-				loadError = "Display frame exceeded cache budget";
-				return;
-			}
+			const entry = await ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions);
+			if (generation !== requestGeneration || pipelineMode !== "cine") return;
 			loading = false;
 			loadError = null;
 			await drawDisplayEntry(cacheKey, entry, generation);
+			if (generation !== requestGeneration || pipelineMode !== "cine") return;
+			markDisplayFrameRendered(fileIndex, frameIndex);
 
 			startDisplayPrefetch(
 				fileIndex,
@@ -904,15 +994,14 @@ function startDisplayPrefetch(
 				frameIndex,
 				direction,
 				windowOptions,
-				blob.size,
+				entry.blob.size,
 			);
 		} catch (error) {
 			if ((error as Error).name === "AbortError") return;
 			if (generation !== requestGeneration || pipelineMode !== "cine") return;
 			loading = false;
 			loadError = (error as Error).message || "Failed to load frame";
-		} finally {
-			if (displayRequestCtrl === ctrl) displayRequestCtrl = null;
+			cinePlaying = false;
 		}
 	}
 
@@ -970,10 +1059,13 @@ function startDisplayPrefetch(
 
 	$effect(() => {
 		const current = currentFrame;
-		if (current > lastFrameForDirection) frameDirection = 1;
-		if (current < lastFrameForDirection) frameDirection = -1;
+		if (cinePlaying) {
+			frameDirection = cineDirection;
+		} else {
+			if (current > lastFrameForDirection) frameDirection = 1;
+			if (current < lastFrameForDirection) frameDirection = -1;
+		}
 		lastFrameForDirection = current;
-		lastFrameChangeTime = Date.now();
 	});
 
 	$effect(() => {
@@ -1040,7 +1132,9 @@ function startDisplayPrefetch(
 		invalidateWindowLevelRenders();
 		rawRequestCtrl?.abort();
 		rawPrefetchCtrl?.abort();
-		displayRequestCtrl?.abort();
+		displayScopeCtrl?.abort();
+		displayScopeCtrl = null;
+		displayFetchScopeKey = "";
 		displayPrefetchCtrl?.abort();
 		displayPrefetchCtrl = null;
 		displayPrefetchScopeKey = "";
@@ -1080,13 +1174,59 @@ function startDisplayPrefetch(
 			liveWindowCenter = null;
 			liveWindowWidth = null;
 		} else {
-			displayRequestCtrl?.abort();
-			displayRequestCtrl = null;
+			displayScopeCtrl?.abort();
+			displayScopeCtrl = null;
+			displayFetchScopeKey = "";
 			displayPrefetchCtrl?.abort();
 			displayPrefetchCtrl = null;
 			displayPrefetchScopeKey = "";
 			displayPrefetchSeedFrame = null;
 		}
+	});
+
+	$effect(() => {
+		const file = activeFile;
+		const playing = cinePlaying;
+		const fps = cineFps;
+		const playbackMode = cineMode;
+		const mode = pipelineMode;
+		const windowOptions = currentDisplayWindowOptions();
+		if (!playing || mode !== "cine" || !file.has_pixels || file.frame_count <= 1) return;
+
+		const ctrl = new AbortController();
+		const fileIndex = file.index;
+		const totalFrames = file.frame_count;
+		let scheduledFrame = untrack(() => currentFrame);
+		let direction = untrack(() => cineDirection);
+		ensureDisplayFetchScope(fileIndex, windowOptions);
+
+		void (async () => {
+			if (!await waitForDisplayFrameRendered(fileIndex, scheduledFrame, ctrl.signal)) return;
+			await runRenderPacedCine({
+				initialFrame: scheduledFrame,
+				totalFrames,
+				mode: playbackMode,
+				direction,
+				fps,
+				signal: ctrl.signal,
+				now: () => performance.now(),
+				waitForDelay: waitForCineDeadline,
+				prepareFrame: (frameIndex) => ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions),
+				presentFrame: async (step, signal) => {
+					direction = step.direction;
+					scheduledFrame = step.frame;
+					cineDirection = direction;
+					currentFrame = scheduledFrame;
+					return waitForDisplayFrameRendered(fileIndex, scheduledFrame, signal);
+				},
+			});
+		})().catch((error) => {
+			if (ctrl.signal.aborted || (error as Error).name === "AbortError") return;
+			loadError = (error as Error).message || "Failed to prepare cine frame";
+			cinePlaying = false;
+		});
+
+		return () => ctrl.abort();
 	});
 
 	$effect(() => {
@@ -1147,7 +1287,7 @@ function startDisplayPrefetch(
 		return () => {
 			rawRequestCtrl?.abort();
 			rawPrefetchCtrl?.abort();
-			displayRequestCtrl?.abort();
+			displayScopeCtrl?.abort();
 			displayPrefetchCtrl?.abort();
 			displayPrefetchCtrl = null;
 			displayPrefetchScopeKey = "";
@@ -1397,6 +1537,7 @@ function startDisplayPrefetch(
 		if (dragState.mode === "scroll_drag" && activeFile.frame_count > 1) {
 			const dy = event.clientY - dragState.startY;
 			const frameDelta = Math.round(dy / DRAG_PIXELS_PER_FRAME);
+			cinePlaying = false;
 			currentFrame = Math.max(0, Math.min(activeFile.frame_count - 1, dragState.baseFrame + frameDelta));
 			return;
 		}

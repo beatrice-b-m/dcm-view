@@ -18,7 +18,7 @@ describe("display prefetch policy", () => {
 				startFrame: 3,
 				totalFrames: 8,
 				direction: 1,
-				currentBlobBytes: 10,
+				currentFrameBytes: 10,
 				fullStackBudgetBytes: 80,
 				nearDistance: 2,
 			}),
@@ -29,25 +29,38 @@ describe("display prefetch policy", () => {
 				startFrame: 50,
 				totalFrames: 10_000,
 				direction: 1,
-				currentBlobBytes: 1_000_000,
+				currentFrameBytes: 1_000_000,
 				fullStackBudgetBytes: 80_000_000,
 				nearDistance: 4,
 			}),
 		).toEqual([51, 49, 52, 48, 53, 47, 54, 46]);
 	});
 
-	it("uses bounded forward-only lookahead during cine playback", () => {
+	it("retains an affordable cine stack and bounds large-stack lookahead", () => {
 		expect(
 			planDisplayPrefetchTargets({
 				startFrame: 7,
 				totalFrames: 10,
 				direction: 1,
-				currentBlobBytes: 1,
+				currentFrameBytes: 1,
 				fullStackBudgetBytes: 100,
 				nearDistance: 4,
-				forwardOnly: true,
+				cineMode: "loop",
 				lookaheadFrames: 16,
 			}),
-		).toEqual([8, 9]);
+		).toHaveLength(9);
+
+		expect(
+			planDisplayPrefetchTargets({
+				startFrame: 7,
+				totalFrames: 1_000,
+				direction: 1,
+				currentFrameBytes: 1_000_000,
+				fullStackBudgetBytes: 100_000_000,
+				nearDistance: 4,
+				cineMode: "loop",
+				lookaheadFrames: 4,
+			}),
+		).toEqual([8, 9, 10, 11]);
 	});
 });

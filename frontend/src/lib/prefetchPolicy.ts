@@ -1,13 +1,15 @@
+import { buildCineLookahead, type CineMode } from "./cinePlayback";
+
 export type FrameDirection = 1 | -1;
 
 export type DisplayPrefetchPlan = {
 	startFrame: number;
 	totalFrames: number;
 	direction: FrameDirection;
-	currentBlobBytes: number;
+	currentFrameBytes: number;
 	fullStackBudgetBytes: number;
 	nearDistance: number;
-	forwardOnly?: boolean;
+	cineMode?: CineMode | null;
 	lookaheadFrames?: number;
 };
 
@@ -41,31 +43,39 @@ export function planDisplayPrefetchTargets({
 	startFrame,
 	totalFrames,
 	direction,
-	currentBlobBytes,
+	currentFrameBytes,
 	fullStackBudgetBytes,
 	nearDistance,
-	forwardOnly = false,
+	cineMode = null,
 	lookaheadFrames = 0,
 }: DisplayPrefetchPlan): number[] {
 	if (totalFrames <= 1) return [];
-	if (forwardOnly) {
-		const targets: number[] = [];
-		for (let delta = 1; delta <= lookaheadFrames; delta += 1) {
-			const frame = startFrame + delta * direction;
-			if (frame >= 0 && frame < totalFrames) targets.push(frame);
-		}
-		return targets;
-	}
-
 	const fullStack = shouldPrefetchWholeDisplayStack(
 		totalFrames,
-		currentBlobBytes,
+		currentFrameBytes,
 		fullStackBudgetBytes,
 	);
+	if (fullStack) {
+		return buildDirectionalFrameOrder(
+			startFrame,
+			totalFrames,
+			totalFrames - 1,
+			direction,
+		);
+	}
+	if (cineMode !== null) {
+		return buildCineLookahead(
+			startFrame,
+			totalFrames,
+			cineMode,
+			direction,
+			lookaheadFrames,
+		);
+	}
 	return buildDirectionalFrameOrder(
 		startFrame,
 		totalFrames,
-		fullStack ? totalFrames - 1 : nearDistance,
+		nearDistance,
 		direction,
 	);
 }

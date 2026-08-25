@@ -1,26 +1,30 @@
 <script lang="ts">
 	import type { FileSummary } from "../api";
+	import type { CineDirection, CineMode } from "./cinePlayback";
 
 	let {
 		activeFile,
 		currentFrame = $bindable(),
+		cinePlaying = $bindable(),
+		cineFps = $bindable(),
+		cineMode = $bindable(),
+		cineDirection = $bindable(),
 	}: {
 		activeFile: FileSummary;
 		currentFrame: number;
+		cinePlaying: boolean;
+		cineFps: number;
+		cineMode: CineMode;
+		cineDirection: CineDirection;
 	} = $props();
 
-	let isPlaying = $state(false);
-	let playTimer: ReturnType<typeof setInterval> | null = null;
-
 	const FPS_OPTIONS = [1, 5, 10, 15, 24];
-	let fps = $state(10);
-	let sweepMode = $state(false);
-	let playDirection: 1 | -1 = 1;
 
 	function previous() {
 		if (!activeFile || activeFile.frame_count <= 1) {
 			return;
 		}
+		cinePlaying = false;
 		currentFrame = Math.max(0, currentFrame - 1);
 	}
 
@@ -28,15 +32,16 @@
 		if (!activeFile || activeFile.frame_count <= 1) {
 			return;
 		}
+		cinePlaying = false;
 		currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
 	}
 
 	function togglePlay() {
 		if (!activeFile || activeFile.frame_count <= 1) return;
-		if (!isPlaying) {
-			playDirection = 1;
+		if (!cinePlaying) {
+			cineDirection = 1;
 		}
-		isPlaying = !isPlaying;
+		cinePlaying = !cinePlaying;
 	}
 
 	$effect(() => {
@@ -44,41 +49,8 @@
 			currentFrame = 0;
 		}
 		if (!activeFile || activeFile.frame_count <= 1) {
-			isPlaying = false;
+			cinePlaying = false;
 		}
-	});
-
-	$effect(() => {
-		if (playTimer) {
-			clearInterval(playTimer);
-			playTimer = null;
-		}
-
-		if (!isPlaying || !activeFile || activeFile.frame_count <= 1) {
-			return;
-		}
-
-		const intervalMs = 1000 / fps;
-		playTimer = setInterval(() => {
-			if (!activeFile) return;
-			if (sweepMode) {
-				const next = currentFrame + playDirection;
-				if (next >= activeFile.frame_count || next < 0) {
-					playDirection = playDirection === 1 ? -1 : 1;
-				} else {
-					currentFrame = next;
-				}
-			} else {
-				currentFrame = (currentFrame + 1) % activeFile.frame_count;
-			}
-		}, intervalMs);
-
-		return () => {
-			if (playTimer) {
-				clearInterval(playTimer);
-				playTimer = null;
-			}
-		};
 	});
 
 
@@ -118,15 +90,15 @@
 		<span>frame {currentFrame + 1} / {activeFile.frame_count}</span>
 		<button type="button" onclick={next}>▶</button>
 		<button type="button" class="play" onclick={togglePlay}>
-			{isPlaying ? "⏸" : "▶"}
+			{cinePlaying ? "⏸" : "▶"}
 		</button>
-		<select class="fps-select" bind:value={fps}>
+		<select class="fps-select" bind:value={cineFps}>
 			{#each FPS_OPTIONS as f}
 				<option value={f}>{f} fps</option>
 			{/each}
 		</select>
-		<button type="button" class="mode-toggle" onclick={() => sweepMode = !sweepMode}>
-			{sweepMode ? 'Sweep' : 'Loop'}
+		<button type="button" class="mode-toggle" onclick={() => cineMode = cineMode === "loop" ? "sweep" : "loop"}>
+			{cineMode === "sweep" ? 'Sweep' : 'Loop'}
 		</button>
 	</div>
 {/if}

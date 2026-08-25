@@ -8,6 +8,7 @@
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
+	import type { CineDirection, CineMode } from "./lib/cinePlayback";
 	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
 	import { DEFAULT_ORIENTATION, WL_PRESETS, type ActiveTool, type ImageOrientation } from "./lib/viewerTools";
 
@@ -40,6 +41,11 @@
 	let openTabs = $state<OpenTabState[]>([]);
 	let activeFileIndex = $state<number | null>(null);
 	let currentFrame = $state(0);
+	let cinePlaying = $state(false);
+	let cineFps = $state(10);
+	let cineMode = $state<CineMode>("loop");
+	let cineDirection = $state<CineDirection>(1);
+	let lastCineFileIndex = $state<number | null>(null);
 	let windowCenter = $state<number | null>(null);
 	let windowWidth = $state<number | null>(null);
 	let activeTool = $state<ActiveTool>('pan');
@@ -309,6 +315,14 @@
 	});
 
 	$effect(() => {
+		const fileIndex = activeFileIndex;
+		if (fileIndex === lastCineFileIndex) return;
+		lastCineFileIndex = fileIndex;
+		cinePlaying = false;
+		cineDirection = 1;
+	});
+
+	$effect(() => {
 		const handleKey = (event: KeyboardEvent) => {
 			const target = event.target as HTMLElement | null;
 			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
@@ -410,12 +424,20 @@
 						resetCount={resetCount}
 						selectedPresetId={selectedPresetId}
 						orientation={activeOrientation}
+						bind:cinePlaying
+						{cineFps}
+						{cineMode}
+						bind:cineDirection
 						onreset={resetViewport}
 						onmanualwindowlevel={recordManualWindowLevel}
 					/>
 					<FrameSlider
 						{activeFile}
 						bind:currentFrame
+						bind:cinePlaying
+						bind:cineFps
+						bind:cineMode
+						bind:cineDirection
 					/>
 				{/if}
 			</section>
