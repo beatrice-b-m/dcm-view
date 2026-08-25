@@ -72,6 +72,70 @@ async fn returns_not_found_for_out_of_range_file_index() {
     assert_eq!(body["error"], "file index out of range");
 }
 
+#[tokio::test]
+async fn health_and_annotation_edits_remain_available_while_csv_is_loading() {
+    let dir = tempdir().expect("temp dir");
+    let mut entry = support::file_entry(
+        dir.path().join("editable-while-loading.dcm"),
+        "1.2.840.10008.1.2.4.50",
+        1,
+    );
+    entry.rows = 64;
+    entry.columns = 64;
+    let store = AnnotationStore::loading();
+    let state = support::app_state_with_annotations(vec![entry], store.clone());
+    let test_server = TestServer::new(server::router(state));
+
+    test_server.get("/api/health").await.assert_status_ok();
+    test_server
+        .put("/api/file/0/annotations")
+        .json(&EmbedRoiAnnotations {
+            num_roi: 1,
+            roi_coords: vec![[1, 2, 3, 4]],
+            roi_frames: vec![vec![0]],
+        })
+        .await
+        .assert_status_ok();
+
+    store
+        .commit_csv_if_unedited(HashMap::from([(
+            0,
+            EmbedRoiAnnotations {
+                num_roi: 1,
+                roi_coords: vec![[10, 20, 30, 40]],
+                roi_frames: vec![vec![0]],
+            },
+        )]))
+        .expect("complete CSV loading");
+
+    let response = test_server.get("/api/file/0/annotations").await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["roi_coords"][0], serde_json::json!([1, 2, 3, 4]));
+}
+
+#[tokio::test]
+async fn annotation_load_failure_returns_json_without_affecting_health() {
+    let dir = tempdir().expect("temp dir");
+    let entry = support::file_entry(
+        dir.path().join("failed-annotations.dcm"),
+        "1.2.840.10008.1.2.4.50",
+        1,
+    );
+    let store = AnnotationStore::loading();
+    let state = support::app_state_with_annotations(vec![entry], store.clone());
+    let test_server = TestServer::new(server::router(state));
+    store
+        .fail_loading("annotations CSV row 2: invalid ROI_coords")
+        .expect("fail loading");
+
+    let response = test_server.get("/api/file/0/annotations").await;
+    response.assert_status_internal_server_error();
+    let body: Value = response.json();
+    assert_eq!(body["error"], "annotations CSV row 2: invalid ROI_coords");
+    test_server.get("/api/health").await.assert_status_ok();
+}
+
 /// Exercises the full pipeline: CSV parsing → path matching → HTTP response.
 /// The earlier tests manually insert annotations into AppState, bypassing
 /// `load_annotations_for_files`. This test confirms the two halves compose

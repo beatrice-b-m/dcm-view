@@ -77,12 +77,22 @@ anon_dicom_path,num_ROI,ROI_coords,ROI_frames
 /path/to/ffdm_case.dcm,1,"[[80,150,190,260]]","[]"
 ```
 
-Matching uses normalized path equality against loaded DICOM paths. If a CSV row
-does not match any loaded DICOM path, that row is ignored.
+Matching uses normalized absolute path equality against loaded DICOM paths.
+Relative paths are resolved from the directory where `dcmview` was started;
+`.` and `..` components are normalized. Loaded files also receive a
+best-effort canonical alias so a relative or symlinked CLI path can match the
+corresponding absolute CSV path. If a CSV row does not match any loaded DICOM
+path, that row is ignored without parsing its ROI payload.
+
+Annotation CSV ingestion runs after DICOM discovery on a blocking worker and
+does not delay server startup or image rendering. Annotation reads and export
+wait for the single streaming CSV pass to finish. Viewer edits remain available
+while the CSV is loading and are never overwritten by the later import.
 
 ## Validation Errors
 
-`dcmview` validates annotation CSVs at startup. Common failures include:
+`dcmview` validates the CSV header at startup and validates matching rows during
+background ingestion. Common failures include:
 
 - Missing `anon_dicom_path` or `ROI_coords`.
 - Invalid JSON in `ROI_coords` or `ROI_frames`.
@@ -90,6 +100,10 @@ does not match any loaded DICOM path, that row is ignored.
 - A coordinate box outside image bounds.
 - A frame index outside the file's frame range.
 - A different number of `ROI_coords` and `ROI_frames` entries.
+
+If a matching row is invalid, no CSV annotations are committed. Image viewing
+continues, while annotation reads and export return the validation error. Bad
+ROI payloads on unmatched dataset-level rows are intentionally ignored.
 
 For symptom-oriented fixes, see the
 [troubleshooting guide](troubleshooting.md#annotation-csv-fails-to-load).

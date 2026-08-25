@@ -60,11 +60,11 @@ modules, not the reverse:
 1. `main.rs` owns the Clap shape and process exit only.
 2. `application.rs` owns dispatch order and tracing initialization. It tries the
    hidden bridge mode, then workspace bridge routing, then local startup.
-3. `startup/mod.rs` validates local options and annotations, constructs
+3. `startup/mod.rs` validates local options and the annotation CSV header, constructs
    `FileRegistry`, `AnnotationStore`, `AppState`, and `ServerConfig`, binds the
    listener, starts discovery, serves, and joins discovery before returning.
-4. `startup/discovery.rs` translates loader events into registry and annotation
-   updates. It does not own HTTP routing.
+4. `startup/discovery.rs` translates loader events into registry updates, then
+   owns the cancellable blocking annotation pass. It does not own HTTP routing.
 5. `server/runtime.rs` owns listener, browser, tunnel, and graceful-shutdown
    resources. `server/api/` owns HTTP concerns. `server/catalog.rs` owns the
    progressive file registry.
@@ -141,7 +141,7 @@ See [the HTTP API reference](api.md) for endpoint payloads and headers.
 
 Local startup follows a strict order:
 
-1. Validate tunnel options and load the optional annotation CSV.
+1. Validate tunnel options and the optional annotation CSV header.
 2. Construct state and configuration.
 3. Bind `BoundServer`; an occupied explicit port fails before discovery starts.
 4. Spawn the owned discovery scan and coordinator.
@@ -150,11 +150,14 @@ Local startup follows a strict order:
    `spawn_blocking`/Rayon work before returning.
 
 The loader sends events through a bounded channel. The coordinator drains that
-channel, validates matching annotations, updates `FileRegistry`, records
-skipped and filtered counts, and marks the scan complete. Annotation, scan, and
-no-files failures produce typed failure outcomes and a durable external
-shutdown notification. Normal server exit during an incomplete scan is a
-requested cancellation and remains a successful process outcome.
+channel, updates `FileRegistry`, records skipped and filtered counts, and marks
+the scan complete. It then streams the annotation CSV once on a cancellable
+blocking worker, matching only loaded absolute path keys and committing valid
+rows atomically without overwriting viewer edits. Annotation failures remain in
+the annotation store and do not terminate image viewing. Scan and no-files
+failures produce typed outcomes and a durable external shutdown notification.
+Normal server exit during incomplete discovery or annotation loading requests
+cancellation and remains a successful process outcome.
 
 `RequestActivity` tracks in-flight requests and a monotonic idle baseline.
 Idle timeout does not start while the registry is both empty and incomplete,

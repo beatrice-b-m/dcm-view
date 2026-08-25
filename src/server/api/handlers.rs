@@ -69,6 +69,11 @@ pub(super) async fn annotations(
         return Err(ApiError::not_found("file index out of range"));
     }
 
+    state
+        .annotations()
+        .wait_until_ready()
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
     let annotations = state
         .annotations()
         .get(index)
@@ -100,6 +105,11 @@ pub(super) async fn update_annotations(
 pub(super) async fn export_annotations(
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
+    state
+        .annotations()
+        .wait_until_ready()
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
     let files = state.registry().files_snapshot();
     let csv = state
         .annotations()

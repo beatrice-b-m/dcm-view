@@ -3,14 +3,19 @@ use crate::types::FileEntry;
 use anyhow::{anyhow, bail, Context, Result};
 use csv::{ReaderBuilder, StringRecord};
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
-#[derive(Debug, Clone)]
-struct ParsedAnnotationRow {
-    row_number: usize,
-    normalized_path: String,
-    annotations: EmbedRoiAnnotations,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PathKey(PathBuf);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AnnotationLoadState {
+    Loading,
+    Ready,
+    Failed(String),
 }
 
 pub type AnnotationIndexMap = HashMap<usize, EmbedRoiAnnotations>;
@@ -18,17 +23,27 @@ pub type AnnotationIndexMap = HashMap<usize, EmbedRoiAnnotations>;
 #[derive(Debug, Clone)]
 pub struct AnnotationStore {
     inner: Arc<Mutex<AnnotationStoreInner>>,
+    ready: Arc<Notify>,
 }
 
 #[derive(Debug, Clone)]
 struct AnnotationStoreInner {
     annotations: AnnotationIndexMap,
     user_edited: HashSet<usize>,
+    load_state: AnnotationLoadState,
 }
 
 #[derive(Debug, Clone)]
 pub struct AnnotationSource {
-    rows: Vec<ParsedAnnotationRow>,
+    csv_path: PathBuf,
+    working_directory: PathBuf,
+    indexes: ColumnIndexes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnotationLoadReport {
+    pub matched_rows: usize,
+    pub unmatched_rows: usize,
 }
 
 impl AnnotationStore {
@@ -37,12 +52,41 @@ impl AnnotationStore {
             inner: Arc::new(Mutex::new(AnnotationStoreInner {
                 annotations,
                 user_edited: HashSet::new(),
+                load_state: AnnotationLoadState::Ready,
             })),
+            ready: Arc::new(Notify::new()),
         }
     }
 
     pub fn empty() -> Self {
         Self::new(HashMap::new())
+    }
+
+    pub fn loading() -> Self {
+        let store = Self::empty();
+        store
+            .inner
+            .lock()
+            .expect("annotations store lock poisoned")
+            .load_state = AnnotationLoadState::Loading;
+        store
+    }
+
+    pub async fn wait_until_ready(&self) -> Result<()> {
+        loop {
+            let notified = self.ready.notified();
+            let state = self
+                .inner
+                .lock()
+                .map_err(|_| anyhow!("annotations store lock poisoned"))?
+                .load_state
+                .clone();
+            match state {
+                AnnotationLoadState::Ready => return Ok(()),
+                AnnotationLoadState::Failed(message) => return Err(anyhow!(message)),
+                AnnotationLoadState::Loading => notified.await,
+            }
+        }
     }
 
     pub fn get(&self, file_index: usize) -> Result<EmbedRoiAnnotations> {
@@ -64,6 +108,36 @@ impl AnnotationStore {
             .map_err(|_| anyhow!("annotations store lock poisoned"))?;
         store.annotations = annotations;
         store.user_edited.clear();
+        store.load_state = AnnotationLoadState::Ready;
+        drop(store);
+        self.ready.notify_waiters();
+        Ok(())
+    }
+
+    pub fn commit_csv_if_unedited(&self, annotations: AnnotationIndexMap) -> Result<()> {
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("annotations store lock poisoned"))?;
+        for (file_index, annotations) in annotations {
+            if !store.user_edited.contains(&file_index) {
+                store.annotations.insert(file_index, annotations);
+            }
+        }
+        store.load_state = AnnotationLoadState::Ready;
+        drop(store);
+        self.ready.notify_waiters();
+        Ok(())
+    }
+
+    pub fn fail_loading(&self, error: impl Into<String>) -> Result<()> {
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("annotations store lock poisoned"))?;
+        store.load_state = AnnotationLoadState::Failed(error.into());
+        drop(store);
+        self.ready.notify_waiters();
         Ok(())
     }
 
@@ -130,6 +204,7 @@ impl AnnotationStore {
     }
 }
 
+#[derive(Debug, Clone)]
 struct ColumnIndexes {
     path: usize,
     roi_coords: usize,
@@ -139,47 +214,78 @@ struct ColumnIndexes {
 
 impl AnnotationSource {
     pub fn from_path(csv_path: &Path) -> Result<Self> {
+        let working_directory =
+            env::current_dir().context("failed to resolve current directory")?;
+        let csv_path = absolute_path(csv_path, &working_directory);
+        let indexes = read_column_indexes(&csv_path)?;
         Ok(Self {
-            rows: parse_rows(csv_path)?,
+            csv_path,
+            working_directory,
+            indexes,
         })
     }
 
-    pub fn annotations_for_file(&self, file: &FileEntry) -> Result<Option<EmbedRoiAnnotations>> {
-        let normalized = normalize_path(&file.path);
-        for row in &self.rows {
-            if row.normalized_path == normalized {
-                validate_frames_in_range(&row.annotations, file.frame_count, row.row_number)?;
-                return Ok(Some(row.annotations.clone()));
-            }
-        }
-        Ok(None)
-    }
-
     pub fn load_for_files(&self, files: &[FileEntry]) -> Result<AnnotationIndexMap> {
-        let file_lookup = build_file_lookup(files)?;
-
-        let mut annotations_by_file = HashMap::new();
-        for row in &self.rows {
-            if let Some(file_targets) = file_lookup.get(&row.normalized_path) {
-                for &(file_index, frame_count) in file_targets {
-                    validate_frames_in_range(&row.annotations, frame_count, row.row_number)?;
-                    annotations_by_file.insert(file_index, row.annotations.clone());
-                }
-            }
-        }
-
-        Ok(annotations_by_file)
+        self.load_for_files_with_check(files, || Ok(()))
+            .map(|(map, _)| map)
     }
 
-    pub fn unmatched_row_count(&self, files: &[FileEntry]) -> usize {
-        let matched_paths: HashSet<String> = files
-            .iter()
-            .map(|file| normalize_path(&file.path))
-            .collect();
-        self.rows
-            .iter()
-            .filter(|row| !matched_paths.contains(&row.normalized_path))
-            .count()
+    pub fn load_for_files_with_check<F>(
+        &self,
+        files: &[FileEntry],
+        mut check_active: F,
+    ) -> Result<(AnnotationIndexMap, AnnotationLoadReport)>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        let file_lookup = build_file_lookup(files, &self.working_directory)?;
+        let mut reader = ReaderBuilder::new()
+            .flexible(false)
+            .from_path(&self.csv_path)
+            .with_context(|| {
+                format!(
+                    "failed to open annotations CSV: {}",
+                    self.csv_path.display()
+                )
+            })?;
+        let mut annotations_by_file = HashMap::new();
+        let mut matched_at_row = HashMap::<usize, usize>::new();
+        let mut matched_rows = 0_usize;
+        let mut unmatched_rows = 0_usize;
+
+        for (idx, row_result) in reader.records().enumerate() {
+            check_active()?;
+            let row_number = idx + 2;
+            let row = row_result
+                .with_context(|| format!("annotations CSV row {row_number} could not be parsed"))?;
+            let path_key =
+                parse_path_key(&row, &self.indexes, row_number, &self.working_directory)?;
+            let Some(file_targets) = file_lookup.get(&path_key) else {
+                unmatched_rows += 1;
+                continue;
+            };
+
+            let annotations = parse_annotations(&row, &self.indexes, row_number)?;
+            for &(file_index, frame_count) in file_targets {
+                if let Some(previous_row) = matched_at_row.insert(file_index, row_number) {
+                    bail!(
+                        "annotations CSV row {row_number}: duplicate matching anon_dicom_path for loaded file (already matched at row {previous_row})"
+                    );
+                }
+                validate_frames_in_range(&annotations, frame_count, row_number)?;
+                annotations_by_file.insert(file_index, annotations.clone());
+            }
+            matched_rows += 1;
+        }
+        check_active()?;
+
+        Ok((
+            annotations_by_file,
+            AnnotationLoadReport {
+                matched_rows,
+                unmatched_rows,
+            },
+        ))
     }
 }
 
@@ -190,7 +296,7 @@ pub fn load_annotations_for_files(
     AnnotationSource::from_path(csv_path)?.load_for_files(files)
 }
 
-fn parse_rows(csv_path: &Path) -> Result<Vec<ParsedAnnotationRow>> {
+fn read_column_indexes(csv_path: &Path) -> Result<ColumnIndexes> {
     let mut reader = ReaderBuilder::new()
         .flexible(false)
         .from_path(csv_path)
@@ -205,31 +311,7 @@ fn parse_rows(csv_path: &Path) -> Result<Vec<ParsedAnnotationRow>> {
             )
         })?
         .clone();
-    let indexes = build_column_indexes(&headers)?;
-
-    let mut rows = Vec::new();
-    let mut seen_paths = HashMap::<String, usize>::new();
-
-    for (idx, row_result) in reader.records().enumerate() {
-        let row_number = idx + 2; // Header is line 1.
-        let row = row_result
-            .with_context(|| format!("annotations CSV row {row_number} could not be parsed"))?;
-        let parsed = parse_row(&row, &indexes, row_number)?;
-
-        if let Some(previous_row) =
-            seen_paths.insert(parsed.normalized_path.clone(), parsed.row_number)
-        {
-            bail!(
-                "annotations CSV row {}: duplicate anon_dicom_path (already seen at row {})",
-                parsed.row_number,
-                previous_row
-            );
-        }
-
-        rows.push(parsed);
-    }
-
-    Ok(rows)
+    build_column_indexes(&headers)
 }
 
 fn build_column_indexes(headers: &StringRecord) -> Result<ColumnIndexes> {
@@ -248,19 +330,29 @@ fn build_column_indexes(headers: &StringRecord) -> Result<ColumnIndexes> {
     })
 }
 
-fn parse_row(
+fn parse_path_key(
     row: &StringRecord,
     indexes: &ColumnIndexes,
     row_number: usize,
-) -> Result<ParsedAnnotationRow> {
+    working_directory: &Path,
+) -> Result<PathKey> {
     let raw_path = row.get(indexes.path).ok_or_else(|| {
         anyhow!("annotations CSV row {row_number}: missing value for `anon_dicom_path`")
     })?;
-    let normalized_path = normalize_path(Path::new(raw_path.trim()));
-    if normalized_path.is_empty() {
+    if raw_path.trim().is_empty() {
         bail!("annotations CSV row {row_number}: anon_dicom_path must not be empty");
     }
+    Ok(PathKey(absolute_path(
+        Path::new(raw_path.trim()),
+        working_directory,
+    )))
+}
 
+fn parse_annotations(
+    row: &StringRecord,
+    indexes: &ColumnIndexes,
+    row_number: usize,
+) -> Result<EmbedRoiAnnotations> {
     let raw_roi_coords = row.get(indexes.roi_coords).ok_or_else(|| {
         anyhow!("annotations CSV row {row_number}: missing value for `ROI_coords`")
     })?;
@@ -302,14 +394,10 @@ fn parse_row(
         vec![]
     };
 
-    Ok(ParsedAnnotationRow {
-        row_number,
-        normalized_path,
-        annotations: EmbedRoiAnnotations {
-            num_roi,
-            roi_coords,
-            roi_frames,
-        },
+    Ok(EmbedRoiAnnotations {
+        num_roi,
+        roi_coords,
+        roi_frames,
     })
 }
 
@@ -341,22 +429,31 @@ fn parse_roi_frames(raw: &str, row_number: usize) -> Result<Vec<Vec<u32>>> {
     })
 }
 
-fn build_file_lookup(files: &[FileEntry]) -> Result<HashMap<String, Vec<(usize, u32)>>> {
-    let mut lookup = HashMap::<String, Vec<(usize, u32)>>::new();
+fn build_file_lookup(
+    files: &[FileEntry],
+    working_directory: &Path,
+) -> Result<HashMap<PathKey, Vec<(usize, u32)>>> {
+    let mut lookup = HashMap::<PathKey, Vec<(usize, u32)>>::new();
     for file in files {
-        let normalized = normalize_path(&file.path);
-        if normalized.is_empty() {
-            bail!(
-                "annotations: loaded DICOM path normalized to empty string: {}",
-                file.path.display()
-            );
+        let target = (file.index, file.frame_count);
+        let lexical = PathKey(absolute_path(&file.path, working_directory));
+        push_unique_target(&mut lookup, lexical, target);
+        if let Ok(canonical) = file.path.canonicalize() {
+            push_unique_target(&mut lookup, PathKey(normalize_path(&canonical)), target);
         }
-        lookup
-            .entry(normalized)
-            .or_default()
-            .push((file.index, file.frame_count));
     }
     Ok(lookup)
+}
+
+fn push_unique_target(
+    lookup: &mut HashMap<PathKey, Vec<(usize, u32)>>,
+    key: PathKey,
+    target: (usize, u32),
+) {
+    let targets = lookup.entry(key).or_default();
+    if !targets.contains(&target) {
+        targets.push(target);
+    }
 }
 
 fn validate_frames_in_range(
@@ -440,7 +537,15 @@ pub fn canonicalize_annotations(
     })
 }
 
-fn normalize_path(path: &Path) -> String {
+fn absolute_path(path: &Path, working_directory: &Path) -> PathBuf {
+    if path.is_absolute() {
+        normalize_path(path)
+    } else {
+        normalize_path(&working_directory.join(path))
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -453,7 +558,7 @@ fn normalize_path(path: &Path) -> String {
             Component::Normal(part) => normalized.push(part),
         }
     }
-    normalized.to_string_lossy().into_owned()
+    normalized
 }
 
 #[cfg(test)]
@@ -566,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn parsed_source_matches_single_files_and_counts_unmatched_rows() {
+    fn parsed_source_matches_files_and_counts_unmatched_rows() {
         let dir = tempdir().expect("temp dir");
         let csv_path = dir.path().join("annotations.csv");
         let matched_file = dir.path().join("matched.dcm");
@@ -584,13 +689,14 @@ mod tests {
         let source = AnnotationSource::from_path(&csv_path).expect("source parses");
         let matched = file_entry(0, matched_file.clone(), 1);
 
-        let annotations = source
-            .annotations_for_file(&matched)
-            .expect("single-file match succeeds")
-            .expect("matched annotations");
+        let (mapped, report) = source
+            .load_for_files_with_check(&[matched], || Ok(()))
+            .expect("single-file match succeeds");
+        let annotations = mapped.get(&0).expect("matched annotations");
 
         assert_eq!(annotations.roi_coords, vec![[1, 2, 3, 4]]);
-        assert_eq!(source.unmatched_row_count(&[matched]), 1);
+        assert_eq!(report.matched_rows, 1);
+        assert_eq!(report.unmatched_rows, 1);
     }
 
     #[test]
@@ -613,12 +719,13 @@ mod tests {
     fn errors_when_num_roi_and_coords_count_do_not_align() {
         let dir = tempdir().expect("temp dir");
         let csv_path = dir.path().join("annotations.csv");
+        let matched = PathBuf::from("/path/one.dcm");
         write_csv(
 			&csv_path,
 			"anon_dicom_path,num_ROI,ROI_coords,ROI_frames\n/path/one.dcm,2,\"[[1,2,3,4]]\",\"[]\"\n",
 		);
 
-        let error = load_annotations_for_files(&csv_path, &[])
+        let error = load_annotations_for_files(&csv_path, &[file_entry(0, matched, 1)])
             .expect_err("mismatched ROI count should fail");
         assert!(error
             .to_string()
@@ -629,12 +736,13 @@ mod tests {
     fn errors_when_roi_frames_length_does_not_match_num_roi() {
         let dir = tempdir().expect("temp dir");
         let csv_path = dir.path().join("annotations.csv");
+        let matched = PathBuf::from("/path/one.dcm");
         write_csv(
 			&csv_path,
 			"anon_dicom_path,num_ROI,ROI_coords,ROI_frames\n/path/one.dcm,2,\"[[1,2,3,4],[5,6,7,8]]\",\"[[0]]\"\n",
 		);
 
-        let error = load_annotations_for_files(&csv_path, &[])
+        let error = load_annotations_for_files(&csv_path, &[file_entry(0, matched, 1)])
             .expect_err("mismatched frame groups should fail");
         assert!(error
             .to_string()
@@ -674,9 +782,100 @@ mod tests {
 			),
 		);
 
-        let error =
-            load_annotations_for_files(&csv_path, &[]).expect_err("duplicate path should fail");
-        assert!(error.to_string().contains("duplicate anon_dicom_path"));
+        let error = load_annotations_for_files(&csv_path, &[file_entry(0, duplicate_path, 1)])
+            .expect_err("duplicate path should fail");
+        assert!(error
+            .to_string()
+            .contains("duplicate matching anon_dicom_path"));
+    }
+
+    #[test]
+    fn matches_relative_csv_path_to_absolute_loaded_path() {
+        let dir = tempdir().expect("temp dir");
+        let csv_path = dir.path().join("annotations.csv");
+        let relative = PathBuf::from("dataset").join("case.dcm");
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join(&relative);
+        write_csv(
+            &csv_path,
+            &format!(
+                "anon_dicom_path,ROI_coords\n{},\"[[1,2,3,4]]\"\n",
+                relative.display()
+            ),
+        );
+
+        let mapped = load_annotations_for_files(&csv_path, &[file_entry(0, absolute, 1)])
+            .expect("relative path should match absolute file");
+
+        assert_eq!(mapped.get(&0).map(|value| value.num_roi), Some(1));
+    }
+
+    #[test]
+    fn matches_absolute_csv_path_to_relative_loaded_path_with_parent_components() {
+        let dir = tempdir().expect("temp dir");
+        let csv_path = dir.path().join("annotations.csv");
+        let relative = PathBuf::from("dataset")
+            .join("nested")
+            .join("..")
+            .join("case.dcm");
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("dataset")
+            .join("case.dcm");
+        write_csv(
+            &csv_path,
+            &format!(
+                "anon_dicom_path,ROI_coords\n{},\"[[1,2,3,4]]\"\n",
+                absolute.display()
+            ),
+        );
+
+        let mapped = load_annotations_for_files(&csv_path, &[file_entry(0, relative, 1)])
+            .expect("absolute path should match normalized relative file");
+
+        assert_eq!(mapped.get(&0).map(|value| value.num_roi), Some(1));
+    }
+
+    #[test]
+    fn ignores_malformed_roi_payload_for_unmatched_rows() {
+        let dir = tempdir().expect("temp dir");
+        let csv_path = dir.path().join("annotations.csv");
+        write_csv(
+            &csv_path,
+            "anon_dicom_path,ROI_coords\n/unmatched/file.dcm,not-json\n",
+        );
+
+        let mapped = load_annotations_for_files(&csv_path, &[])
+            .expect("unmatched payload should not be parsed");
+
+        assert!(mapped.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn matches_real_csv_path_to_symlinked_loaded_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("temp dir");
+        let csv_path = dir.path().join("annotations.csv");
+        let real_path = dir.path().join("real.dcm");
+        let symlink_path = dir.path().join("linked.dcm");
+        fs::write(&real_path, []).expect("create target file");
+        symlink(&real_path, &symlink_path).expect("create symlink");
+        let canonical_real_path = real_path.canonicalize().expect("canonical target path");
+        write_csv(
+            &csv_path,
+            &format!(
+                "anon_dicom_path,ROI_coords\n{},\"[[1,2,3,4]]\"\n",
+                canonical_real_path.display()
+            ),
+        );
+
+        let mapped = load_annotations_for_files(&csv_path, &[file_entry(0, symlink_path, 1)])
+            .expect("canonical file alias should match");
+
+        assert_eq!(mapped.get(&0).map(|value| value.num_roi), Some(1));
     }
 
     #[test]

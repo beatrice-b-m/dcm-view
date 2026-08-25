@@ -60,7 +60,6 @@ impl DiscoverySpawner for LoaderDiscoverySpawner {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DiscoveryFailure {
-    Annotation,
     Scan,
     NoFiles,
     Coordinator,
@@ -179,22 +178,8 @@ async fn run_coordinator(
         inputs.registry.clone(),
         inputs.shutdown.clone(),
     );
-    let mut event_failure = None;
-
     while let Some(event) = events.recv().await {
-        if event_failure.is_some() {
-            continue;
-        }
-        if let Err(error) = process_event(
-            event,
-            inputs.annotation_source.as_ref(),
-            &inputs.registry,
-            &inputs.annotation_store,
-        ) {
-            eprintln!("{error:#}");
-            event_failure = Some(DiscoveryFailure::Annotation);
-            cancellation.cancel();
-        }
+        process_event(event, &inputs.registry);
     }
 
     let scan_completion = match completion.await {
@@ -202,48 +187,85 @@ async fn run_coordinator(
         Err(_) => ScanCompletion::Failed("loader worker ended without a result".to_string()),
     };
 
-    let outcome = if let Some(failure) = event_failure {
-        DiscoveryOutcome::Failed(failure)
-    } else {
-        finish_scan(
-            scan_completion,
-            &inputs.registry,
-            inputs.annotation_source.as_ref(),
-            &inputs.filters,
-            &inputs.input_paths,
-        )
-    };
+    let outcome = finish_scan(
+        scan_completion,
+        &inputs.registry,
+        &inputs.filters,
+        &inputs.input_paths,
+    );
+    if outcome == DiscoveryOutcome::Completed {
+        inputs.registry.mark_scan_complete();
+        if let Some(source) = inputs.annotation_source {
+            load_annotations(
+                source,
+                inputs.registry.files_snapshot(),
+                inputs.annotation_store,
+                cancellation.clone(),
+            )
+            .await;
+        }
+    }
     guard.finish(outcome)
 }
 
-fn process_event(
-    event: loader::DiscoveryEvent,
-    annotation_source: Option<&AnnotationSource>,
-    registry: &FileRegistry,
-    annotation_store: &AnnotationStore,
-) -> anyhow::Result<()> {
+fn process_event(event: loader::DiscoveryEvent, registry: &FileRegistry) {
     match event {
         loader::DiscoveryEvent::File(file) => {
             registry.record_scanned();
-            let annotations = annotation_source
-                .map(|source| source.annotations_for_file(&file))
-                .transpose()?
-                .flatten();
-            let index = registry.insert(*file);
-            if let Some(annotations) = annotations {
-                annotation_store.insert_csv_if_unedited(index, annotations)?;
-            }
+            registry.insert(*file);
         }
         loader::DiscoveryEvent::Skipped => registry.record_skipped(),
         loader::DiscoveryEvent::Filtered => registry.record_filtered(),
     }
-    Ok(())
+}
+
+async fn load_annotations(
+    source: AnnotationSource,
+    files: Vec<dcmview::types::FileEntry>,
+    store: AnnotationStore,
+    cancellation: loader::DiscoveryCancellation,
+) {
+    let scan_cancellation = cancellation.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        source.load_for_files_with_check(&files, || {
+            if scan_cancellation.is_cancelled() {
+                anyhow::bail!("annotation loading cancelled");
+            }
+            Ok(())
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok((annotations, report))) => {
+            if let Err(error) = store.commit_csv_if_unedited(annotations) {
+                eprintln!("dcmview: warning — failed to commit annotations: {error:#}");
+                let _ = store.fail_loading(error.to_string());
+                return;
+            }
+            if report.unmatched_rows > 0 {
+                eprintln!(
+                    "dcmview: warning — {} annotation row(s) did not match discovered DICOM files",
+                    report.unmatched_rows
+                );
+            }
+        }
+        Ok(Err(error)) => {
+            if !cancellation.is_cancelled() {
+                eprintln!("dcmview: warning — failed to load annotations: {error:#}");
+            }
+            let _ = store.fail_loading(error.to_string());
+        }
+        Err(error) => {
+            eprintln!("dcmview: warning — annotation loader failed: {error}");
+            let _ = store.fail_loading(format!("annotation loader failed: {error}"));
+        }
+    }
 }
 
 fn finish_scan(
     completion: ScanCompletion,
     registry: &FileRegistry,
-    annotation_source: Option<&AnnotationSource>,
     filters: &[loader::ScanFilter],
     input_paths: &[PathBuf],
 ) -> DiscoveryOutcome {
@@ -260,15 +282,6 @@ fn finish_scan(
                     eprintln!("dcmview: no valid DICOM files found");
                 }
                 return DiscoveryOutcome::Failed(DiscoveryFailure::NoFiles);
-            }
-
-            if let Some(source) = annotation_source {
-                let unmatched = source.unmatched_row_count(files.as_slice());
-                if unmatched > 0 {
-                    eprintln!(
-                        "dcmview: warning — {unmatched} annotation row(s) did not match discovered DICOM files"
-                    );
-                }
             }
 
             print_progressive_load_summary(
@@ -505,8 +518,13 @@ mod tests {
     fn discovery_inputs(
         file_path: PathBuf,
         annotation_source: Option<AnnotationSource>,
-    ) -> (DiscoveryInputs, FileRegistry, Arc<Notify>) {
+    ) -> (DiscoveryInputs, FileRegistry, AnnotationStore, Arc<Notify>) {
         let registry = FileRegistry::new();
+        let annotation_store = if annotation_source.is_some() {
+            AnnotationStore::loading()
+        } else {
+            AnnotationStore::empty()
+        };
         let shutdown = Arc::new(Notify::new());
         (
             DiscoveryInputs {
@@ -515,10 +533,11 @@ mod tests {
                 filters: Vec::new(),
                 annotation_source,
                 registry: registry.clone(),
-                annotation_store: AnnotationStore::empty(),
+                annotation_store: annotation_store.clone(),
                 shutdown: shutdown.clone(),
             },
             registry,
+            annotation_store,
             shutdown,
         )
     }
@@ -539,7 +558,7 @@ mod tests {
         let spawner = TestSpawner::new(TestBehavior::WaitForCancellation(synthetic_file(
             path.clone(),
         )));
-        let (inputs, registry, _) = discovery_inputs(path, None);
+        let (inputs, registry, _, _) = discovery_inputs(path, None);
         let handle = DiscoveryHandle::spawn(inputs, &spawner);
         wait_for_registry_file(&registry).await;
 
@@ -557,7 +576,7 @@ mod tests {
     async fn completed_scan_returns_normal_outcome_and_marks_registry_complete() {
         let path = PathBuf::from("/synthetic/scan.dcm");
         let spawner = TestSpawner::new(TestBehavior::Complete(synthetic_file(path.clone())));
-        let (inputs, registry, _) = discovery_inputs(path, None);
+        let (inputs, registry, _, _) = discovery_inputs(path, None);
         let handle = DiscoveryHandle::spawn(inputs, &spawner);
         tokio::time::timeout(Duration::from_secs(1), async {
             while !registry.status().scan_complete {
@@ -575,7 +594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn annotation_event_failure_cancels_drains_and_durably_notifies() {
+    async fn annotation_failure_keeps_viewer_running_and_marks_store_failed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let file_path = temp.path().join("scan.dcm");
         let csv_path = temp.path().join("annotations.csv");
@@ -588,10 +607,8 @@ mod tests {
         )
         .expect("annotation CSV");
         let source = AnnotationSource::from_path(&csv_path).expect("annotation source");
-        let spawner = TestSpawner::new(TestBehavior::WaitForCancellation(synthetic_file(
-            file_path.clone(),
-        )));
-        let (inputs, registry, shutdown) = discovery_inputs(file_path, Some(source));
+        let spawner = TestSpawner::new(TestBehavior::Complete(synthetic_file(file_path.clone())));
+        let (inputs, registry, store, shutdown) = discovery_inputs(file_path, Some(source));
         let handle = DiscoveryHandle::spawn(inputs, &spawner);
 
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -606,14 +623,19 @@ mod tests {
         })
         .await
         .expect("annotation failure coordinator should finish");
-        tokio::time::timeout(Duration::from_millis(20), shutdown.notified())
-            .await
-            .expect("shutdown notification should remain durable");
         let outcome = handle.cancel_and_wait().await;
 
-        assert_eq!(
-            outcome,
-            DiscoveryOutcome::Failed(DiscoveryFailure::Annotation)
+        assert_eq!(outcome, DiscoveryOutcome::Completed);
+        assert!(store
+            .wait_until_ready()
+            .await
+            .expect_err("invalid matched annotations should fail")
+            .to_string()
+            .contains("contains frame 2"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), shutdown.notified())
+                .await
+                .is_err()
         );
         assert!(spawner.finished.load(Ordering::Acquire));
         assert!(registry.status().scan_complete);
@@ -623,7 +645,7 @@ mod tests {
     async fn scan_failure_marks_failure_and_notifies_shutdown() {
         let path = PathBuf::from("/synthetic/scan.dcm");
         let spawner = TestSpawner::new(TestBehavior::Fail);
-        let (inputs, registry, shutdown) = discovery_inputs(path, None);
+        let (inputs, registry, _, shutdown) = discovery_inputs(path, None);
         let handle = DiscoveryHandle::spawn(inputs, &spawner);
 
         tokio::time::timeout(Duration::from_secs(1), shutdown.notified())
@@ -640,7 +662,7 @@ mod tests {
     async fn zero_files_returns_failure_after_worker_completion() {
         let path = PathBuf::from("/synthetic/scan.dcm");
         let spawner = TestSpawner::new(TestBehavior::CompleteEmpty);
-        let (inputs, registry, shutdown) = discovery_inputs(path, None);
+        let (inputs, registry, _, shutdown) = discovery_inputs(path, None);
         let handle = DiscoveryHandle::spawn(inputs, &spawner);
 
         tokio::time::timeout(Duration::from_secs(1), async {

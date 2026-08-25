@@ -69,7 +69,11 @@ async fn run_local_viewer_with_spawner(
         })
         .transpose()?;
     let registry = FileRegistry::new();
-    let annotation_store = AnnotationStore::empty();
+    let annotation_store = if annotation_source.is_some() {
+        AnnotationStore::loading()
+    } else {
+        AnnotationStore::empty()
+    };
     let state = AppState::new(registry.clone(), annotation_store.clone());
     let shutdown = Arc::new(Notify::new());
     let config = ServerConfig {
