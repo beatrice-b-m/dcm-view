@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, tick } from "svelte";
 	import { annotationsExportUrl, fetchFiles, type FilesResponse, type WindowMode, type WindowPreset } from "./api";
 	import FileNavigator from "./lib/FileNavigator.svelte";
 	import FrameSlider from "./lib/FrameSlider.svelte";
@@ -35,6 +35,8 @@
 		widthRatio: number;
 	};
 
+	type CompactDrawer = "explorer" | "tags";
+
 	let filesResponse = $state<FilesResponse | null>(null);
 	let loadError = $state<string | null>(null);
 
@@ -60,6 +62,11 @@
 	let tagPanelWidthPx = $state(clampTagPanelWidth(TAG_PANEL_DEFAULT_WIDTH_PX));
 	let tagPanelCollapsed = $state(false);
 	let sidebarResizeState = $state<SidebarResizeState | null>(null);
+	let compactDrawer = $state<CompactDrawer | null>(null);
+	let explorerDrawerButton = $state<HTMLButtonElement | null>(null);
+	let tagsDrawerButton = $state<HTMLButtonElement | null>(null);
+	let explorerDrawerElement = $state<HTMLDivElement | null>(null);
+	let tagsDrawerElement = $state<HTMLElement | null>(null);
 
 	const filesById = $derived(indexFilesById(filesResponse?.files ?? []));
 	const activeFile = $derived(
@@ -122,6 +129,44 @@
 		const next = defaultTabState(fileIndex);
 		openTabs = [...openTabs, next];
 		loadTabState(next);
+	}
+
+	function openFileFromNavigator(fileIndex: number) {
+		openOrActivateFile(fileIndex);
+		if (window.matchMedia("(max-width: 519px)").matches) {
+			closeCompactDrawer();
+		}
+	}
+
+	function compactDrawerTrigger(drawer: CompactDrawer): HTMLButtonElement | null {
+		return drawer === "explorer" ? explorerDrawerButton : tagsDrawerButton;
+	}
+
+	function compactDrawerElement(drawer: CompactDrawer): HTMLElement | null {
+		return drawer === "explorer" ? explorerDrawerElement : tagsDrawerElement;
+	}
+
+	function closeCompactDrawer(restoreFocus = true) {
+		const closingDrawer = compactDrawer;
+		if (closingDrawer === null) return;
+		compactDrawer = null;
+		if (restoreFocus) {
+			void tick().then(() => compactDrawerTrigger(closingDrawer)?.focus());
+		}
+	}
+
+	function toggleCompactDrawer(drawer: CompactDrawer) {
+		if (compactDrawer === drawer) {
+			closeCompactDrawer(false);
+			return;
+		}
+		if (drawer === "explorer") {
+			fileNavigatorCollapsed = false;
+		} else {
+			tagPanelCollapsed = false;
+		}
+		compactDrawer = drawer;
+		void tick().then(() => compactDrawerElement(drawer)?.focus());
 	}
 
 	function closeOpenTab(fileIndex: number) {
@@ -324,6 +369,11 @@
 
 	$effect(() => {
 		const handleKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && compactDrawer !== null) {
+				event.preventDefault();
+				closeCompactDrawer();
+				return;
+			}
 			const target = event.target as HTMLElement | null;
 			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 			switch (event.key.toLowerCase()) {
@@ -336,6 +386,19 @@
 		};
 		window.addEventListener('keydown', handleKey);
 		return () => window.removeEventListener('keydown', handleKey);
+	});
+
+	$effect(() => {
+		const handleResize = () => {
+			if (compactDrawer === "explorer" && !window.matchMedia("(max-width: 519px)").matches) {
+				closeCompactDrawer(false);
+			}
+			if (compactDrawer === "tags" && !window.matchMedia("(max-width: 979px)").matches) {
+				closeCompactDrawer(false);
+			}
+		};
+		window.addEventListener("resize", handleResize);
+		return () => window.removeEventListener("resize", handleResize);
 	});
 
 	onMount(() => {
@@ -385,12 +448,34 @@
 				src="/assets/dcmview-icon.png"
 				alt="dcmview"
 			/>
+			<button
+				type="button"
+				class="compact-sidebar-button explorer-drawer-button"
+				bind:this={explorerDrawerButton}
+				onclick={() => toggleCompactDrawer("explorer")}
+				aria-label="Toggle Explorer drawer"
+				aria-controls="file-navigator-panel"
+				aria-expanded={compactDrawer === "explorer"}
+			>
+				Explorer
+			</button>
 			<OpenImageTabs
 				openFiles={openTabFiles}
 				activeFileIndex={activeFileIndex}
 				onactivate={activateOpenTab}
 				onclose={closeOpenTab}
 			/>
+			<button
+				type="button"
+				class="compact-sidebar-button tags-drawer-button"
+				bind:this={tagsDrawerButton}
+				onclick={() => toggleCompactDrawer("tags")}
+				aria-label="Toggle Tags drawer"
+				aria-controls="tag-panel"
+				aria-expanded={compactDrawer === "tags"}
+			>
+				Tags
+			</button>
 		</header>
 		<ViewerToolbar
 			bind:activeTool
@@ -402,14 +487,33 @@
 			onrotateCCW={applyRotateCCW}
 			onexportAnnotations={exportAnnotations}
 		/>
+		{#if compactDrawer !== null}
+			<button
+				type="button"
+				class="drawer-backdrop"
+				onclick={() => closeCompactDrawer()}
+				aria-label="Close sidebar drawer"
+			></button>
+		{/if}
 		<section class="workspace">
-			<FileNavigator
-				files={filesResponse.files}
-				activeFileIndex={activeFileIndex}
-				scanComplete={filesResponse.scan_complete}
-				bind:collapsed={fileNavigatorCollapsed}
-				onopenfile={openOrActivateFile}
-			/>
+			<div
+				id="file-navigator-panel"
+				class="file-navigator-shell"
+				class:compact-open={compactDrawer === "explorer"}
+				bind:this={explorerDrawerElement}
+				tabindex="-1"
+				role={compactDrawer === "explorer" ? "dialog" : undefined}
+				aria-modal={compactDrawer === "explorer" ? "true" : undefined}
+				aria-label="Explorer"
+			>
+				<FileNavigator
+					files={filesResponse.files}
+					activeFileIndex={activeFileIndex}
+					scanComplete={filesResponse.scan_complete}
+					bind:collapsed={fileNavigatorCollapsed}
+					onopenfile={openFileFromNavigator}
+				/>
+			</div>
 			<section class="viewer-column">
 				{#if activeFile === null}
 					<div class="empty-viewer">Open a file from the sidebar</div>
@@ -441,7 +545,17 @@
 					/>
 				{/if}
 			</section>
-			<aside class="tag-panel-shell" class:collapsed={tagPanelCollapsed}>
+			<aside
+				id="tag-panel"
+				class="tag-panel-shell"
+				class:collapsed={tagPanelCollapsed}
+				class:compact-open={compactDrawer === "tags"}
+				bind:this={tagsDrawerElement}
+				tabindex="-1"
+				role={compactDrawer === "tags" ? "dialog" : undefined}
+				aria-modal={compactDrawer === "tags" ? "true" : undefined}
+				aria-label="DICOM tags"
+			>
 				<div
 					class="sidebar-handle"
 					class:dragging={sidebarResizeState !== null}
@@ -542,13 +656,49 @@
 
 	.topbar {
 		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
+		grid-template-columns: auto minmax(0, 1fr) auto;
 		align-items: end;
 		gap: 0.8rem;
 		min-height: 2.6rem;
 		background: var(--surface-chrome);
 		padding: 0 0.7rem;
 		border-bottom: 1px solid var(--border-subtle);
+	}
+
+	.compact-sidebar-button {
+		display: none;
+		align-self: center;
+		height: var(--control-height);
+		padding: 0 0.65rem;
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		background: var(--surface-control);
+		color: var(--text-secondary);
+		font: inherit;
+		font-size: 0.74rem;
+		cursor: pointer;
+	}
+
+	.compact-sidebar-button:hover,
+	.compact-sidebar-button[aria-expanded="true"] {
+		background: var(--surface-control-hover);
+		color: var(--text-primary);
+	}
+
+	.compact-sidebar-button:focus-visible,
+	.file-navigator-shell:focus-visible,
+	.tag-panel-shell:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+
+	.drawer-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 30;
+		border: 0;
+		background: rgba(0, 0, 0, 0.52);
+		cursor: default;
 	}
 
 	.brand-mark {
@@ -564,6 +714,17 @@
 		grid-template-columns: var(--file-nav-width) minmax(0, 1fr) var(--tag-panel-width);
 		grid-template-rows: 1fr;
 		min-height: 0;
+	}
+
+	.file-navigator-shell {
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.file-navigator-shell :global(.navigator) {
+		width: 100%;
+		height: 100%;
 	}
 
 	.viewer-column {
@@ -671,32 +832,78 @@
 		color: var(--text-secondary);
 	}
 
-	@media (max-width: 980px) {
+	@media (max-width: 979px) {
 		.workspace {
 			grid-template-columns: var(--file-nav-width) minmax(0, 1fr);
 		}
 
+		.tags-drawer-button {
+			display: block;
+		}
+
 		.tag-panel-shell {
+			position: fixed;
+			top: 0;
+			right: 0;
+			bottom: 0;
+			z-index: 40;
+			width: min(360px, 90vw);
+			visibility: hidden;
+			transform: translateX(100%);
+			transition: transform 150ms ease, visibility 0s linear 150ms;
+			box-shadow: -12px 0 30px rgba(0, 0, 0, 0.34);
+		}
+
+		.tag-panel-shell.compact-open {
+			visibility: visible;
+			transform: translateX(0);
+			transition-delay: 0s;
+		}
+
+		.tag-panel-shell .sidebar-handle,
+		.tag-panel-shell .panel-toggle {
 			display: none;
 		}
 	}
 
-	@media (max-width: 520px) {
+	@media (max-width: 519px) {
 		.topbar {
-			grid-template-columns: minmax(0, 1fr);
+			grid-template-columns: auto minmax(0, 1fr) auto;
 			gap: 0.25rem;
-			padding-top: 0.35rem;
 		}
 
 		.brand-mark {
 			display: none;
 		}
 
+		.explorer-drawer-button {
+			display: block;
+		}
+
 		.workspace {
 			grid-template-columns: minmax(0, 1fr);
 		}
 
-		.workspace :global(.navigator) {
+		.file-navigator-shell {
+			position: fixed;
+			top: 0;
+			left: 0;
+			bottom: 0;
+			z-index: 40;
+			width: min(300px, 90vw);
+			visibility: hidden;
+			transform: translateX(-100%);
+			transition: transform 150ms ease, visibility 0s linear 150ms;
+			box-shadow: 12px 0 30px rgba(0, 0, 0, 0.34);
+		}
+
+		.file-navigator-shell.compact-open {
+			visibility: visible;
+			transform: translateX(0);
+			transition-delay: 0s;
+		}
+
+		.file-navigator-shell :global(.collapse-button) {
 			display: none;
 		}
 	}
