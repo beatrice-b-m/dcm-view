@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	buildCineLookahead,
+	canRunCinePlayback,
 	cineFrameIntervalMs,
 	nextCineStep,
 	runRenderPacedCine,
@@ -9,6 +10,13 @@ import {
 } from "./cinePlayback";
 
 describe("cine playback policy", () => {
+	it("allows playback only in the display pipeline with multiple pixel frames", () => {
+		expect(canRunCinePlayback("cine", true, 2)).toBe(true);
+		expect(canRunCinePlayback("diagnostic_wl", true, 2)).toBe(false);
+		expect(canRunCinePlayback("cine", false, 2)).toBe(false);
+		expect(canRunCinePlayback("cine", true, 1)).toBe(false);
+	});
+
 	it("wraps loop playback in both directions", () => {
 		expect(nextCineStep(4, 5, "loop", 1)).toEqual({ frame: 0, direction: 1 });
 		expect(nextCineStep(0, 5, "loop", -1)).toEqual({ frame: 4, direction: -1 });

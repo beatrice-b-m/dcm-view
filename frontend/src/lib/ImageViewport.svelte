@@ -33,6 +33,7 @@
 		type DisplayFrameCacheEntry,
 	} from "./frameCache";
 	import {
+		canRunCinePlayback,
 		runRenderPacedCine,
 		waitForAbortableResult,
 		waitForCineDeadline,
@@ -1176,7 +1177,12 @@ function startDisplayPrefetch(
 		const playbackMode = cineMode;
 		const mode = pipelineMode;
 		const windowOptions = currentDisplayWindowOptions();
-		if (!playing || mode !== "cine" || !file.has_pixels || file.frame_count <= 1) return;
+		const canPlay = canRunCinePlayback(mode, file.has_pixels, file.frame_count);
+		if (playing && !canPlay) {
+			cinePlaying = false;
+			return;
+		}
+		if (!playing || !canPlay) return;
 
 		const ctrl = new AbortController();
 		const fileIndex = file.index;

@@ -1,10 +1,19 @@
 export type CineMode = "loop" | "sweep";
 export type CineDirection = 1 | -1;
+export type CinePipelineMode = "cine" | "diagnostic_wl";
 
 export type CineStep = {
 	frame: number;
 	direction: CineDirection;
 };
+
+export function canRunCinePlayback(
+	pipelineMode: CinePipelineMode,
+	hasPixels: boolean,
+	totalFrames: number,
+): boolean {
+	return pipelineMode === "cine" && hasPixels && totalFrames > 1;
+}
 
 export function nextCineStep(
 	currentFrame: number,
