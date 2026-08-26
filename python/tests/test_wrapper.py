@@ -84,14 +84,10 @@ class WrapperTests(unittest.TestCase):
 		self.assertNotIn("--startup-json", help_text)
 
 	def test_missing_binary_raises_runtime_error(self) -> None:
-		with mock.patch.dict(
-			os.environ,
-			{wrapper._VSCODE_BRIDGE_BYPASS_ENV: "1"},
-			clear=True,
-		):
+		with mock.patch.dict(os.environ, {}, clear=True):
 			with mock.patch("dcmview_py.wrapper.shutil.which", return_value=None):
 				with self.assertRaisesRegex(RuntimeError, "dcmview binary not found"):
-					wrapper.view([FIXTURE_FILE], browser=False)
+					wrapper.view([FIXTURE_FILE], browser=False, vscode_bridge=False)
 
 	def test_explicit_binary_env_var_takes_precedence(self) -> None:
 		with mock.patch.dict(os.environ, {"DCMVIEW_BINARY": "/tmp/env-dcmview"}, clear=True):
@@ -205,7 +201,7 @@ class WrapperTests(unittest.TestCase):
 	def test_tunnel_requires_host_before_spawn(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
 			with self.assertRaisesRegex(ValueError, "tunnel_host is required"):
-				wrapper.view([FIXTURE_FILE], browser=False, tunnel=True)
+				wrapper.view([FIXTURE_FILE], browser=False, tunnel=True, vscode_bridge=False)
 
 	def test_cli_forwards_no_browser_no_recursive_and_timeout(self) -> None:
 		with mock.patch("dcmview_py.__main__.view", return_value=None) as view_mock:
@@ -387,7 +383,12 @@ class WrapperTests(unittest.TestCase):
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
 			with mock.patch("dcmview_py.wrapper.subprocess.Popen", side_effect=[old_process, new_process]) as popen:
 				with redirect_stdout(StringIO()):
-					result = wrapper.view(["/tmp/scan.dcm"], browser=False, block=True)
+					result = wrapper.view(
+						["/tmp/scan.dcm"],
+						browser=False,
+						block=True,
+						vscode_bridge=False,
+					)
 
 		self.assertIsNone(result)
 		self.assertIn("--startup-json", popen.call_args_list[0].args[0])
@@ -406,7 +407,12 @@ class WrapperTests(unittest.TestCase):
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
 			with mock.patch("dcmview_py.wrapper.subprocess.Popen", side_effect=[old_process, new_process]) as popen:
 				with redirect_stdout(StringIO()):
-					handle = wrapper.view(["/tmp/scan.dcm"], browser=False, block=False)
+					handle = wrapper.view(
+						["/tmp/scan.dcm"],
+						browser=False,
+						block=False,
+						vscode_bridge=False,
+					)
 
 		self.assertIsNotNone(handle)
 		assert handle is not None
