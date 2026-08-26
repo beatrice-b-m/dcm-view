@@ -10,6 +10,7 @@
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
 	import type { CineDirection, CineMode } from "./lib/cinePlayback";
 	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
+	import { focusTrapTarget } from "./lib/focusTrap";
 	import { DEFAULT_ORIENTATION, WL_PRESETS, type ActiveTool, type ImageOrientation } from "./lib/viewerTools";
 
 	const TAG_PANEL_DEFAULT_WIDTH_PX = 360;
@@ -18,6 +19,14 @@
 	const TAG_PANEL_COLLAPSED_WIDTH_PX = 44;
 	const FILE_NAV_WIDTH_PX = 300;
 	const FILE_NAV_COLLAPSED_WIDTH_PX = 44;
+	const DRAWER_FOCUSABLE_SELECTOR = [
+		'a[href]',
+		'button:not([disabled])',
+		'input:not([disabled])',
+		'select:not([disabled])',
+		'textarea:not([disabled])',
+		'[tabindex]:not([tabindex="-1"])',
+	].join(',');
 
 	type SidebarResizeState = {
 		pointerId: number;
@@ -167,6 +176,26 @@
 		}
 		compactDrawer = drawer;
 		void tick().then(() => compactDrawerElement(drawer)?.focus());
+	}
+
+	function handleCompactDrawerKeydown(event: KeyboardEvent) {
+		if (event.key !== "Tab" || compactDrawer === null) return;
+		const container = compactDrawerElement(compactDrawer);
+		if (!container) return;
+		const focusable = Array.from(
+			container.querySelectorAll<HTMLElement>(DRAWER_FOCUSABLE_SELECTOR),
+		).filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+		const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+		const target = focusTrapTarget(activeIndex, focusable.length, event.shiftKey);
+		if (target === null) return;
+		event.preventDefault();
+		if (target === "container") {
+			container.focus();
+		} else if (target === "first") {
+			focusable[0]?.focus();
+		} else {
+			focusable[focusable.length - 1]?.focus();
+		}
 	}
 
 	function closeOpenTab(fileIndex: number) {
@@ -505,6 +534,7 @@
 				role={compactDrawer === "explorer" ? "dialog" : undefined}
 				aria-modal={compactDrawer === "explorer" ? "true" : undefined}
 				aria-label="Explorer"
+				onkeydown={handleCompactDrawerKeydown}
 			>
 				<FileNavigator
 					files={filesResponse.files}
@@ -555,6 +585,7 @@
 				role={compactDrawer === "tags" ? "dialog" : undefined}
 				aria-modal={compactDrawer === "tags" ? "true" : undefined}
 				aria-label="DICOM tags"
+				onkeydown={handleCompactDrawerKeydown}
 			>
 				<div
 					class="sidebar-handle"
