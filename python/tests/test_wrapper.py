@@ -84,7 +84,11 @@ class WrapperTests(unittest.TestCase):
 		self.assertNotIn("--startup-json", help_text)
 
 	def test_missing_binary_raises_runtime_error(self) -> None:
-		with mock.patch.dict(os.environ, {}, clear=True):
+		with mock.patch.dict(
+			os.environ,
+			{wrapper._VSCODE_BRIDGE_BYPASS_ENV: "1"},
+			clear=True,
+		):
 			with mock.patch("dcmview_py.wrapper.shutil.which", return_value=None):
 				with self.assertRaisesRegex(RuntimeError, "dcmview binary not found"):
 					wrapper.view([FIXTURE_FILE], browser=False)
