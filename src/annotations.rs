@@ -260,7 +260,7 @@ impl AnnotationSource {
                 .with_context(|| format!("annotations CSV row {row_number} could not be parsed"))?;
             let path_key =
                 parse_path_key(&row, &self.indexes, row_number, &self.working_directory)?;
-            let Some(file_targets) = file_lookup.get(&path_key) else {
+            let Some(file_targets) = matching_file_targets(&file_lookup, &path_key) else {
                 unmatched_rows += 1;
                 continue;
             };
@@ -454,6 +454,19 @@ fn push_unique_target(
     if !targets.contains(&target) {
         targets.push(target);
     }
+}
+
+fn matching_file_targets<'a>(
+    lookup: &'a HashMap<PathKey, Vec<(usize, u32)>>,
+    path_key: &PathKey,
+) -> Option<&'a Vec<(usize, u32)>> {
+    lookup.get(path_key).or_else(|| {
+        path_key
+            .0
+            .canonicalize()
+            .ok()
+            .and_then(|canonical| lookup.get(&PathKey(normalize_path(&canonical))))
+    })
 }
 
 fn validate_frames_in_range(
@@ -874,6 +887,31 @@ mod tests {
 
         let mapped = load_annotations_for_files(&csv_path, &[file_entry(0, symlink_path, 1)])
             .expect("canonical file alias should match");
+
+        assert_eq!(mapped.get(&0).map(|value| value.num_roi), Some(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn matches_symlinked_csv_path_to_real_loaded_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("temp dir");
+        let csv_path = dir.path().join("annotations.csv");
+        let real_path = dir.path().join("real.dcm");
+        let symlink_path = dir.path().join("linked.dcm");
+        fs::write(&real_path, []).expect("create target file");
+        symlink(&real_path, &symlink_path).expect("create symlink");
+        write_csv(
+            &csv_path,
+            &format!(
+                "anon_dicom_path,ROI_coords\n{},\"[[1,2,3,4]]\"\n",
+                symlink_path.display()
+            ),
+        );
+
+        let mapped = load_annotations_for_files(&csv_path, &[file_entry(0, real_path, 1)])
+            .expect("symlinked CSV alias should match canonical loaded file");
 
         assert_eq!(mapped.get(&0).map(|value| value.num_roi), Some(1));
     }
