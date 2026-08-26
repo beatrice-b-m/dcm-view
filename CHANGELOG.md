@@ -10,7 +10,7 @@ diagnostic viewer.
 
 ## Unreleased
 
-## 0.2.9 - 2026-08-25
+## 0.2.9 - 2026-08-26
 
 ### Viewer Reliability
 
@@ -27,6 +27,8 @@ diagnostic viewer.
   restoration.
 - Repaired Marketplace documentation links and added packaged-VSIX README
   verification so repository-relative links cannot recur in release artifacts.
+
+## 0.2.7 - 2026-07-28
 
 ### CLI
 

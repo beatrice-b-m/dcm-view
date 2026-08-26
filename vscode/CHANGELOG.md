@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.2.9 - 2026-08-25
+## 0.2.9 - 2026-08-26
 
 - Keep Explorer and Tags accessible in compact and narrow webviews through
   overlay drawers with keyboard dismissal and focus restoration.
@@ -10,6 +10,8 @@
   verify their final form inside packaged VSIX artifacts.
 - Improve cine playback smoothness in constrained webviews by advancing only
   after frames are loaded and rendered.
+
+## 0.2.5 - 2026-06-12
 
 - Improve VS Code bridge reliability for Remote-SSH and notebook workflows by
   publishing the bridge in the per-user state directory, falling back from stale
