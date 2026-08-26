@@ -34,6 +34,8 @@
 	} from "./frameCache";
 	import {
 		runRenderPacedCine,
+		waitForAbortableResult,
+		waitForCineDeadline,
 		type CineDirection,
 		type CineMode,
 	} from "./cinePlayback";
@@ -614,27 +616,10 @@
 			lastRenderedDisplayFrame?.fileIndex === fileIndex
 			&& lastRenderedDisplayFrame.frameIndex === frameIndex
 		) return Promise.resolve(true);
-		return new Promise((resolve) => {
-			const waiter = { fileIndex, frameIndex, resolve };
+		return waitForAbortableResult(signal, (settle) => {
+			const waiter = { fileIndex, frameIndex, resolve: settle };
 			displayRenderWaiters.add(waiter);
-			signal.addEventListener("abort", () => {
-				displayRenderWaiters.delete(waiter);
-				resolve(false);
-			}, { once: true });
-		});
-	}
-
-	function waitForCineDeadline(delayMs: number, signal: AbortSignal): Promise<boolean> {
-		return new Promise((resolve) => {
-			if (signal.aborted) {
-				resolve(false);
-				return;
-			}
-			const timer = window.setTimeout(() => resolve(true), Math.max(0, delayMs));
-			signal.addEventListener("abort", () => {
-				window.clearTimeout(timer);
-				resolve(false);
-			}, { once: true });
+			return () => displayRenderWaiters.delete(waiter);
 		});
 	}
 

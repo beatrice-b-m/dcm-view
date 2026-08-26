@@ -57,6 +57,37 @@ export function cineFrameIntervalMs(fps: number): number {
 	return 1000 / Math.max(1, fps);
 }
 
+export function waitForAbortableResult(
+	signal: AbortSignal,
+	subscribe: (settle: (value: boolean) => void) => () => void,
+): Promise<boolean> {
+	if (signal.aborted) return Promise.resolve(false);
+	return new Promise((resolve) => {
+		let settled = false;
+		let cleanup: (() => void) | null = null;
+		let cleanupPending = false;
+		const settle = (value: boolean) => {
+			if (settled) return;
+			settled = true;
+			signal.removeEventListener("abort", onAbort);
+			if (cleanup) cleanup();
+			else cleanupPending = true;
+			resolve(value);
+		};
+		const onAbort = () => settle(false);
+		signal.addEventListener("abort", onAbort, { once: true });
+		cleanup = subscribe(settle);
+		if (cleanupPending) cleanup();
+	});
+}
+
+export function waitForCineDeadline(delayMs: number, signal: AbortSignal): Promise<boolean> {
+	return waitForAbortableResult(signal, (settle) => {
+		const timer = setTimeout(() => settle(true), Math.max(0, delayMs));
+		return () => clearTimeout(timer);
+	});
+}
+
 export type RenderPacedCineOptions = {
 	initialFrame: number;
 	totalFrames: number;
