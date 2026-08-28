@@ -1168,6 +1168,30 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the independently generated prepared DICOM corpus"]
+    fn recognizes_prepared_deflated_image_frame_segmentation_metadata() {
+        let root = std::env::var_os("DCMVIEW_PREPARED_CORPUS")
+            .map(std::path::PathBuf::from)
+            .expect("set DCMVIEW_PREPARED_CORPUS to the generated suite directory");
+        let path = root
+            .join("extended-deflate")
+            .join("derived/seg/binary_multiframe_deflated_image_frame/instance.dcm");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect prepared SEG")
+        else {
+            panic!("prepared SEG should be selected");
+        };
+
+        assert_eq!(file.sop_class_uid, "1.2.840.10008.5.1.4.1.1.66.4");
+        assert_eq!(file.transfer_syntax_uid, "1.2.840.10008.1.2.8.1");
+        assert_eq!(file.modality, "SEG");
+        assert_eq!(file.frame_count, 2);
+        assert_eq!((file.rows, file.columns), (2, 2));
+        assert_eq!(file.bits_allocated, 1);
+        assert!(file.has_pixels);
+    }
+
+    #[test]
     fn rejects_partial_or_non_finite_geometry_values() {
         assert_eq!(split_dicom_values(" 1 \\ 2 \\ \\ 3 "), ["1", "2", "", "3"]);
 

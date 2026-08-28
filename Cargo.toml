@@ -20,10 +20,10 @@ remote-fixtures = ["dep:dicom-test-files"]
 
 [dependencies]
 # DICOM
-dicom-object = "0.9"
-dicom-core = "0.9"
+dicom-object = "0.9.1"
+dicom-core = "0.9.1"
 dicom-dictionary-std = "0.9"
-dicom-pixeldata = { version = "0.9", features = ["charls", "image", "jpegxl", "native", "openjp2"] }
+dicom-pixeldata = { version = "0.9.1", features = ["charls", "image", "jpegxl", "native", "openjp2"] }
 
 # Web server
 axum = { version = "0.8", features = ["macros"] }

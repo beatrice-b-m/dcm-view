@@ -840,6 +840,10 @@ mod tests {
                 &["source_image"],
             ),
             (
+                "derived/seg/binary_multiframe_deflated_image_frame/instance.dcm",
+                &["source_image"],
+            ),
+            (
                 "derived/seg/fractional_probability_multiframe_explicit_le/instance.dcm",
                 &["source_image"],
             ),
@@ -913,10 +917,7 @@ mod tests {
             assert_eq!(actual, *expected, "{relative_path}: {edges:?}");
             total += actual.len();
         }
-        // The 25th/42nd edge is the structurally identical binary SEG encoded
-        // with Deflated Image Frame Compression, which dicom-object 0.9 cannot
-        // open without a transfer-syntax registry extension. The SEG structure
-        // is covered by the focused synthetic and explicit-LE corpus cases.
-        assert_eq!(total, 41);
+        assert_eq!(cases.len(), 25);
+        assert_eq!(total, 42);
     }
 }
