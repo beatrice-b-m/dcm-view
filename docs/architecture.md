@@ -177,6 +177,12 @@ expanded to one byte per sample. Float and double-float objects are pixel-render
 real-world-value mapping remains a separate semantic capability rather than an
 implicit part of the display pipeline.
 
+The frontend uses raw frames for local interactive window/level when their
+single-channel 8- or 16-bit layout is supported by the browser renderer. For
+other server-renderable layouts (including one-bit, 32-bit, and floating-point
+samples), selecting the window/level tool falls back to parameterized display
+PNG requests instead of replacing the image with a raw-renderer error.
+
 For supported 8-bit RGB display paths, a structurally valid source ICC profile
 is preserved in the PNG `iCCP` chunk. The profile may come from the top-level
 ICC Profile attribute or from Optical Path Sequence; nested profiles are used

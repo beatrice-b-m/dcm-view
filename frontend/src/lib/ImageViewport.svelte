@@ -61,7 +61,7 @@
 		WlRendererSuccess,
 	} from "./workers/wlRendererProtocol";
 
-	type PipelineMode = "cine" | "diagnostic_wl";
+	type PipelineMode = "cine" | "diagnostic_wl" | "server_wl";
 	type TransformState = { scale: number; tx: number; ty: number; fit: boolean };
 	type ZoomAnchor = {
 		clientX: number;
@@ -145,6 +145,7 @@
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let roiSvgEl: SVGSVGElement | undefined = $state();
 	let currentRawFrame = $state<RawFrame | null>(null);
+	let rawWindowLevelFallbackByFile = $state<Record<number, boolean>>({});
 	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
 	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
 	let annotationLoadingByFile = $state<Record<number, boolean | undefined>>({});
@@ -250,7 +251,11 @@
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
 	const isDragging = $derived(dragState !== null);
 	const pipelineMode = $derived<PipelineMode>(
-		activeTool === "window_level" ? "diagnostic_wl" : "cine",
+		activeTool === "window_level"
+			? rawWindowLevelFallbackByFile[activeFile.index]
+				? "server_wl"
+				: "diagnostic_wl"
+			: "cine",
 	);
 
 	const displayWindow = $derived(
@@ -263,7 +268,9 @@
 				windowWidth,
 				windowMode,
 			)
-			: windowCenter !== null && windowWidth !== null
+			: liveWindowCenter !== null && liveWindowWidth !== null
+				? { wc: liveWindowCenter, ww: liveWindowWidth }
+				: windowCenter !== null && windowWidth !== null
 				? { wc: windowCenter, ww: windowWidth }
 				: activeFile?.default_window
 					? { wc: activeFile.default_window.center, ww: activeFile.default_window.width }
@@ -558,6 +565,10 @@
 		return {};
 	}
 
+	function usesDisplayPipeline(): boolean {
+		return pipelineMode !== "diagnostic_wl";
+	}
+
 	function buildDisplayKey(fileIndex: number, frameIndex: number, options: DisplayFrameWindowOptions): string {
 		return displayFrameCacheKey(fileIndex, frameIndex, options);
 	}
@@ -703,13 +714,13 @@
 	}
 
 	async function drawDisplayEntry(key: string, entry: DisplayFrameCacheEntry, generation: number): Promise<void> {
-		if (!canvasEl || pipelineMode !== "cine") return;
+		if (!canvasEl || !usesDisplayPipeline()) return;
 		const ctx = canvasEl.getContext("2d", { alpha: false });
 		if (!ctx) return;
 
 		if (typeof createImageBitmap === "function") {
 			const bitmap = entry.bitmap ?? await startDisplayDecode(key, entry);
-			if (generation !== requestGeneration || !canvasEl || pipelineMode !== "cine") return;
+			if (generation !== requestGeneration || !canvasEl || !usesDisplayPipeline()) return;
 			canvasEl.width = bitmap.width;
 			canvasEl.height = bitmap.height;
 			ctx.drawImage(bitmap, 0, 0);
@@ -726,7 +737,7 @@
 			});
 			img.src = fallbackUrl;
 			await loaded;
-			if (generation !== requestGeneration || !canvasEl || pipelineMode !== "cine") return;
+			if (generation !== requestGeneration || !canvasEl || !usesDisplayPipeline()) return;
 			canvasEl.width = img.naturalWidth;
 			canvasEl.height = img.naturalHeight;
 			ctx.drawImage(img, 0, 0);
@@ -941,8 +952,10 @@ function startDisplayPrefetch(
 			const validationError = validateRenderableRawFrame(rawFrame);
 			if (validationError) {
 				currentRawFrame = null;
-				loading = false;
-				loadError = validationError;
+				rawWindowLevelFallbackByFile = {
+					...rawWindowLevelFallbackByFile,
+					[fileIndex]: true,
+				};
 				return;
 			}
 			cacheRawFrame(fileIndex, frameIndex, rawFrame);
@@ -962,8 +975,11 @@ function startDisplayPrefetch(
 		} catch (error) {
 			if ((error as Error).name === "AbortError") return;
 			if (generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
-			loading = false;
-			loadError = (error as Error).message || "Failed to load frame";
+			currentRawFrame = null;
+			rawWindowLevelFallbackByFile = {
+				...rawWindowLevelFallbackByFile,
+				[fileIndex]: true,
+			};
 		} finally {
 			if (rawRequestCtrl === ctrl) rawRequestCtrl = null;
 		}
@@ -979,11 +995,11 @@ function startDisplayPrefetch(
 		const cacheKey = buildDisplayKey(fileIndex, frameIndex, windowOptions);
 		try {
 			const entry = await ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions);
-			if (generation !== requestGeneration || pipelineMode !== "cine") return;
+			if (generation !== requestGeneration || !usesDisplayPipeline()) return;
 			loading = false;
 			loadError = null;
 			await drawDisplayEntry(cacheKey, entry, generation);
-			if (generation !== requestGeneration || pipelineMode !== "cine") return;
+			if (generation !== requestGeneration || !usesDisplayPipeline()) return;
 			markDisplayFrameRendered(fileIndex, frameIndex);
 
 			startDisplayPrefetch(
@@ -996,7 +1012,7 @@ function startDisplayPrefetch(
 			);
 		} catch (error) {
 			if ((error as Error).name === "AbortError") return;
-			if (generation !== requestGeneration || pipelineMode !== "cine") return;
+			if (generation !== requestGeneration || !usesDisplayPipeline()) return;
 			loading = false;
 			loadError = (error as Error).message || "Failed to load frame";
 			cinePlaying = false;
@@ -1166,7 +1182,7 @@ function startDisplayPrefetch(
 	$effect(() => {
 		const mode = pipelineMode;
 		requestGeneration += 1;
-		if (mode === "cine") {
+		if (mode !== "diagnostic_wl") {
 			rawRequestCtrl?.abort();
 			rawRequestCtrl = null;
 			rawPrefetchCtrl?.abort();
@@ -1194,7 +1210,11 @@ function startDisplayPrefetch(
 		const mode = pipelineMode;
 		const windowOptions = currentDisplayWindowOptions();
 		if (externallyManaged) return;
-		const canPlay = canRunCinePlayback(mode, file.has_pixels, file.frame_count);
+		const canPlay = canRunCinePlayback(
+			mode === "cine" ? "cine" : "diagnostic_wl",
+			file.has_pixels,
+			file.frame_count,
+		);
 		if (playing && !canPlay) {
 			cinePlaying = false;
 			return;
@@ -1250,10 +1270,10 @@ function startDisplayPrefetch(
 		const fileIndex = activeFile.index;
 		const frameIndex = currentFrame;
 		const generation = ++requestGeneration;
-		const modeWc = mode === "cine" ? windowCenter : null;
-		const modeWw = mode === "cine" ? windowWidth : null;
-		const modePreset = mode === "cine" ? selectedPresetId : "";
-		const modeWindowMode = mode === "cine" ? windowMode : "default";
+		const modeWc = mode !== "diagnostic_wl" ? windowCenter : null;
+		const modeWw = mode !== "diagnostic_wl" ? windowWidth : null;
+		const modePreset = mode !== "diagnostic_wl" ? selectedPresetId : "";
+		const modeWindowMode = mode !== "diagnostic_wl" ? windowMode : "default";
 		void modeWc;
 		void modeWw;
 		void modePreset;
@@ -1261,10 +1281,10 @@ function startDisplayPrefetch(
 
 		loading = true;
 		loadError = null;
-		if (mode === "cine") {
-			void loadDisplayFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
-		} else {
+		if (mode === "diagnostic_wl") {
 			void loadRawFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
+		} else {
+			void loadDisplayFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
 		}
 	});
 
@@ -1448,17 +1468,17 @@ function startDisplayPrefetch(
 			let nextDragState: DragState = null;
 			switch (activeTool) {
 				case "window_level": {
-					if (pipelineMode !== "diagnostic_wl" || !currentRawFrame) {
-						break;
-					}
-					const baseWindow = resolveDisplayWindow(
-						currentRawFrame,
-						liveWindowCenter,
-						liveWindowWidth,
-						windowCenter,
-						windowWidth,
-						windowMode,
-					);
+					if (pipelineMode === "diagnostic_wl" && !currentRawFrame) break;
+					const baseWindow = pipelineMode === "diagnostic_wl" && currentRawFrame
+						? resolveDisplayWindow(
+							currentRawFrame,
+							liveWindowCenter,
+							liveWindowWidth,
+							windowCenter,
+							windowWidth,
+							windowMode,
+						)
+						: displayWindow;
 					nextDragState = {
 						mode: "wl",
 						startX: event.clientX,
