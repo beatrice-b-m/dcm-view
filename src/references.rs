@@ -181,10 +181,7 @@ pub fn resolve_reference_edges(
         .collect()
 }
 
-fn reference_matches_candidate(
-    target: &ReferenceIdentity,
-    candidate: &ReferenceCandidate,
-) -> bool {
+fn reference_matches_candidate(target: &ReferenceIdentity, candidate: &ReferenceCandidate) -> bool {
     if target.sop_instance_uid.is_none() && target.series_instance_uid.is_none() {
         return false;
     }
@@ -214,7 +211,10 @@ fn navigable_frame_indices(frame_numbers: &[u32], frame_count: u32) -> Vec<u32> 
     }
     let mut indices = Vec::new();
     for frame_number in frame_numbers {
-        let Some(index) = frame_number.checked_sub(1).filter(|index| *index < frame_count) else {
+        let Some(index) = frame_number
+            .checked_sub(1)
+            .filter(|index| *index < frame_count)
+        else {
             continue;
         };
         if !indices.contains(&index) {
