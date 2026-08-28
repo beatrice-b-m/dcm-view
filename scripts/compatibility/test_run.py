@@ -10,11 +10,13 @@ from pathlib import Path
 from scripts.compatibility.run import (
     PROBED_CAPABILITIES,
     normalized_report,
+    pixel_geometry_observation,
     png_pixels,
     series_observation,
     validate_json_schema,
     validate_report,
     validate_visual,
+    unprobed_capabilities,
 )
 
 
@@ -28,6 +30,84 @@ def grayscale_png(values: bytes, width: int, height: int) -> bytes:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_pixel_geometry_requires_exact_api_evidence_without_claiming_ui_rendering(self) -> None:
+        expected = {
+            "expected_nonsquare_spacing": {
+                "pixel_spacing": {
+                    "row_spacing_mm": 0.6,
+                    "column_spacing_mm": 0.3,
+                },
+                "pixel_aspect_ratio": None,
+            },
+        }
+        observed = pixel_geometry_observation(
+            {"pixel_aspect_ratio": 2.0}, expected
+        )
+
+        self.assertEqual(observed["source"], "pixel_spacing")
+        self.assertEqual(observed["expected_row_to_column_ratio"], 2.0)
+        self.assertEqual(observed["observed_row_to_column_ratio"], 2.0)
+        self.assertTrue(observed["exact_evidence"])
+        self.assertTrue(observed["passed"])
+        self.assertEqual(observed["evidence_scope"], "api_files_metadata")
+        self.assertFalse(observed["ui_rendering_verified"])
+        self.assertNotIn(
+            "interpret_pixel_geometry",
+            unprobed_capabilities(
+                ["interpret_pixel_geometry"], {"pixel_geometry": observed}
+            ),
+        )
+
+    def test_pixel_aspect_ratio_manifest_variant_uses_vertical_horizontal_extent(self) -> None:
+        expected = {
+            "expected_nonsquare_spacing": {
+                "pixel_spacing": None,
+                "pixel_aspect_ratio": {
+                    "vertical_extent": 2,
+                    "horizontal_extent": 1,
+                },
+            },
+        }
+        observed = pixel_geometry_observation(
+            {"pixel_aspect_ratio": 2.0}, expected
+        )
+
+        self.assertEqual(observed["source"], "pixel_aspect_ratio")
+        self.assertTrue(observed["exact_evidence"])
+
+    def test_pixel_geometry_remains_unprobed_without_an_exact_api_ratio(self) -> None:
+        expected = {
+            "expected_nonsquare_spacing": {
+                "pixel_spacing": {
+                    "row_spacing_mm": 0.6,
+                    "column_spacing_mm": 0.3,
+                },
+            },
+        }
+        observed = pixel_geometry_observation(
+            {"pixel_aspect_ratio": None}, expected
+        )
+
+        self.assertFalse(observed["exact_evidence"])
+        self.assertFalse(observed["passed"])
+        self.assertIn(
+            "interpret_pixel_geometry",
+            unprobed_capabilities(
+                ["interpret_pixel_geometry"], {"pixel_geometry": observed}
+            ),
+        )
+
+        mismatch = pixel_geometry_observation(
+            {"pixel_aspect_ratio": 1.0}, expected
+        )
+        self.assertFalse(mismatch["exact_evidence"])
+        self.assertIn(
+            "interpret_pixel_geometry",
+            unprobed_capabilities(
+                ["interpret_pixel_geometry"], {"pixel_geometry": mismatch}
+            ),
+        )
+
     def test_rle_capability_is_backed_by_display_and_lossless_raw_probes(self) -> None:
         self.assertIn("decode_rle_lossless_pixels", PROBED_CAPABILITIES)
         self.assertIn("render_color", PROBED_CAPABILITIES)

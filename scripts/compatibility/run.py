@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -61,6 +62,18 @@ PROBED_CAPABILITIES = {
     "organize_series_by_study_and_frame_of_reference",
     "reconstruct_wsi_pyramid",
 }
+CONDITIONAL_CAPABILITY_CHECKS = {
+    "interpret_pixel_geometry": "pixel_geometry",
+}
+
+
+def _positive_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
 
 ASCENDING_GRAYSCALE_PATTERNS = {
     "1x1_monochrome_u16_tiny_maximum",
@@ -437,6 +450,55 @@ def poll_files(base_url: str, request_timeout: float, startup_deadline: float) -
     raise TimeoutError("discovery did not report scan_complete before startup deadline")
 
 
+def pixel_geometry_observation(
+    file_summary: dict[str, Any], expected: dict[str, Any]
+) -> dict[str, Any]:
+    geometry = expected.get("expected_nonsquare_spacing") or {}
+    pixel_spacing = geometry.get("pixel_spacing") or {}
+    pixel_aspect_ratio = geometry.get("pixel_aspect_ratio") or {}
+    source = None
+    expected_ratio = None
+    if isinstance(pixel_spacing, dict):
+        row = pixel_spacing.get("row_spacing_mm")
+        column = pixel_spacing.get("column_spacing_mm")
+        if all(_positive_finite_number(value) for value in (row, column)):
+            source = "pixel_spacing"
+            expected_ratio = row / column
+    if expected_ratio is None and isinstance(pixel_aspect_ratio, dict):
+        vertical = pixel_aspect_ratio.get("vertical_extent")
+        horizontal = pixel_aspect_ratio.get("horizontal_extent")
+        if all(_positive_finite_number(value) for value in (vertical, horizontal)):
+            source = "pixel_aspect_ratio"
+            expected_ratio = vertical / horizontal
+
+    observed_ratio = file_summary.get("pixel_aspect_ratio")
+    exact_evidence = (
+        _positive_finite_number(expected_ratio)
+        and _positive_finite_number(observed_ratio)
+        and expected_ratio == observed_ratio
+    )
+    return {
+        "evidence_scope": "api_files_metadata",
+        "ui_rendering_verified": False,
+        "source": source,
+        "expected_row_to_column_ratio": expected_ratio,
+        "observed_row_to_column_ratio": observed_ratio,
+        "exact_evidence": exact_evidence,
+        "passed": exact_evidence,
+    }
+
+
+def unprobed_capabilities(
+    expected_capabilities: list[str], checks: dict[str, Any]
+) -> list[str]:
+    unprobed = set(expected_capabilities) - PROBED_CAPABILITIES
+    for capability, check_name in CONDITIONAL_CAPABILITY_CHECKS.items():
+        check = checks.get(check_name) or {}
+        if capability in unprobed and check.get("exact_evidence") is True:
+            unprobed.remove(capability)
+    return sorted(unprobed)
+
+
 def series_observation(
     catalog: dict[str, Any], file_summary: dict[str, Any], expected: dict[str, Any]
 ) -> dict[str, Any]:
@@ -553,6 +615,8 @@ def probe_case(
     pixel_data = expected.get("pixel_data") or {}
     checks: dict[str, Any] = {"mapped_after_scan": True}
     checks["series_navigation"] = series_observation(series_catalog, file_summary, expected)
+    if "interpret_pixel_geometry" in expected_capabilities:
+        checks["pixel_geometry"] = pixel_geometry_observation(file_summary, expected)
     http: dict[str, Any] = {"series_catalog": series_http}
     errors: list[dict[str, Any]] = []
 
@@ -673,7 +737,7 @@ def _finish_result(
     safety: str,
 ) -> dict[str, Any]:
     occurrence = entry["campaign_occurrence"]
-    unprobed = sorted(set(expected_capabilities) - PROBED_CAPABILITIES)
+    unprobed = unprobed_capabilities(expected_capabilities, checks)
     statuses = [row["status"] for row in http.values()]
     controlled_gap = any(status == 422 for status in statuses)
     server_failure = any(status >= 500 for status in statuses)
@@ -694,6 +758,7 @@ def _finish_result(
             "frame_navigation",
             "lossless_frame_hash",
             "lossless_frame_hashes",
+            "pixel_geometry",
         ):
             if name in checks and checks[name].get("passed") is not True:
                 validation_failures.append(name)
