@@ -68,6 +68,7 @@ PROBED_CAPABILITIES = {
 }
 CONDITIONAL_CAPABILITY_CHECKS = {
     "interpret_pixel_geometry": "pixel_geometry",
+    "read_overlay_plane": "overlay_display",
     "resolve_frame_references": "references",
     "resolve_references": "references",
 }
@@ -286,16 +287,10 @@ def evidence(response: dict[str, Any], header_names: tuple[str, ...] = ()) -> di
 
 
 def png_pixels(payload: bytes) -> tuple[int, int, list[tuple[int, int, int, int]]]:
-    if payload[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("response is not a PNG")
-    offset = 8
+    chunks = png_chunks(payload)
     width = height = bit_depth = color_type = None
     compressed = bytearray()
-    while offset + 12 <= len(payload):
-        length = struct.unpack(">I", payload[offset : offset + 4])[0]
-        kind = payload[offset + 4 : offset + 8]
-        data = payload[offset + 8 : offset + 8 + length]
-        offset += 12 + length
+    for kind, data in chunks:
         if kind == b"IHDR":
             width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(
                 ">IIBBBBB", data
@@ -304,8 +299,6 @@ def png_pixels(payload: bytes) -> tuple[int, int, list[tuple[int, int, int, int]
                 raise ValueError("unsupported PNG encoding")
         elif kind == b"IDAT":
             compressed.extend(data)
-        elif kind == b"IEND":
-            break
     if None in (width, height, bit_depth, color_type) or bit_depth != 8:
         raise ValueError("unsupported PNG header")
     channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(color_type)
@@ -352,6 +345,170 @@ def png_pixels(payload: bytes) -> tuple[int, int, list[tuple[int, int, int, int]
             else:
                 pixels.append(tuple(values))  # type: ignore[arg-type]
     return int(width), int(height), pixels
+
+
+def png_chunks(payload: bytes) -> list[tuple[bytes, bytes]]:
+    if payload[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("response is not a PNG")
+    offset = 8
+    chunks: list[tuple[bytes, bytes]] = []
+    while offset + 12 <= len(payload):
+        length = struct.unpack(">I", payload[offset : offset + 4])[0]
+        kind = payload[offset + 4 : offset + 8]
+        chunk_end = offset + 12 + length
+        if chunk_end > len(payload):
+            raise ValueError(f"truncated PNG {kind.decode('latin-1')} chunk")
+        data = payload[offset + 8 : offset + 8 + length]
+        expected_crc = struct.unpack(">I", payload[offset + 8 + length : chunk_end])[0]
+        if zlib.crc32(kind + data) != expected_crc:
+            raise ValueError(f"invalid PNG {kind.decode('latin-1')} chunk CRC")
+        chunks.append((kind, data))
+        offset = chunk_end
+        if kind == b"IEND":
+            break
+    if not chunks or chunks[-1][0] != b"IEND":
+        raise ValueError("PNG is missing IEND")
+    return chunks
+
+
+def png_icc_profile(payload: bytes) -> tuple[str, bytes] | None:
+    profiles = [data for kind, data in png_chunks(payload) if kind == b"iCCP"]
+    if not profiles:
+        return None
+    if len(profiles) != 1:
+        raise ValueError("PNG contains multiple iCCP chunks")
+    data = profiles[0]
+    separator = data.find(b"\0")
+    if separator <= 0 or separator + 2 > len(data):
+        raise ValueError("PNG iCCP chunk has an invalid profile name")
+    if data[separator + 1] != 0:
+        raise ValueError("PNG iCCP chunk uses an unsupported compression method")
+    try:
+        name = data[:separator].decode("latin-1")
+    except UnicodeDecodeError as error:
+        raise ValueError("PNG iCCP profile name is invalid") from error
+    return name, zlib.decompress(data[separator + 2 :])
+
+
+def overlay_display_observation(
+    expected: dict[str, Any], pixels: list[tuple[int, int, int, int]]
+) -> dict[str, Any]:
+    semantics = expected.get("expected_semantics") or {}
+    image = expected.get("image") or {}
+    exact_contract = (
+        semantics.get("overlay_pattern") == "2x2_diagonal_overlay"
+        and image.get("rows") == 2
+        and image.get("columns") == 2
+    )
+    expected_white_indices = [0, 3] if exact_contract else []
+    observed_white_indices = [
+        index for index, pixel in enumerate(pixels) if pixel[:3] == (255, 255, 255)
+    ]
+    passed = (
+        exact_contract
+        and len(pixels) == 4
+        and all(pixels[index][:3] == (255, 255, 255) for index in expected_white_indices)
+        and all(pixels[index][:3] != (255, 255, 255) for index in (1, 2))
+    )
+    return {
+        "evidence_scope": "decoded_display_png_pixels",
+        "declared_pattern": semantics.get("overlay_pattern"),
+        "expected_white_indices": expected_white_indices,
+        "observed_white_indices": observed_white_indices,
+        "exact_evidence": passed,
+        "passed": passed,
+        "caveat": None if exact_contract else "manifest does not declare a supported exact overlay pattern",
+    }
+
+
+def shutter_display_observation(
+    expected: dict[str, Any], pixels: list[tuple[int, int, int, int]]
+) -> dict[str, Any]:
+    semantics = expected.get("expected_semantics") or {}
+    shutter = semantics.get("display_shutter") or {}
+    image = expected.get("image") or {}
+    try:
+        bounds = {
+            "left": int(shutter.get("left_vertical_edge")),
+            "right": int(shutter.get("right_vertical_edge")),
+            "upper": int(shutter.get("upper_horizontal_edge")),
+            "lower": int(shutter.get("lower_horizontal_edge")),
+        }
+    except (TypeError, ValueError):
+        bounds = None
+    full_frame = bounds == {
+        "left": 1,
+        "right": image.get("columns"),
+        "upper": 1,
+        "lower": image.get("rows"),
+    }
+    luminance = [round(0.2126 * r + 0.7152 * g + 0.0722 * b, 3) for r, g, b, _ in pixels]
+    non_regression = (
+        full_frame
+        and len(pixels) == image.get("rows", 0) * image.get("columns", 0)
+        and luminance == sorted(luminance)
+    )
+    return {
+        "evidence_scope": "decoded_display_png_pixels",
+        "shape": shutter.get("shape"),
+        "declared_bounds": bounds,
+        "opening_covers_full_frame": full_frame,
+        "non_regression_passed": non_regression,
+        "exact_evidence": False,
+        "passed": non_regression,
+        "caveat": (
+            "the prepared rectangular opening covers the full frame, so display pixels prove "
+            "bounds-preserving non-regression but cannot prove outside-opening replacement"
+        ),
+    }
+
+
+def icc_profile_observation(expected: dict[str, Any], payload: bytes) -> dict[str, Any]:
+    contract = expected.get("expected_icc_profile") or {}
+    expected_hash = contract.get("profile_sha256")
+    expected_size = contract.get("profile_size_bytes")
+    try:
+        profile = png_icc_profile(payload)
+    except (ValueError, zlib.error) as error:
+        return {
+            "evidence_scope": "display_png_iccp_chunk",
+            "expected_sha256": expected_hash,
+            "expected_size_bytes": expected_size,
+            "observed_sha256": None,
+            "observed_size_bytes": None,
+            "profile_present": False,
+            "exact_evidence": False,
+            "passed": False,
+            "error": str(error),
+            "numeric_transform_verified": False,
+            "path_specific_mapping_verified": False,
+        }
+    if profile is None:
+        name = None
+        profile_bytes = None
+    else:
+        name, profile_bytes = profile
+    observed_hash = hashlib.sha256(profile_bytes).hexdigest() if profile_bytes is not None else None
+    observed_size = len(profile_bytes) if profile_bytes is not None else None
+    exact_contract = isinstance(expected_hash, str) and isinstance(expected_size, int)
+    passed = exact_contract and observed_hash == expected_hash and observed_size == expected_size
+    return {
+        "evidence_scope": "display_png_iccp_chunk",
+        "profile_name": name,
+        "profile_present": profile_bytes is not None,
+        "expected_sha256": expected_hash,
+        "observed_sha256": observed_hash,
+        "expected_size_bytes": expected_size,
+        "observed_size_bytes": observed_size,
+        "exact_evidence": passed,
+        "passed": passed,
+        "numeric_transform_verified": False,
+        "path_specific_mapping_verified": False,
+        "caveat": (
+            "byte-identical iCCP preservation does not prove a numeric color transform or "
+            "frame-to-optical-path profile mapping"
+        ),
+    }
 
 
 def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, int]]) -> dict[str, Any]:
@@ -780,6 +937,14 @@ def probe_case(
                     checks["visual"] = validate_visual(
                         (expected.get("expected_visual_checks") or {}).get("pattern"), pixels
                     )
+                    if "read_overlay_plane" in expected_capabilities:
+                        checks["overlay_display"] = overlay_display_observation(expected, pixels)
+                    if "apply_display_shutter" in expected_capabilities:
+                        checks["display_shutter"] = shutter_display_observation(expected, pixels)
+                    if expected.get("expected_icc_profile"):
+                        checks["icc_profile"] = icc_profile_observation(
+                            expected, display_first["body"]
+                        )
                 except (ValueError, zlib.error) as error:
                     checks["png_dimensions"] = {"passed": False, "error": str(error)}
             if frame_count > 1:
@@ -877,6 +1042,9 @@ def _finish_result(
             "lossless_frame_hashes",
             "pixel_geometry",
             "references",
+            "overlay_display",
+            "display_shutter",
+            "icc_profile",
         ):
             if name in checks and checks[name].get("passed") is not True:
                 validation_failures.append(name)

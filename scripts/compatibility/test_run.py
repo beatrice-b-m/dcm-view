@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import struct
 import subprocess
 import sys
@@ -10,10 +11,13 @@ from pathlib import Path
 from scripts.compatibility.run import (
     PROBED_CAPABILITIES,
     normalized_report,
+    icc_profile_observation,
+    overlay_display_observation,
     pixel_geometry_observation,
     png_pixels,
     reference_observation,
     series_observation,
+    shutter_display_observation,
     validate_json_schema,
     validate_report,
     validate_visual,
@@ -21,16 +25,105 @@ from scripts.compatibility.run import (
 )
 
 
-def grayscale_png(values: bytes, width: int, height: int) -> bytes:
+def grayscale_png(
+    values: bytes, width: int, height: int, icc_profile: bytes | None = None
+) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
     header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
     rows = b"".join(b"\x00" + values[row * width : (row + 1) * width] for row in range(height))
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    iccp = b""
+    if icc_profile is not None:
+        iccp = chunk(b"iCCP", b"DICOM ICC\0\0" + zlib.compress(icc_profile))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + iccp
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
 
 
 class RunnerTests(unittest.TestCase):
+    def test_overlay_capability_requires_exact_declared_display_pixels(self) -> None:
+        expected = {
+            "image": {"rows": 2, "columns": 2},
+            "expected_semantics": {"overlay_pattern": "2x2_diagonal_overlay"},
+        }
+        pixels = [
+            (255, 255, 255, 255),
+            (85, 85, 85, 255),
+            (170, 170, 170, 255),
+            (255, 255, 255, 255),
+        ]
+        observed = overlay_display_observation(expected, pixels)
+        self.assertTrue(observed["exact_evidence"])
+        self.assertEqual(observed["expected_white_indices"], [0, 3])
+        self.assertNotIn(
+            "read_overlay_plane",
+            unprobed_capabilities(
+                ["read_overlay_plane"], {"overlay_display": observed}
+            ),
+        )
+
+        mismatch = overlay_display_observation(expected, pixels[:3] + [(0, 0, 0, 255)])
+        self.assertFalse(mismatch["exact_evidence"])
+        self.assertIn(
+            "read_overlay_plane",
+            unprobed_capabilities(
+                ["read_overlay_plane"], {"overlay_display": mismatch}
+            ),
+        )
+
+    def test_full_frame_shutter_records_non_regression_without_claiming_application(self) -> None:
+        expected = {
+            "image": {"rows": 2, "columns": 2},
+            "expected_semantics": {
+                "display_shutter": {
+                    "shape": "RECTANGULAR",
+                    "left_vertical_edge": "1",
+                    "right_vertical_edge": "2",
+                    "upper_horizontal_edge": "1",
+                    "lower_horizontal_edge": "2",
+                }
+            },
+        }
+        pixels = [(value, value, value, 255) for value in (0, 85, 170, 255)]
+        observed = shutter_display_observation(expected, pixels)
+        self.assertTrue(observed["opening_covers_full_frame"])
+        self.assertTrue(observed["non_regression_passed"])
+        self.assertFalse(observed["exact_evidence"])
+        self.assertIn("cannot prove outside-opening replacement", observed["caveat"])
+        self.assertIn(
+            "apply_display_shutter",
+            unprobed_capabilities(
+                ["apply_display_shutter"], {"display_shutter": observed}
+            ),
+        )
+
+    def test_icc_probe_hashes_png_profile_without_claiming_color_transform(self) -> None:
+        profile = b"synthetic ICC profile bytes"
+        expected = {
+            "expected_icc_profile": {
+                "profile_sha256": hashlib.sha256(profile).hexdigest(),
+                "profile_size_bytes": len(profile),
+            }
+        }
+        observed = icc_profile_observation(
+            expected, grayscale_png(bytes((0, 85, 170, 255)), 2, 2, profile)
+        )
+        self.assertTrue(observed["profile_present"])
+        self.assertTrue(observed["exact_evidence"])
+        self.assertFalse(observed["numeric_transform_verified"])
+        self.assertFalse(observed["path_specific_mapping_verified"])
+        self.assertIn(
+            "apply_icc_profile",
+            unprobed_capabilities(
+                ["apply_icc_profile"], {"icc_profile": observed}
+            ),
+        )
+
     def test_reference_observation_requires_exact_identity_and_local_frames(self) -> None:
         expected = [
             {
