@@ -69,6 +69,7 @@ json_handler_response!(
     FilesResponse,
     FrameInfo,
     Vec<TagNode>,
+    TagNode,
     EmbedRoiAnnotations,
 );
 
@@ -233,6 +234,26 @@ fn register_api_endpoint(
                     |state: State<AppState>, path: Result<Path<usize>, PathRejection>| async move {
                         let response: handler_result_type!(api_contracts::FileTags) =
                             handlers::tags(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileTagSelect => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileTagSelect>(endpoint);
+            require_no_request::<api_contracts::FileTagSelect>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: Result<Path<usize>, PathRejection>,
+                     query: Result<
+                        Query<<api_contracts::FileTagSelect as ApiEndpointSpec>::Query>,
+                        QueryRejection,
+                    >| async move {
+                        let response: handler_result_type!(api_contracts::FileTagSelect) =
+                            handlers::select_tag(state, path, query).await;
                         response
                     },
                 ),

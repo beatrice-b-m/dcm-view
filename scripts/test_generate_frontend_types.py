@@ -27,6 +27,9 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("request: EmbedRoiAnnotations;", output)
 		self.assertIn("response: EmbedRoiAnnotations;", output)
 		self.assertIn("query: FrameQuery;", output)
+		self.assertIn("fileTagSelect: {", output)
+		self.assertIn("query: TagQuery;", output)
+		self.assertIn("export interface TagQuery", output)
 		self.assertIn("responseHeaders: CacheResponseHeaders;", output)
 		self.assertIn("responseHeaders: RawFrameResponseHeaders;", output)
 		self.assertIn("responseHeaders: ExportResponseHeaders;", output)
@@ -197,7 +200,7 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 
 		with self.assertRaisesRegex(
 			ValueError,
-			"query parameters on a JSON endpoint",
+			"query parameters without a dedicated client encoder",
 		):
 			generator.render(mutated)
 

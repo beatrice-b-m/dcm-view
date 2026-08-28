@@ -10,6 +10,7 @@ import type {
 	JsonApiEndpointId,
 	RawFrameMetadata,
 	TagNode,
+	TagQuery,
 	WindowMode,
 } from "./generated/api-types";
 import {
@@ -39,6 +40,7 @@ export type {
 	HealthResponse,
 	RawFrameMetadata,
 	TagNode,
+	TagQuery,
 	TagValue,
 	WindowMode,
 	WindowPreset,
@@ -254,4 +256,23 @@ export async function fetchRawFrame(
 	const buffer = (await response.arrayBuffer()) as ApiEndpointResponse<"fileRawFrame">;
 	const metadata: RawFrameMetadata = parseRawFrameMetadata(response.headers);
 	return { metadata, buffer };
+}
+
+export async function fetchSelectedTag(
+	fileIndex: number,
+	query: TagQuery,
+	signal?: AbortSignal,
+): Promise<TagNode> {
+	const endpoint = API_ENDPOINTS.fileTagSelect;
+	const parameters = new URLSearchParams({ path: query.path });
+	if (query.offset !== undefined) parameters.set("offset", String(query.offset));
+	if (query.limit !== undefined) parameters.set("limit", String(query.limit));
+	const response = await fetch(
+		`${getApiEndpointPath("fileTagSelect", { index: fileIndex })}?${parameters}`,
+		{ method: endpoint.method, signal },
+	);
+	if (response.status !== endpoint.successStatus) {
+		throw await responseError(response, "selective tag fetch failed");
+	}
+	return (await response.json()) as TagNode;
 }

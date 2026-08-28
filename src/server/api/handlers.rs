@@ -2,7 +2,7 @@ use super::error::{self, ApiError};
 use super::state::AppState;
 use crate::api::contracts::{
     DiscoveryResult, EmbedRoiAnnotations, FileSummary, FilesResponse, FrameInfo, FrameQuery,
-    HealthResponse, TagNode, ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS,
+    HealthResponse, TagNode, TagQuery, ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS,
     EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
     RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS, RAW_FRAME_HEADER_DEFAULT_WC,
     RAW_FRAME_HEADER_DEFAULT_WW, RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
@@ -282,6 +282,30 @@ pub(super) async fn tags(
 
     state.cache_tags(index, nodes.clone());
     Ok(Json(nodes))
+}
+
+pub(super) async fn select_tag(
+    State(state): State<AppState>,
+    path: Result<Path<usize>, PathRejection>,
+    query: Result<Query<TagQuery>, QueryRejection>,
+) -> Result<Json<TagNode>, ApiError> {
+    let Path(index) = path.map_err(error::path_rejection)?;
+    let Query(query) = query.map_err(error::query_rejection)?;
+    let file = state
+        .registry()
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    let path = file.path.clone();
+    let selector = query.path;
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(tags::TAG_SELECT_DEFAULT_LIMIT);
+    let node = tokio::task::spawn_blocking(move || {
+        tags::build_selected_tag(&path, &selector, offset, limit)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("tag selection task failed: {error}")))?
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(Json(node))
 }
 
 fn insert_header_if_valid(headers: &mut HeaderMap, name: &'static str, value: String) {

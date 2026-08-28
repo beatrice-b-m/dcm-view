@@ -12,13 +12,14 @@ STRUCTS = (
 	"ViewerIdentity",
 	"HealthResponse",
 	"FrameQuery",
+	"TagQuery",
 	"EmbedRoiAnnotations",
 	"RawFrameMetadata",
 	"TagNode",
 	"ErrorResponse",
 )
 ENUMS = ("WindowMode", "SupportState", "ApiErrorCode", "TagValue")
-INPUT_STRUCTS = frozenset({"FrameQuery"})
+INPUT_STRUCTS = frozenset({"FrameQuery", "TagQuery"})
 
 ENDPOINT_TYPE_MARKERS = {
 	"NoQuery": "never",

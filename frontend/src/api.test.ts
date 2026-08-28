@@ -4,6 +4,7 @@ import {
 	displayFrameCacheKey,
 	displayFrameWindowCacheKey,
 	fetchFiles,
+	fetchSelectedTag,
 	frameUrl,
 	parseRawFrameMetadata,
 	updateAnnotations,
@@ -148,6 +149,30 @@ describe("generated endpoint fetch wrappers", () => {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(annotations),
 		});
+	});
+
+	it("encodes selective tag paths and sequence pages", async () => {
+		const node = {
+			tag: "(0008,2218)",
+			vr: "SQ",
+			keyword: "AnatomicRegionSequence",
+			value: { type: "sequence", items: [], truncated: true, total: 70 },
+		};
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify(node), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			fetchSelectedTag(4, { path: "(0008,2218)/69/(0008,0100)", offset: 2, limit: 8 }),
+		).resolves.toEqual(node);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/file/4/tags/select?path=%280008%2C2218%29%2F69%2F%280008%2C0100%29&offset=2&limit=8",
+			{ method: "GET", signal: undefined },
+		);
 	});
 
 	it("rejects a successful status that differs from the endpoint contract", async () => {

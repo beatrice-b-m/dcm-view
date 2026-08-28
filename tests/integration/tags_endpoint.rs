@@ -217,6 +217,31 @@ async fn limits_large_numeric_arrays_and_sequences() {
     );
     assert_eq!(sequence_row["value"]["truncated"], true);
     assert_eq!(sequence_row["value"]["total"], 70);
+
+    let page = test_server
+        .get("/api/file/0/tags/select?path=%280008%2C2218%29&offset=65&limit=3")
+        .await;
+    page.assert_status_ok();
+    let page: Value = page.json();
+    assert_eq!(page["tag"], "(0008,2218)");
+    assert_eq!(page["value"]["items"].as_array().unwrap().len(), 3);
+    assert_eq!(page["value"]["truncated"], true);
+    assert_eq!(page["value"]["total"], 70);
+
+    let nested = test_server
+        .get("/api/file/0/tags/select?path=%280008%2C2218%29%2F69%2F%280008%2C0100%29")
+        .await;
+    nested.assert_status_ok();
+    let nested: Value = nested.json();
+    assert_eq!(nested["tag"], "(0008,0100)");
+    assert_eq!(nested["value"]["value"], "T-00069");
+
+    let invalid = test_server
+        .get("/api/file/0/tags/select?path=%280008%2C2218%29%2Fmissing")
+        .await;
+    invalid.assert_status_bad_request();
+    let invalid: Value = invalid.json();
+    assert_eq!(invalid["code"], "bad_request");
 }
 
 fn write_multibyte_tag_fixture(path: &std::path::Path) {

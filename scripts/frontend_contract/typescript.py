@@ -49,6 +49,7 @@ def ts_type(rust_type: str, *, option_as_optional: bool = False) -> str:
 		"TagNode",
 		"TagValue",
 		"WindowMode",
+		"TagQuery",
 		"ApiErrorCode",
 		"SupportState",
 	}:

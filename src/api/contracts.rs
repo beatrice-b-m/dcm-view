@@ -249,6 +249,20 @@ define_api_endpoints! {
         error_type: ErrorResponse,
         success_status: 200
     },
+    API_ENDPOINT_FILE_TAG_SELECT => {
+        operation: FileTagSelect,
+        id: "fileTagSelect",
+        method: Get,
+        path: "/file/{index}/tags/select",
+        query_type: TagQuery,
+        request_type: NoRequest,
+        request_media_type: None,
+        response_type: TagNode,
+        response_media_type: "application/json",
+        response_headers_type: NoResponseHeaders,
+        error_type: ErrorResponse,
+        success_status: 200
+    },
     API_ENDPOINT_FILE_ANNOTATIONS_GET => {
         operation: FileAnnotationsGet,
         id: "fileAnnotationsGet",
@@ -605,6 +619,13 @@ pub struct FrameQuery {
     pub wc: Option<f64>,
     pub ww: Option<f64>,
     pub mode: Option<WindowMode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TagQuery {
+    pub path: String,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

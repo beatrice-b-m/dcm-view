@@ -1,7 +1,8 @@
 use crate::api::contracts::{TagNode, TagValue};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
 use dicom_core::header::HasLength;
+use dicom_core::Tag;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_object::{open_file, InMemDicomObject};
 use std::path::Path;
@@ -10,12 +11,141 @@ const TAG_TEXT_PREVIEW_LIMIT: usize = 256;
 const TAG_NUMERIC_VALUE_LIMIT: usize = 128;
 const TAG_SEQUENCE_ITEM_LIMIT: usize = 64;
 const TAG_SEQUENCE_DEPTH_LIMIT: usize = 4;
+pub(crate) const TAG_SELECT_DEFAULT_LIMIT: usize = 64;
+pub(crate) const TAG_SELECT_MAX_LIMIT: usize = 256;
 
 pub(crate) fn build_tag_tree(path: &Path) -> Result<Vec<TagNode>> {
     let object = open_file(path)
         .with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
         .into_inner();
     Ok(serialize_object_tags(&object, 0))
+}
+
+pub(crate) fn build_selected_tag(
+    path: &Path,
+    selector: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<TagNode> {
+    if limit == 0 || limit > TAG_SELECT_MAX_LIMIT {
+        bail!("tag page limit must be between 1 and {TAG_SELECT_MAX_LIMIT}");
+    }
+    let steps = parse_tag_selector(selector)?;
+    let object = open_file(path)
+        .with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
+        .into_inner();
+    select_from_object(&object, &steps, offset, limit)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TagPathStep {
+    Tag(Tag),
+    Item(usize),
+}
+
+fn parse_tag_selector(selector: &str) -> Result<Vec<TagPathStep>> {
+    let parts = selector
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() || parts.len() % 2 == 0 {
+        bail!("tag path must alternate tag/item and end with a tag");
+    }
+    let mut steps = Vec::with_capacity(parts.len());
+    for (index, part) in parts.into_iter().enumerate() {
+        if index % 2 == 0 {
+            steps.push(TagPathStep::Tag(parse_tag(part)?));
+        } else {
+            let item = part
+                .parse::<usize>()
+                .map_err(|_| anyhow!("invalid sequence item index `{part}`"))?;
+            steps.push(TagPathStep::Item(item));
+        }
+    }
+    Ok(steps)
+}
+
+fn parse_tag(raw: &str) -> Result<Tag> {
+    let normalized = raw.trim_matches(|character| character == '(' || character == ')');
+    let (group, element) = normalized
+        .split_once(',')
+        .ok_or_else(|| anyhow!("invalid tag `{raw}`; expected (GGGG,EEEE)"))?;
+    let group =
+        u16::from_str_radix(group, 16).map_err(|_| anyhow!("invalid tag group in `{raw}`"))?;
+    let element =
+        u16::from_str_radix(element, 16).map_err(|_| anyhow!("invalid tag element in `{raw}`"))?;
+    Ok(Tag(group, element))
+}
+
+fn select_from_object(
+    object: &InMemDicomObject<StandardDataDictionary>,
+    steps: &[TagPathStep],
+    offset: usize,
+    limit: usize,
+) -> Result<TagNode> {
+    let TagPathStep::Tag(tag) = steps[0] else {
+        bail!("tag path must begin with a tag");
+    };
+    let element = object
+        .element(tag)
+        .map_err(|_| anyhow!("tag ({:04X},{:04X}) not found", tag.0, tag.1))?;
+    if steps.len() == 1 {
+        return serialize_selected_element(element, offset, limit);
+    }
+    let TagPathStep::Item(item_index) = steps[1] else {
+        bail!("tag path must include a sequence item index after a tag");
+    };
+    let items = element
+        .items()
+        .ok_or_else(|| anyhow!("tag ({:04X},{:04X}) is not a sequence", tag.0, tag.1))?;
+    let item = items.get(item_index).ok_or_else(|| {
+        anyhow!(
+            "sequence item {item_index} out of range for ({:04X},{:04X})",
+            tag.0,
+            tag.1
+        )
+    })?;
+    select_from_object(item, &steps[2..], offset, limit)
+}
+
+fn serialize_selected_element(
+    element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
+    offset: usize,
+    limit: usize,
+) -> Result<TagNode> {
+    if format!("{}", element.header().vr()) != "SQ" {
+        if offset != 0 {
+            bail!("tag page offset applies only to sequence values");
+        }
+        return Ok(serialize_element(element, 0));
+    }
+    let items = element
+        .items()
+        .ok_or_else(|| anyhow!("sequence item decoding failed"))?;
+    let tag = element.header().tag;
+    let tag_repr = format!("({:04X},{:04X})", tag.0, tag.1);
+    let total = items.len();
+    let serialized_items = items
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|item| serialize_object_tags(item, 1))
+        .collect::<Vec<_>>();
+    let truncated = offset > 0 || offset.saturating_add(serialized_items.len()) < total;
+    Ok(TagNode {
+        tag: tag_repr,
+        vr: "SQ".to_string(),
+        keyword: StandardDataDictionary
+            .by_tag(tag)
+            .map(|entry| entry.alias().to_string())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        value: TagValue::Sequence {
+            items: serialized_items,
+            truncated,
+            total: truncated.then_some(total),
+        },
+    })
 }
 
 fn serialize_object_tags(

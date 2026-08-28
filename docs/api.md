@@ -59,6 +59,7 @@ Static frontend assets are served at `/` and `/assets/*`.
 | GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG. |
 | GET | `/api/file/:index/frame/:frame/raw` | Decoded frame sample bytes plus rendering metadata headers. |
 | GET | `/api/file/:index/tags` | Lazy DICOM tag tree. |
+| GET | `/api/file/:index/tags/select` | Selective tag-path retrieval with sequence pagination. |
 | GET | `/api/file/:index/annotations` | Current in-memory ROI annotations for one file. |
 | PUT | `/api/file/:index/annotations` | Replace in-memory ROI annotations for one file. |
 | GET | `/api/annotations/export.csv` | Download current annotations as EMBED-style CSV. |
@@ -298,6 +299,14 @@ fields. Individual serialization failures are returned as
 `{"type": "error", "message": "..."}` values so one bad tag does not prevent
 the rest of the tag tree from rendering.
 
+For exhaustive targeted retrieval, use
+`GET /api/file/:index/tags/select?path=(GGGG,EEEE)&offset=0&limit=64`.
+Selectors alternate tag and zero-based sequence item components, for example
+`(0008,2218)/69/(0008,0100)`. When the selected tag is a sequence, `offset`
+and `limit` page its items; `limit` must be between 1 and 256. A deep selector
+opens the original object and traverses directly, so it is not constrained by
+the legacy full-tree endpoint's preview depth or item caps.
+
 ## Annotations
 
 `GET /api/file/:index/annotations` returns the current in-memory EMBED-style ROI
@@ -314,7 +323,7 @@ payload for one file:
 `PUT /api/file/:index/annotations` replaces one file's in-memory annotations and
 returns the canonicalized payload. Coordinates and frame indices are validated
 against the file dimensions and frame count. Invalid payloads return
-`400 {"error": "..."}`.
+`400 {"code":"bad_request","error":"..."}`.
 
 `GET /api/annotations/export.csv` returns `text/csv; charset=utf-8` with
 `Content-Disposition: attachment; filename="dcmview-annotations.csv"`. The CSV
@@ -327,7 +336,7 @@ All API failures—including path, query, and JSON extractor rejections—use a 
 body:
 
 ```json
-{ "error": "file index out of range" }
+{ "code": "not_found", "error": "file index out of range" }
 ```
 
 Common statuses:

@@ -125,7 +125,10 @@ The executable contract is kept consistent by three layers:
   Class, coarse object kind, and explicit `renderable`, `metadata_only`, or
   `unsupported` state with a stable reason when applicable. These states
   describe viewer capability, not DICOM conformance.
-  Path, query, and JSON extractor failures pass through the same envelope.
+- `/api/file/{index}/tags/select` traverses explicit tag/item paths against the
+  original object and pages sequence items, allowing targeted retrieval beyond
+  legacy tag-tree preview caps.
+- Path, query, and JSON extractor failures pass through the same envelope.
 - Unknown `/api` routes return JSON `404`; unsupported methods return JSON
   `405`.
 - Supported display frames return `image/png`; supported raw frames return

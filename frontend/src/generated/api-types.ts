@@ -50,6 +50,14 @@ export interface ApiEndpointTypes {
 		responseHeaders: never;
 		error: ErrorResponse;
 	};
+	fileTagSelect: {
+		params: { index: number };
+		query: TagQuery;
+		request: never;
+		response: TagNode;
+		responseHeaders: never;
+		error: ErrorResponse;
+	};
 	fileAnnotationsGet: {
 		params: { index: number };
 		query: never;
@@ -152,6 +160,18 @@ export const API_ENDPOINTS = {
 		requestType: null,
 		requestMediaType: null,
 		responseType: "TagNode[]",
+		responseMediaType: "application/json",
+		responseHeadersType: null,
+		errorType: "ErrorResponse",
+		successStatus: 200,
+	},
+	fileTagSelect: {
+		method: "GET",
+		path: "/api/file/{index}/tags/select",
+		queryType: "TagQuery",
+		requestType: null,
+		requestMediaType: null,
+		responseType: "TagNode",
 		responseMediaType: "application/json",
 		responseHeadersType: null,
 		errorType: "ErrorResponse",
@@ -366,6 +386,12 @@ export type TagValue =
 	| { type: "binary"; length: number }
 	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
 	| { type: "error"; message: string };
+
+export interface TagQuery {
+	path: string;
+	offset?: number;
+	limit?: number;
+}
 
 export interface EmbedRoiAnnotations {
 	num_roi: number;

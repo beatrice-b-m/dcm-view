@@ -698,13 +698,11 @@ def parse_api_endpoints(source: str) -> list[ApiEndpoint]:
 				f"{constant} declares unsupported request media type "
 				f"{request_media_type}; the generated client only encodes application/json"
 			)
-		if response_media_type == "application/json" and query_type_token != "NoQuery":
-			raise ValueError(
-				f"{constant} declares query parameters on a JSON endpoint, which "
-				"requestJsonEndpoint cannot encode"
-			)
 		endpoint_id = rust_string(properties["id"], context=f"{constant}.id")
-		if query_type_token != "NoQuery" and endpoint_id != "fileFrame":
+		if query_type_token != "NoQuery" and endpoint_id not in {
+			"fileFrame",
+			"fileTagSelect",
+		}:
 			raise ValueError(
 				f"{constant} declares query parameters without a dedicated client encoder"
 			)

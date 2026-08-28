@@ -178,9 +178,12 @@ async fn every_declared_endpoint_matches_its_runtime_contract() {
     let annotation_body = EmbedRoiAnnotations::empty();
 
     for endpoint in API_ENDPOINTS {
-        let path = format!("{API_PREFIX}{}", endpoint.path)
+        let mut path = format!("{API_PREFIX}{}", endpoint.path)
             .replace("{index}", "0")
             .replace("{frame}", "0");
+        if endpoint.id == "fileTagSelect" {
+            path.push_str("?path=%280028%2C0010%29");
+        }
         let request = match endpoint.method {
             ApiMethod::Get => test_server.get(&path),
             ApiMethod::Put => test_server.put(&path).json(&annotation_body),
