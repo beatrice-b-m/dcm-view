@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { FileSummary } from "../api";
 import {
+	adjacentFileIndex,
 	activeDirectoryPathKeys,
 	activeStudyPathKeys,
 	buildDirectoryTree,
 	buildFileTree,
+	directoryFileOrder,
 	fileMatchesFilter,
 	patientDetailWithCounts,
+	studyFileOrder,
 } from "./fileTree";
 
 function file(overrides: Partial<FileSummary>): FileSummary {
@@ -75,6 +78,27 @@ describe("file tree shaping", () => {
 			"patient:P-2/study:study-new",
 			"patient:P-2/study:study-old",
 		]);
+	});
+
+	it("derives navigation order from the selected explorer organization", () => {
+		const files = [
+			file({ index: 1, path: "/z/first.dcm", patient_id: "A", patient_name: "Alpha", instance_number: "2" }),
+			file({ index: 2, path: "/a/second.dcm", patient_id: "Z", patient_name: "Zulu", instance_number: "1" }),
+			file({ index: 3, path: "/z/third.dcm", patient_id: "A", patient_name: "Alpha", instance_number: "1" }),
+		];
+
+		expect(studyFileOrder(buildFileTree(files))).toEqual([3, 1, 2]);
+		expect(directoryFileOrder(buildDirectoryTree(files))).toEqual([2, 1, 3]);
+	});
+
+	it("selects adjacent files without wrapping or guessing missing selections", () => {
+		const order = [8, 3, 5];
+		expect(adjacentFileIndex(order, 3, -1)).toBe(8);
+		expect(adjacentFileIndex(order, 3, 1)).toBe(5);
+		expect(adjacentFileIndex(order, 8, -1)).toBeNull();
+		expect(adjacentFileIndex(order, 5, 1)).toBeNull();
+		expect(adjacentFileIndex(order, 99, 1)).toBeNull();
+		expect(adjacentFileIndex(order, null, 1)).toBeNull();
 	});
 
 	it("groups by patient, study, and series while sorting numeric instances", () => {

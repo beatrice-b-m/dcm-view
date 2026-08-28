@@ -90,6 +90,12 @@ semantic rendering of the referencing object. Components use
 `frontend/src/api.ts`; new endpoint fetches should not be introduced directly
 inside components.
 
+`FileNavigator` owns the active clinical-versus-directory organization and
+publishes the corresponding flattened file order to `App.svelte`. Global
+Up/Down shortcuts use that order (including the active filter), so file
+selection follows the explorer presentation rather than registry insertion
+order.
+
 ## Executable HTTP Contract
 
 ```mermaid

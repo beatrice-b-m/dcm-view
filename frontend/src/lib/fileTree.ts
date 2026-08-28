@@ -50,6 +50,31 @@ export type DirectoryFolder = {
 
 export type DirectoryNode = DirectoryFolder | DirectoryFile;
 
+export function studyFileOrder(patients: readonly NavPatient[]): number[] {
+	return patients.flatMap((patient) =>
+		patient.studies.flatMap((study) =>
+			study.series.flatMap((series) => series.files.map((item) => item.file.index)),
+		),
+	);
+}
+
+export function directoryFileOrder(nodes: readonly DirectoryNode[]): number[] {
+	return nodes.flatMap((node): number[] =>
+		node.kind === "file" ? [node.file.index] : directoryFileOrder(node.children),
+	);
+}
+
+export function adjacentFileIndex(
+	order: readonly number[],
+	activeFileIndex: number | null,
+	direction: -1 | 1,
+): number | null {
+	if (activeFileIndex === null) return null;
+	const activePosition = order.indexOf(activeFileIndex);
+	if (activePosition === -1) return null;
+	return order[activePosition + direction] ?? null;
+}
+
 export function activeStudyPathKeys(
 	patients: readonly NavPatient[],
 	activeFileIndex: number | null,

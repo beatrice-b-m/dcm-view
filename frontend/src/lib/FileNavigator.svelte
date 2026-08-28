@@ -5,12 +5,14 @@
 		activeStudyPathKeys,
 		buildDirectoryTree,
 		buildFileTree,
+		directoryFileOrder,
 		fileAriaLabel,
 		fileMatchesFilter,
 		nodeAriaLabel,
 		patientDetailWithCounts,
 		seriesDetailWithCounts,
 		studyDetailWithCounts,
+		studyFileOrder,
 		tierLabel,
 		type NavKind,
 		type DirectoryNode,
@@ -22,12 +24,14 @@
 		scanComplete = true,
 		collapsed = $bindable(),
 		onopenfile,
+		onnavigationorderchange,
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number | null;
 		scanComplete?: boolean;
 		collapsed: boolean;
 		onopenfile: (index: number) => void;
+		onnavigationorderchange?: (order: number[]) => void;
 	} = $props();
 
 	const LARGE_TREE_COLLAPSE_THRESHOLD = 500;
@@ -76,6 +80,13 @@
 	const directoryTree = $derived(buildDirectoryTree(filteredFiles));
 	const activeStudyPath = $derived(activeStudyPathKeys(tree, activeFileIndex));
 	const activeDirectoryPath = $derived(activeDirectoryPathKeys(directoryTree, activeFileIndex));
+	const navigationOrder = $derived(
+		viewMode === "study" ? studyFileOrder(tree) : directoryFileOrder(directoryTree),
+	);
+
+	$effect(() => {
+		onnavigationorderchange?.(navigationOrder);
+	});
 </script>
 
 {#snippet nodeContent(kind: NavKind, label: string, detail: string)}

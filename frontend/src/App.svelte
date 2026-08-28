@@ -21,6 +21,7 @@
 	import { cineFrameIntervalMs, nextCineStep, type CineDirection, type CineMode } from "./lib/cinePlayback";
 	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
 	import { focusTrapTarget } from "./lib/focusTrap";
+	import { adjacentFileIndex } from "./lib/fileTree";
 	import {
 		findSeriesStackForFile,
 		frameAtPosition,
@@ -97,6 +98,7 @@
 	let tagsDrawerButton = $state<HTMLButtonElement | null>(null);
 	let explorerDrawerElement = $state<HTMLDivElement | null>(null);
 	let tagsDrawerElement = $state<HTMLElement | null>(null);
+	let fileNavigationOrder = $state<number[]>([]);
 
 	const filesById = $derived(indexFilesById(filesResponse?.files ?? []));
 	const activeFile = $derived(
@@ -225,6 +227,14 @@
 		if (window.matchMedia("(max-width: 519px)").matches) {
 			closeCompactDrawer();
 		}
+	}
+
+	function updateFileNavigationOrder(order: number[]) {
+		if (
+			order.length === fileNavigationOrder.length
+			&& order.every((fileIndex, position) => fileNavigationOrder[position] === fileIndex)
+		) return;
+		fileNavigationOrder = order;
 	}
 
 	function openReferenceTarget(fileIndex: number, frameIndex: number) {
@@ -553,7 +563,29 @@
 				return;
 			}
 			const target = event.target as HTMLElement | null;
-			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+			if (
+				target
+				&& (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+			) return;
+			if (
+				!event.altKey
+				&& !event.ctrlKey
+				&& !event.metaKey
+				&& !event.shiftKey
+				&& (event.key === "ArrowUp" || event.key === "ArrowDown")
+			) {
+				const adjacent = adjacentFileIndex(
+					fileNavigationOrder,
+					activeFileIndex,
+					event.key === "ArrowUp" ? -1 : 1,
+				);
+				if (adjacent !== null) {
+					event.preventDefault();
+					cinePlaying = false;
+					openOrActivateFile(adjacent);
+				}
+				return;
+			}
 			switch (event.key.toLowerCase()) {
 				case 'w': activeTool = 'window_level'; break;
 				case 'p': activeTool = 'pan'; break;
@@ -692,6 +724,7 @@
 					scanComplete={filesResponse.scan_complete}
 					bind:collapsed={fileNavigatorCollapsed}
 					onopenfile={openFileFromNavigator}
+					onnavigationorderchange={updateFileNavigationOrder}
 				/>
 			</div>
 			<section class="viewer-column">

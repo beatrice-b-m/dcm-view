@@ -213,6 +213,7 @@ Common shortcuts:
 
 | Action | Shortcut |
 |---|---|
+| Previous/next file in the active Explorer ordering | Up/Down arrows |
 | Previous/next frame | Left/Right arrows or `[` / `]` |
 | Play/pause cine | Space |
 | Window/level tool | `W` |
