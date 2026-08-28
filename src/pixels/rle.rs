@@ -6,7 +6,7 @@ use dicom_object::open_file;
 use thiserror::Error;
 use tokio::task;
 
-use super::color::encode_rgb8_png_with_icc;
+use super::color::{encode_rgb8_png_with_icc, rgb8_interleaved, ybr_full_to_rgb8};
 use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
 use super::icc::select_icc_profile;
@@ -95,11 +95,20 @@ fn decode_rle_to_png_blocking(
             )
             .map_err(PixelError::frame_decode)
         }
-        (3, "RGB") => encode_rgb_png(file, decoded, read_icc_profile(file)?),
-        (3, "YBR_FULL") => {
-            let rgb = ybr_full_to_rgb(&decoded);
-            encode_rgb_png(file, rgb, read_icc_profile(file)?)
-        }
+        (3, "RGB" | "YBR_FULL") => encode_rgb_png(
+            file,
+            normalize_color_for_display(
+                &decoded,
+                file.rows,
+                file.columns,
+                file.series_metadata
+                    .native_pixel
+                    .planar_configuration
+                    .unwrap_or(0),
+                &photometric,
+            )?,
+            read_icc_profile(file)?,
+        ),
         (1, "PALETTE COLOR") => encode_palette_png(file, &decoded),
         _ => Err(PixelError::UnsupportedLayout(format!(
             "RLE display does not support SamplesPerPixel {} with PhotometricInterpretation {}",
@@ -348,6 +357,33 @@ fn encode_rgb_png(
         .map_err(PixelError::frame_decode)
 }
 
+fn normalize_color_for_display(
+    decoded: &[u8],
+    rows: u32,
+    columns: u32,
+    planar_configuration: u32,
+    photometric: &str,
+) -> PixelResult<Vec<u8>> {
+    let pixel_count = usize::try_from(rows)
+        .ok()
+        .and_then(|rows| {
+            usize::try_from(columns)
+                .ok()
+                .and_then(|columns| rows.checked_mul(columns))
+        })
+        .ok_or_else(|| {
+            PixelError::UnsupportedLayout("RLE color geometry overflowed".to_string())
+        })?;
+    let normalized = match photometric {
+        "RGB" => rgb8_interleaved(decoded, pixel_count, planar_configuration),
+        "YBR_FULL" => ybr_full_to_rgb8(decoded, pixel_count, planar_configuration),
+        _ => unreachable!("color normalization called for unsupported photometric interpretation"),
+    };
+    normalized
+        .context("RLE color sample normalization failed")
+        .map_err(PixelError::frame_decode)
+}
+
 fn encode_palette_png(file: &FileEntry, indices: &[u8]) -> PixelResult<Bytes> {
     if file.bits_allocated != 8 {
         return Err(PixelError::UnsupportedLayout(format!(
@@ -455,28 +491,12 @@ fn read_palette_channel(
     })
 }
 
-fn ybr_full_to_rgb(ybr: &[u8]) -> Vec<u8> {
-    ybr.chunks_exact(3)
-        .flat_map(|pixel| {
-            let y = f64::from(pixel[0]);
-            let cb = f64::from(pixel[1]) - 128.0;
-            let cr = f64::from(pixel[2]) - 128.0;
-            [
-                clamp_u8(y + 1.402 * cr),
-                clamp_u8(y - 0.344_136 * cb - 0.714_136 * cr),
-                clamp_u8(y + 1.772 * cb),
-            ]
-        })
-        .collect()
-}
-
-fn clamp_u8(value: f64) -> u8 {
-    value.round().clamp(0.0, 255.0) as u8
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{decode_packbits_segment, decode_rle_frame, RleDecodeError, RLE_HEADER_LEN};
+    use super::{
+        decode_packbits_segment, decode_rle_frame, normalize_color_for_display, RleDecodeError,
+        RLE_HEADER_LEN,
+    };
 
     fn literal(values: &[u8]) -> Vec<u8> {
         assert!(!values.is_empty() && values.len() <= 128);
@@ -509,6 +529,21 @@ mod tests {
         assert_eq!(
             decode_rle_frame(&rgb, 1, 2, 3, 8).unwrap(),
             [255, 0, 10, 0, 255, 20]
+        );
+    }
+
+    #[test]
+    fn normalizes_planar_rgb_and_ybr_for_display() {
+        let planar_rgb = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255];
+        assert_eq!(
+            normalize_color_for_display(&planar_rgb, 2, 2, 1, "RGB").unwrap(),
+            [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]
+        );
+
+        let planar_ybr = [76, 150, 29, 255, 85, 44, 255, 128, 255, 21, 107, 128];
+        assert_eq!(
+            normalize_color_for_display(&planar_ybr, 2, 2, 1, "YBR_FULL").unwrap(),
+            [254, 0, 0, 0, 255, 1, 0, 0, 254, 255, 255, 255]
         );
     }
 
