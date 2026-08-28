@@ -18,7 +18,7 @@
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
-	import { cineFrameIntervalMs, nextCineStep, type CineDirection, type CineMode } from "./lib/cinePlayback";
+	import type { CineDirection, CineMode } from "./lib/cinePlayback";
 	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
 	import { focusTrapTarget } from "./lib/focusTrap";
 	import { adjacentFileIndex } from "./lib/fileTree";
@@ -544,26 +544,6 @@
 	});
 
 	$effect(() => {
-		const playing = cinePlaying;
-		const totalFrames = navigationFrameCount;
-		const position = stackPosition;
-		const fps = cineFps;
-		const mode = cineMode;
-		const direction = cineDirection;
-		if (playing && totalFrames <= 1) {
-			cinePlaying = false;
-			return;
-		}
-		if (!playing || totalFrames <= 1) return;
-		const timer = window.setTimeout(() => {
-			const step = nextCineStep(position, totalFrames, mode, direction);
-			cineDirection = step.direction;
-			setStackPosition(step.frame);
-		}, cineFrameIntervalMs(fps));
-		return () => window.clearTimeout(timer);
-	});
-
-	$effect(() => {
 		const handleKey = (event: KeyboardEvent) => {
 			if (event.key === "Escape" && compactDrawer !== null) {
 				event.preventDefault();
@@ -763,7 +743,6 @@
 						navigationScopeKey={navigationScopeKey}
 						navigationPosition={stackPosition}
 						onnavigationchange={setStackPosition}
-						externalCineNavigation={true}
 						onreset={resetViewport}
 						onmanualwindowlevel={recordManualWindowLevel}
 					/>

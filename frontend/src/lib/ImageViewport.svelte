@@ -55,7 +55,7 @@
 		validateRenderableRawFrame,
 	} from "./rawWindowing";
 	import { DEFAULT_ORIENTATION, type ActiveTool, type ImageOrientation } from "./viewerTools";
-	import type { NavigationFrameRef } from "./seriesNavigation";
+	import { navigationFrameAtPosition, type NavigationFrameRef } from "./seriesNavigation";
 	import type {
 		WlRendererRequest,
 		WlRendererResponse,
@@ -114,7 +114,6 @@
 		navigationScopeKey,
 		navigationPosition,
 		onnavigationchange,
-		externalCineNavigation = false,
 	}: {
 		activeFile: FileSummary;
 		currentFrame: number;
@@ -136,7 +135,6 @@
 		navigationScopeKey: string;
 		navigationPosition: number;
 		onnavigationchange: (position: number) => void;
-		externalCineNavigation?: boolean;
 	} = $props();
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
@@ -1185,18 +1183,18 @@ function startDisplayPrefetch(
 	});
 
 	$effect(() => {
-		const file = activeFile;
 		const playing = cinePlaying;
-		const externallyManaged = externalCineNavigation;
 		const fps = cineFps;
 		const playbackMode = cineMode;
 		const mode = pipelineMode;
+		const frames = navigationFrames;
+		const scopeKey = navigationScopeKey;
 		const windowOptions = currentDisplayWindowOptions();
-		if (externallyManaged) return;
+		if (!scopeKey) return;
 		const canPlay = canRunCinePlayback(
 			mode === "cine" ? "cine" : "diagnostic_wl",
-			file.has_pixels,
-			file.frame_count,
+			true,
+			frames.length,
 		);
 		if (playing && !canPlay) {
 			cinePlaying = false;
@@ -1205,16 +1203,21 @@ function startDisplayPrefetch(
 		if (!playing || !canPlay) return;
 
 		const ctrl = new AbortController();
-		const fileIndex = file.index;
-		const totalFrames = file.frame_count;
-		let scheduledFrame = untrack(() => currentFrame);
+		const totalFrames = frames.length;
+		let scheduledPosition = untrack(() => navigationPosition);
 		let direction = untrack(() => cineDirection);
 		ensureDisplayFetchScope(windowOptions);
 
 		void (async () => {
-			if (!await waitForDisplayFrameRendered(fileIndex, scheduledFrame, ctrl.signal)) return;
+			const initialFrame = navigationFrameAtPosition(frames, scheduledPosition);
+			if (!initialFrame) return;
+			if (!await waitForDisplayFrameRendered(
+				initialFrame.file_index,
+				initialFrame.frame_index,
+				ctrl.signal,
+			)) return;
 			await runRenderPacedCine({
-				initialFrame: scheduledFrame,
+				initialFrame: scheduledPosition,
 				totalFrames,
 				mode: playbackMode,
 				direction,
@@ -1222,13 +1225,19 @@ function startDisplayPrefetch(
 				signal: ctrl.signal,
 				now: () => performance.now(),
 				waitForDelay: waitForCineDeadline,
-				prepareFrame: (frameIndex) => ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions),
+				prepareFrame: (position) => {
+					const frame = navigationFrameAtPosition(frames, position);
+					if (!frame) return Promise.reject(new Error("logical cine frame is unavailable"));
+					return ensureDisplayFrameEntry(frame.file_index, frame.frame_index, windowOptions);
+				},
 				presentFrame: async (step, signal) => {
+					const frame = navigationFrameAtPosition(frames, step.frame);
+					if (!frame) return false;
 					direction = step.direction;
-					scheduledFrame = step.frame;
+					scheduledPosition = step.frame;
 					cineDirection = direction;
-					currentFrame = scheduledFrame;
-					return waitForDisplayFrameRendered(fileIndex, scheduledFrame, signal);
+					onnavigationchange(scheduledPosition);
+					return waitForDisplayFrameRendered(frame.file_index, frame.frame_index, signal);
 				},
 			});
 		})().catch((error) => {

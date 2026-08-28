@@ -8,6 +8,7 @@ import {
 	waitForAbortableResult,
 	waitForCineDeadline,
 } from "./cinePlayback";
+import { navigationFrameAtPosition, type NavigationFrameRef } from "./seriesNavigation";
 
 describe("cine playback policy", () => {
 	it("allows playback only in the display pipeline with multiple pixel frames", () => {
@@ -112,5 +113,39 @@ describe("cine playback policy", () => {
 		expect(presentedAt).toHaveLength(3);
 		expect(presentedAt[1] - presentedAt[0]).toBeGreaterThanOrEqual(20);
 		expect(presentedAt[2] - presentedAt[1]).toBeGreaterThanOrEqual(20);
+	});
+
+	it("prepares logical cine positions across source-file boundaries", async () => {
+		const frames: NavigationFrameRef[] = [
+			{ virtual_index: 0, file_index: 7, frame_index: 0 },
+			{ virtual_index: 1, file_index: 9, frame_index: 0 },
+			{ virtual_index: 2, file_index: 9, frame_index: 1 },
+		];
+		const ctrl = new AbortController();
+		const prepared: string[] = [];
+		const presented: number[] = [];
+
+		await runRenderPacedCine({
+			initialFrame: 0,
+			totalFrames: frames.length,
+			mode: "loop",
+			direction: 1,
+			fps: 30,
+			signal: ctrl.signal,
+			now: () => 0,
+			waitForDelay: async () => true,
+			prepareFrame: async (position) => {
+				const frame = navigationFrameAtPosition(frames, position);
+				if (frame) prepared.push(`${frame.file_index}:${frame.frame_index}`);
+			},
+			presentFrame: async (step) => {
+				presented.push(step.frame);
+				if (presented.length === 3) ctrl.abort();
+				return true;
+			},
+		});
+
+		expect(prepared).toEqual(["9:0", "9:1", "7:0"]);
+		expect(presented).toEqual([1, 2, 0]);
 	});
 });
