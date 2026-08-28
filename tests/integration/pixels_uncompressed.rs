@@ -139,6 +139,114 @@ async fn monochrome1_display_png_matches_raw_renderer_inversion_semantics() {
 }
 
 #[tokio::test]
+async fn native_overlay_composites_after_windowing_without_changing_raw_samples() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("overlay.dcm");
+    support::write_uncompressed_u16_dicom(
+        &path,
+        "1.2.840.10008.1.2.1",
+        2,
+        2,
+        vec![0, 1000, 2000, 3000],
+        Some("1500"),
+        Some("3000"),
+    );
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 2;
+    entry.columns = 2;
+    entry.default_window = Some(WindowPreset {
+        center: 1500.0,
+        width: 3000.0,
+    });
+    entry
+        .series_metadata
+        .presentation
+        .overlay_planes
+        .push(dcmview::types::OverlayPlane {
+            group: 0x6000,
+            rows: 2,
+            columns: 2,
+            origin: [1, 1],
+            overlay_type: "G".to_string(),
+            number_of_frames: 1,
+            image_frame_origin: 1,
+            data: vec![0x0009],
+        });
+
+    let display = load_frame(
+        entry.clone(),
+        new_cache(),
+        FrameRequest {
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+        },
+    )
+    .await
+    .expect("overlay display frame");
+    let raw = load_raw_frame(entry, new_raw_cache(), RawFrameRequest { frame: 0 })
+        .await
+        .expect("overlay raw frame");
+
+    assert_eq!(
+        raw.body.as_ref(),
+        &[0, 0, 0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B],
+        "overlay compositing must not alter raw source samples"
+    );
+    let pixels = image::load_from_memory_with_format(display.body.as_ref(), ImageFormat::Png)
+        .expect("valid overlay PNG")
+        .to_luma8()
+        .into_raw();
+    assert_eq!(pixels, [255, 85, 170, 255]);
+}
+
+#[tokio::test]
+#[ignore = "requires the independently generated prepared DICOM corpus"]
+async fn prepared_native_overlay_composites_after_luts_and_preserves_raw_frame() {
+    let root = std::env::var_os("DCMVIEW_PREPARED_CORPUS")
+        .map(std::path::PathBuf::from)
+        .expect("set DCMVIEW_PREPARED_CORPUS to the generated suite directory");
+    let path = root
+        .join("core")
+        .join("classic/cr/overlay_modality_voi_explicit_le/instance.dcm");
+    let report = dcmview::loader::discover(
+        &[path],
+        dcmview::loader::DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover prepared CR");
+    let entry = report.files.into_iter().next().expect("prepared CR entry");
+
+    let display = load_frame(
+        entry.clone(),
+        new_cache(),
+        FrameRequest {
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+        },
+    )
+    .await
+    .expect("prepared overlay display");
+    let raw = load_raw_frame(entry, new_raw_cache(), RawFrameRequest { frame: 0 })
+        .await
+        .expect("prepared overlay raw frame");
+
+    assert_eq!(raw.body.as_ref(), &[0, 1, 2, 3]);
+    let pixels = image::load_from_memory_with_format(display.body.as_ref(), ImageFormat::Png)
+        .expect("valid prepared overlay PNG")
+        .to_luma8()
+        .into_raw();
+    assert_eq!(pixels, [255, 255, 255, 255]);
+}
+
+#[tokio::test]
 async fn monochrome1_inversion_preserves_default_and_full_dynamic_window_modes() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("monochrome1-window-modes.dcm");

@@ -9,6 +9,7 @@ mod jpegls;
 mod jpegxl;
 mod native;
 mod native_layout;
+mod overlay;
 mod palette;
 mod render;
 mod rle;

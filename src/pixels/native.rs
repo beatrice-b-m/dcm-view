@@ -9,6 +9,7 @@ use tokio::task;
 
 use super::color::{encode_rgb8_png, rgb8_interleaved, ybr_full_to_rgb8};
 use super::native_layout::{native_pixel_element_tag, NativeByteOrder, NativeFrameLayout};
+use super::overlay::apply_overlay_planes;
 use super::palette::palette_indices_to_rgb8;
 use super::render::apply_monochrome1_inversion;
 use super::window::{
@@ -137,6 +138,13 @@ fn decode_uncompressed_to_png_blocking(
         )
     };
     apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
+    apply_overlay_planes(
+        &mut windowed,
+        rows,
+        columns,
+        frame,
+        &file.series_metadata.presentation.overlay_planes,
+    );
 
     let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)
         .ok_or_else(|| anyhow!("frame decode failed: windowed buffer size mismatch"))?;
