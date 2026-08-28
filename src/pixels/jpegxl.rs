@@ -6,8 +6,9 @@ use dicom_object::open_file;
 use dicom_pixeldata::PixelDecoder;
 use tokio::task;
 
-use super::color::encode_rgb8_png;
+use super::color::encode_rgb8_png_with_icc;
 use super::error::{PixelError, PixelResult};
+use super::icc::select_icc_profile;
 use super::render::encode_windowed_luminance_png;
 
 struct DecodedJpegXlFrame {
@@ -16,6 +17,7 @@ struct DecodedJpegXlFrame {
     columns: u32,
     bits_allocated: u32,
     samples_per_pixel: u32,
+    icc_profile: Option<Vec<u8>>,
 }
 
 pub(crate) async fn decode_jpeg_xl_to_png(
@@ -29,8 +31,13 @@ pub(crate) async fn decode_jpeg_xl_to_png(
         let decoded = decode_frame(&file, frame).map_err(PixelError::frame_decode)?;
         match (decoded.bits_allocated, decoded.samples_per_pixel) {
             (8, 3) if file.photometric_interpretation.trim().eq_ignore_ascii_case("RGB") => {
-                encode_rgb8_png(decoded.bytes, decoded.columns, decoded.rows)
-                    .map_err(PixelError::frame_decode)
+                encode_rgb8_png_with_icc(
+                    decoded.bytes,
+                    decoded.columns,
+                    decoded.rows,
+                    decoded.icc_profile,
+                )
+                .map_err(PixelError::frame_decode)
             }
             (8, 1) => {
                 let samples = decoded.bytes.into_iter().map(f64::from).collect::<Vec<_>>();
@@ -132,12 +139,14 @@ fn decode_frame(file: &FileEntry, frame: u32) -> Result<DecodedJpegXlFrame> {
     } else {
         frame_bytes.to_vec()
     };
+    let icc_profile = select_icc_profile(&object);
     Ok(DecodedJpegXlFrame {
         bytes,
         rows: decoded.rows(),
         columns: decoded.columns(),
         bits_allocated,
         samples_per_pixel,
+        icc_profile,
     })
 }
 

@@ -6,8 +6,10 @@ use image::{ImageBuffer, ImageFormat, Luma, Rgb};
 use std::io::Cursor;
 use tokio::task;
 
+use super::color::encode_rgb8_png_with_icc;
 use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
+use super::icc::select_icc_profile;
 use super::render::apply_monochrome1_inversion;
 use super::window::{apply_window, resolve_window_with_mode};
 
@@ -33,6 +35,9 @@ fn decode_jp2_fragment_to_png_blocking(
     window_mode: WindowMode,
 ) -> Result<Bytes> {
     let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
+    let object = dicom_object::open_file(&file.path)
+        .with_context(|| format!("failed to open JPEG 2000 DICOM: {}", file.path.display()))?;
+    let icc_profile = select_icc_profile(&object);
 
     let jp2_image = jpeg2k::Image::from_bytes(&fragment)
         .map_err(anyhow::Error::from)
@@ -87,11 +92,8 @@ fn decode_jp2_fragment_to_png_blocking(
                 .zip(b)
                 .flat_map(|((rv, gv), bv)| [rv, gv, bv])
                 .collect();
-            let image = ImageBuffer::<Rgb<u8>, Vec<u8>>::from_raw(width, height, interleaved)
-                .ok_or_else(|| anyhow!("JP2 decoded buffer size mismatch"))?;
-            image::DynamicImage::ImageRgb8(image)
-                .write_to(&mut buffer, ImageFormat::Png)
-                .context("JP2 decode failed: png encoding failed")?;
+            return encode_rgb8_png_with_icc(interleaved, width, height, icc_profile)
+                .context("JP2 decode failed: png encoding failed");
         } else if precision <= 16 {
             let r = comps[0].data_u16();
             let g = comps[1].data_u16();

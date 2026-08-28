@@ -7,7 +7,8 @@ use image::{ImageBuffer, ImageFormat, Luma};
 use std::io::Cursor;
 use tokio::task;
 
-use super::color::{encode_rgb8_png, rgb8_interleaved, ybr_full_to_rgb8};
+use super::color::{encode_rgb8_png_with_icc, rgb8_interleaved, ybr_full_to_rgb8};
+use super::icc::select_icc_profile;
 use super::native_layout::{native_pixel_element_tag, NativeByteOrder, NativeFrameLayout};
 use super::overlay::apply_overlay_planes;
 use super::palette::palette_indices_to_rgb8;
@@ -77,7 +78,8 @@ fn decode_uncompressed_to_png_blocking(
             _ => None,
         };
         if let Some(rgb) = rgb {
-            return encode_rgb8_png(rgb, columns, rows)
+            let icc_profile = select_icc_profile(&object);
+            return encode_rgb8_png_with_icc(rgb, columns, rows, icc_profile)
                 .context("frame decode failed: color PNG encoding failed");
         }
     }
