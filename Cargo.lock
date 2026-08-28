@@ -387,11 +387,12 @@ dependencies = [
 
 [[package]]
 name = "charls-sys"
-version = "2.4.4"
+version = "2.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32bd6962068e45425f68b1ea79fdc87cc848e35018349f2ff38e941f3fca332a"
+checksum = "28bd4cd0583158019ce942b42ec9b4200462199e65c76cd3be5df5322d3a159b"
 dependencies = [
  "cmake",
+ "link-cplusplus",
 ]
 
 [[package]]
@@ -1767,6 +1768,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f12a681b7dd8ce12bff52488013ba614b869148d54dd79836ab85aafdd53f08d"
 dependencies = [
  "arbitrary",
+ "cc",
+]
+
+[[package]]
+name = "link-cplusplus"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f78c730aaa7d0b9336a299029ea49f9ee53b0ed06e9202e8cb7db9bae7b8c82"
+dependencies = [
  "cc",
 ]
 
