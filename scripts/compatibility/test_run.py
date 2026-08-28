@@ -8,6 +8,7 @@ import zlib
 from pathlib import Path
 
 from scripts.compatibility.run import (
+    PROBED_CAPABILITIES,
     normalized_report,
     png_pixels,
     series_observation,
@@ -27,6 +28,9 @@ def grayscale_png(values: bytes, width: int, height: int) -> bytes:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_rle_capability_is_backed_by_display_and_lossless_raw_probes(self) -> None:
+        self.assertIn("decode_rle_lossless_pixels", PROBED_CAPABILITIES)
+
     def test_runner_supports_documented_direct_invocation(self) -> None:
         runner = Path(__file__).with_name("run.py")
         completed = subprocess.run(

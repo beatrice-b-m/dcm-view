@@ -41,6 +41,7 @@ PROBED_CAPABILITIES = {
     "read_metadata",
     "render_native_pixels",
     "render_compressed_pixels",
+    "decode_rle_lossless_pixels",
     "navigate_multiframe",
     "sort_series_by_geometry",
     "parse_multiframe_functional_groups",
