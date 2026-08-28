@@ -20,6 +20,7 @@ docker run --rm \
 	-e DCMVIEW_PY_BUNDLE_BINARY=/io/target/release/dcmview \
 	-e DCMVIEW_PY_REQUIRE_BUNDLED_BINARY=1 \
 	-e DCMVIEW_PY_WHEEL_PLAT_NAME="$wheel_plat_name" \
+	-e CMAKE_TOOLCHAIN_FILE=/io/scripts/manylinux-toolchain.cmake \
 	-e HOST_UID="$host_uid" \
 	-e HOST_GID="$host_gid" \
 	"$manylinux_image" \
