@@ -221,6 +221,20 @@ define_api_endpoints! {
         error_type: ErrorResponse,
         success_status: 200
     },
+    API_ENDPOINT_FILE_REFERENCES => {
+        operation: FileReferences,
+        id: "fileReferences",
+        method: Get,
+        path: "/file/{index}/references",
+        query_type: NoQuery,
+        request_type: NoRequest,
+        request_media_type: None,
+        response_type: ReferenceCatalogResponse,
+        response_media_type: "application/json",
+        response_headers_type: NoResponseHeaders,
+        error_type: ErrorResponse,
+        success_status: 200
+    },
     API_ENDPOINT_FILE_FRAME => {
         operation: FileFrame,
         id: "fileFrame",
@@ -484,6 +498,39 @@ pub struct FilesResponse {
 pub struct SeriesCatalogResponse {
     pub series: Vec<SeriesSummary>,
     pub scan_complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReferenceCatalogResponse {
+    pub source_file_index: usize,
+    pub source_sop_instance_uid: String,
+    pub references: Vec<ReferenceSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReferenceSummary {
+    pub relationship: String,
+    pub target: ReferenceTargetSummary,
+    pub matches: Vec<ReferenceMatchSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReferenceTargetSummary {
+    pub sop_class_uid: Option<String>,
+    pub sop_instance_uid: Option<String>,
+    pub series_instance_uid: Option<String>,
+    /// DICOM-declared, one-based frame numbers.
+    pub frame_numbers: Vec<u32>,
+    pub segment_numbers: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReferenceMatchSummary {
+    pub file_index: usize,
+    pub path: String,
+    pub sop_instance_uid: String,
+    /// Validated, zero-based frame indices suitable for viewer navigation.
+    pub frame_indices: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]

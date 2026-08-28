@@ -4,7 +4,7 @@ use super::state::AppState;
 use crate::api::contracts::{
     self as api_contracts, ApiEndpointContract, ApiEndpointSpec, ApiMethod, ApiOperation,
     EmbedRoiAnnotations, ErrorResponse, FilesResponse, FrameInfo, HealthResponse,
-    SeriesCatalogResponse, TagNode, API_ENDPOINTS, API_PREFIX,
+    ReferenceCatalogResponse, SeriesCatalogResponse, TagNode, API_ENDPOINTS, API_PREFIX,
 };
 use crate::server::web;
 use crate::server::RequestActivity;
@@ -68,6 +68,7 @@ json_handler_response!(
     HealthResponse,
     FilesResponse,
     SeriesCatalogResponse,
+    ReferenceCatalogResponse,
     FrameInfo,
     Vec<TagNode>,
     TagNode,
@@ -196,6 +197,22 @@ fn register_api_endpoint(
                     |state: State<AppState>, path: Result<Path<usize>, PathRejection>| async move {
                         let response: handler_result_type!(api_contracts::FileInfo) =
                             handlers::info(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileReferences => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileReferences>(endpoint);
+            require_no_query::<api_contracts::FileReferences>();
+            require_no_request::<api_contracts::FileReferences>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>, path: Result<Path<usize>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileReferences) =
+                            handlers::references(state, path).await;
                         response
                     },
                 ),

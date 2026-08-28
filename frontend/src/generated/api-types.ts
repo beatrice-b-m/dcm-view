@@ -34,6 +34,14 @@ export interface ApiEndpointTypes {
 		responseHeaders: never;
 		error: ErrorResponse;
 	};
+	fileReferences: {
+		params: { index: number };
+		query: never;
+		request: never;
+		response: ReferenceCatalogResponse;
+		responseHeaders: never;
+		error: ErrorResponse;
+	};
 	fileFrame: {
 		params: { index: number; frame: number };
 		query: FrameQuery;
@@ -144,6 +152,18 @@ export const API_ENDPOINTS = {
 		requestType: null,
 		requestMediaType: null,
 		responseType: "FrameInfo",
+		responseMediaType: "application/json",
+		responseHeadersType: null,
+		errorType: "ErrorResponse",
+		successStatus: 200,
+	},
+	fileReferences: {
+		method: "GET",
+		path: "/api/file/{index}/references",
+		queryType: null,
+		requestType: null,
+		requestMediaType: null,
+		responseType: "ReferenceCatalogResponse",
 		responseMediaType: "application/json",
 		responseHeadersType: null,
 		errorType: "ErrorResponse",
@@ -408,6 +428,33 @@ export type TagValue =
 	| { type: "binary"; length: number }
 	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
 	| { type: "error"; message: string };
+
+export interface ReferenceCatalogResponse {
+	source_file_index: number;
+	source_sop_instance_uid: string;
+	references: ReferenceSummary[];
+}
+
+export interface ReferenceSummary {
+	relationship: string;
+	target: ReferenceTargetSummary;
+	matches: ReferenceMatchSummary[];
+}
+
+export interface ReferenceTargetSummary {
+	sop_class_uid: string | null;
+	sop_instance_uid: string | null;
+	series_instance_uid: string | null;
+	frame_numbers: number[];
+	segment_numbers: number[];
+}
+
+export interface ReferenceMatchSummary {
+	file_index: number;
+	path: string;
+	sop_instance_uid: string;
+	frame_indices: number[];
+}
 
 export interface DiscoveryResult {
 	path: string;

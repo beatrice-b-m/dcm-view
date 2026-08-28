@@ -211,6 +211,64 @@ async fn every_declared_endpoint_matches_its_runtime_contract() {
 }
 
 #[tokio::test]
+async fn reference_endpoint_preserves_identity_and_resolves_navigable_frames() {
+    let dir = tempdir().expect("temp dir");
+    let source_path = dir.path().join("reference-source.dcm");
+    let source_uid = "1.2.826.0.1.3680043.10.900.1";
+    let target_uid = "1.2.826.0.1.3680043.10.900.2";
+    let target_class = "1.2.840.10008.5.1.4.1.1.2";
+    support::write_reference_dicom(
+        &source_path,
+        source_uid,
+        target_class,
+        target_uid,
+        &[1, 4, 5],
+    );
+
+    let mut source = support::file_entry(source_path, "1.2.840.10008.1.2.1", 1);
+    source.sop_instance_uid = source_uid.to_string();
+    source.sop_class_uid = "1.2.840.10008.5.1.4.1.1.30".to_string();
+    let mut target = support::file_entry(dir.path().join("target.dcm"), "1.2.840.10008.1.2.1", 4);
+    target.sop_instance_uid = target_uid.to_string();
+    target.sop_class_uid = target_class.to_string();
+
+    let test_server = TestServer::new(server::router(support::app_state(vec![source, target])));
+    let response = test_server.get("/api/file/0/references").await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_object_keys(
+        &body,
+        &["references", "source_file_index", "source_sop_instance_uid"],
+    );
+    assert_eq!(body["source_file_index"], 0);
+    assert_eq!(body["source_sop_instance_uid"], source_uid);
+    let edge = &body["references"][0];
+    assert_object_keys(edge, &["matches", "relationship", "target"]);
+    assert_eq!(edge["relationship"], "source_image");
+    assert_object_keys(
+        &edge["target"],
+        &[
+            "frame_numbers",
+            "segment_numbers",
+            "series_instance_uid",
+            "sop_class_uid",
+            "sop_instance_uid",
+        ],
+    );
+    assert_eq!(
+        edge["target"]["frame_numbers"],
+        serde_json::json!([1, 4, 5])
+    );
+    let resolved = &edge["matches"][0];
+    assert_object_keys(
+        resolved,
+        &["file_index", "frame_indices", "path", "sop_instance_uid"],
+    );
+    assert_eq!(resolved["file_index"], 1);
+    assert_eq!(resolved["frame_indices"], serde_json::json!([0, 3]));
+}
+
+#[tokio::test]
 async fn raw_frame_endpoint_exposes_frontend_metadata_header_contract() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("raw-contract.dcm");

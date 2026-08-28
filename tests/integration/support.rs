@@ -1,7 +1,7 @@
 use dcmview::annotations::AnnotationStore;
 use dcmview::server::{AppState, FileRegistry};
 use dcmview::types::FileEntry;
-use dicom_core::value::PixelFragmentSequence;
+use dicom_core::value::{DataSetSequence, PixelFragmentSequence};
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
@@ -128,6 +128,52 @@ pub fn app_state_with_annotations(files: Vec<FileEntry>, annotations: Annotation
 
 pub fn app_state_with_registry(registry: FileRegistry) -> AppState {
     AppState::new(registry, AnnotationStore::empty())
+}
+
+pub fn write_reference_dicom(
+    path: &Path,
+    source_sop_instance_uid: &str,
+    target_sop_class_uid: &str,
+    target_sop_instance_uid: &str,
+    target_frame_numbers: &[u32],
+) {
+    let referenced = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::REFERENCED_SOP_CLASS_UID, VR::UI, target_sop_class_uid),
+        DataElement::new(
+            tags::REFERENCED_SOP_INSTANCE_UID,
+            VR::UI,
+            target_sop_instance_uid,
+        ),
+        DataElement::new(
+            tags::REFERENCED_FRAME_NUMBER,
+            VR::IS,
+            PrimitiveValue::Strs(
+                target_frame_numbers
+                    .iter()
+                    .map(|number| number.to_string())
+                    .collect(),
+            ),
+        ),
+    ]);
+    let object = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::PARAMETRIC_MAP_STORAGE),
+        DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, source_sop_instance_uid),
+        DataElement::new(
+            tags::SOURCE_IMAGE_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![referenced]),
+        ),
+    ]);
+    object
+        .with_meta(
+            FileMetaTableBuilder::new()
+                .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                .media_storage_sop_class_uid(uids::PARAMETRIC_MAP_STORAGE)
+                .media_storage_sop_instance_uid(source_sop_instance_uid),
+        )
+        .expect("build reference DICOM file meta")
+        .write_to_file(path)
+        .expect("write reference DICOM fixture");
 }
 
 pub fn write_uncompressed_u16_dicom(

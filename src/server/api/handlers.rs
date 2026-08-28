@@ -2,7 +2,8 @@ use super::error::{self, ApiError};
 use super::state::AppState;
 use crate::api::contracts::{
     DiscoveryResult, EmbedRoiAnnotations, FileSummary, FilesResponse, FrameInfo, FrameQuery,
-    HealthResponse, SeriesCatalogResponse, TagNode, TagQuery, ViewerIdentity, CACHE_HEADER,
+    HealthResponse, ReferenceCatalogResponse, ReferenceMatchSummary, ReferenceSummary,
+    ReferenceTargetSummary, SeriesCatalogResponse, TagNode, TagQuery, ViewerIdentity, CACHE_HEADER,
     CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
     RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS, RAW_FRAME_HEADER_DEFAULT_WC,
     RAW_FRAME_HEADER_DEFAULT_WW, RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
@@ -10,12 +11,14 @@ use crate::api::contracts::{
     RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS, RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
 };
 use crate::pixels::{self, FrameRequest, RawFrameRequest};
+use crate::references::{self, ReferenceCandidate};
 use crate::server::tags;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::Response;
 use axum::Json;
+use tokio::task;
 
 pub(super) async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     let status = state.registry().status();
@@ -82,6 +85,63 @@ pub(super) async fn info(
         support_state: summary.support_state,
         support_reason: summary.support_reason,
         default_window: file.default_window,
+    }))
+}
+
+pub(super) async fn references(
+    State(state): State<AppState>,
+    path: Result<Path<usize>, PathRejection>,
+) -> Result<Json<ReferenceCatalogResponse>, ApiError> {
+    let Path(index) = path.map_err(error::path_rejection)?;
+    let source = state
+        .registry()
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    let source_path = source.path.clone();
+    let edges = task::spawn_blocking(move || references::extract_reference_edges(&source_path))
+        .await
+        .map_err(|error| ApiError::internal(format!("reference extraction task failed: {error}")))?
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let candidates = state
+        .registry()
+        .files_snapshot()
+        .into_iter()
+        .map(|file| ReferenceCandidate {
+            file_index: file.index,
+            path: file.path,
+            sop_class_uid: file.sop_class_uid,
+            sop_instance_uid: file.sop_instance_uid,
+            series_instance_uid: file.series_instance_uid,
+            frame_count: file.frame_count,
+        })
+        .collect::<Vec<_>>();
+    let resolved = references::resolve_reference_edges(&edges, &candidates)
+        .into_iter()
+        .map(|edge| ReferenceSummary {
+            relationship: edge.relationship.as_str().to_string(),
+            target: ReferenceTargetSummary {
+                sop_class_uid: edge.target.sop_class_uid,
+                sop_instance_uid: edge.target.sop_instance_uid,
+                series_instance_uid: edge.target.series_instance_uid,
+                frame_numbers: edge.target.frame_numbers,
+                segment_numbers: edge.target.segment_numbers,
+            },
+            matches: edge
+                .matches
+                .into_iter()
+                .map(|target| ReferenceMatchSummary {
+                    file_index: target.file_index,
+                    path: target.path.display().to_string(),
+                    sop_instance_uid: target.sop_instance_uid,
+                    frame_indices: target.frame_indices,
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(Json(ReferenceCatalogResponse {
+        source_file_index: index,
+        source_sop_instance_uid: source.sop_instance_uid,
+        references: resolved,
     }))
 }
 
