@@ -10,12 +10,15 @@ from pathlib import Path
 
 from scripts.compatibility.run import (
     PROBED_CAPABILITIES,
+    canonical_raw_bytes,
+    deterministic_navigation_frames,
     normalized_report,
     icc_profile_observation,
     overlay_display_observation,
     pixel_geometry_observation,
     png_pixels,
     reference_observation,
+    raw_header_observation,
     series_observation,
     shutter_display_observation,
     validate_json_schema,
@@ -46,6 +49,51 @@ def grayscale_png(
 
 
 class RunnerTests(unittest.TestCase):
+    def test_canonical_raw_bytes_masks_sign_extension_to_stored_bits(self) -> None:
+        sign_extended = struct.pack("<HHHH", 0xFC00, 0xFFFF, 0x0000, 0x03FF)
+        expected_stored = struct.pack("<HHHH", 0x0C00, 0x0FFF, 0x0000, 0x03FF)
+        image = {"bits_allocated": 16, "bits_stored": 12}
+
+        self.assertEqual(canonical_raw_bytes(sign_extended, image), expected_stored)
+        self.assertEqual(
+            hashlib.sha256(canonical_raw_bytes(sign_extended, image)).hexdigest(),
+            hashlib.sha256(expected_stored).hexdigest(),
+        )
+
+    def test_canonical_raw_bytes_preserves_expanded_one_bit_samples(self) -> None:
+        expanded = bytes((1, 0, 1, 0, 1, 0, 1, 0, 1))
+        self.assertEqual(
+            canonical_raw_bytes(expanded, {"bits_allocated": 1, "bits_stored": 1}),
+            expanded,
+        )
+
+    def test_raw_headers_match_declared_image_organization(self) -> None:
+        image = {
+            "rows": 2,
+            "columns": 3,
+            "bits_allocated": 16,
+            "pixel_representation": 1,
+            "samples_per_pixel": 1,
+            "photometric_interpretation": "MONOCHROME2",
+        }
+        headers = {
+            "x-frame-rows": "2",
+            "x-frame-columns": "3",
+            "x-frame-bits-allocated": "16",
+            "x-frame-pixel-representation": "1",
+            "x-frame-samples-per-pixel": "1",
+            "x-frame-photometric-interpretation": "MONOCHROME2",
+        }
+        self.assertTrue(raw_header_observation(headers, image)["passed"])
+        headers["x-frame-columns"] = "4"
+        self.assertFalse(raw_header_observation(headers, image)["passed"])
+
+    def test_navigation_frames_cover_required_positions_deterministically(self) -> None:
+        first = deterministic_navigation_frames("case/a", 17)
+        self.assertEqual(first, deterministic_navigation_frames("case/a", 17))
+        self.assertTrue({0, 8, 16}.issubset(first))
+        self.assertLessEqual(len(first), 4)
+
     def test_overlay_capability_requires_exact_declared_display_pixels(self) -> None:
         expected = {
             "image": {"rows": 2, "columns": 2},

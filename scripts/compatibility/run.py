@@ -145,6 +145,54 @@ RAW_HEADERS = (
 )
 
 
+def canonical_raw_bytes(payload: bytes, image: dict[str, Any]) -> bytes:
+    """Normalize decoded samples to the suite's stored-bit byte convention."""
+    bits_allocated = image.get("bits_allocated")
+    bits_stored = image.get("bits_stored")
+    if (
+        isinstance(bits_allocated, int)
+        and isinstance(bits_stored, int)
+        and bits_allocated in {8, 16}
+        and 0 < bits_stored < bits_allocated
+    ):
+        sample_bytes = bits_allocated // 8
+        if len(payload) % sample_bytes:
+            return payload
+        mask = (1 << bits_stored) - 1
+        normalized = bytearray(len(payload))
+        for offset in range(0, len(payload), sample_bytes):
+            value = int.from_bytes(payload[offset : offset + sample_bytes], "little") & mask
+            normalized[offset : offset + sample_bytes] = value.to_bytes(sample_bytes, "little")
+        return bytes(normalized)
+    return payload
+
+
+def raw_header_observation(headers: dict[str, str], image: dict[str, Any]) -> dict[str, Any]:
+    declared = {
+        "x-frame-rows": image.get("rows"),
+        "x-frame-columns": image.get("columns"),
+        "x-frame-bits-allocated": image.get("bits_allocated"),
+        "x-frame-pixel-representation": image.get("pixel_representation"),
+        "x-frame-samples-per-pixel": image.get("samples_per_pixel"),
+        "x-frame-photometric-interpretation": image.get("photometric_interpretation"),
+    }
+    expected = {name: str(value) for name, value in declared.items() if value is not None}
+    observed = {name: headers.get(name) for name in expected}
+    return {
+        "expected": expected,
+        "observed": observed,
+        "passed": observed == expected,
+    }
+
+
+def deterministic_navigation_frames(case_id: str, frame_count: int) -> list[int]:
+    if frame_count <= 0:
+        return []
+    digest = hashlib.sha256(case_id.encode("utf-8")).digest()
+    random_index = int.from_bytes(digest[:8], "big") % frame_count
+    return sorted({0, frame_count // 2, frame_count - 1, random_index})
+
+
 class CampaignError(RuntimeError):
     """Raised when a campaign invariant cannot be established."""
 
@@ -959,21 +1007,30 @@ def probe_case(
                 except (ValueError, zlib.error) as error:
                     checks["png_dimensions"] = {"passed": False, "error": str(error)}
             if frame_count > 1:
-                display_last = request(
-                    "display_last", f"/api/file/{index}/frame/{frame_count - 1}"
-                )
-                last_dimensions = None
-                if display_last["status"] == 200:
-                    try:
-                        last_width, last_height, _ = png_pixels(display_last["body"])
-                        last_dimensions = [last_width, last_height]
-                    except (ValueError, zlib.error):
-                        pass
+                navigation_results = []
+                for navigation_index in deterministic_navigation_frames(entry["case_id"], frame_count):
+                    display_frame = display_first if navigation_index == 0 else request(
+                        f"display_navigation_{navigation_index}",
+                        f"/api/file/{index}/frame/{navigation_index}",
+                    )
+                    observed_dimensions = None
+                    if display_frame["status"] == 200:
+                        try:
+                            observed_width, observed_height, _ = png_pixels(display_frame["body"])
+                            observed_dimensions = [observed_width, observed_height]
+                        except (ValueError, zlib.error):
+                            pass
+                    navigation_results.append({
+                        "frame": navigation_index,
+                        "status": display_frame["status"],
+                        "observed_dimensions": observed_dimensions,
+                        "passed": display_frame["status"] == 200
+                        and observed_dimensions == [image.get("columns"), image.get("rows")],
+                    })
                 checks["frame_navigation"] = {
-                    "last_frame": frame_count - 1,
-                    "observed_dimensions": last_dimensions,
-                    "passed": display_last["status"] == 200
-                    and last_dimensions == [image.get("columns"), image.get("rows")],
+                    "requested_frames": [row["frame"] for row in navigation_results],
+                    "results": navigation_results,
+                    "passed": all(row["passed"] for row in navigation_results),
                 }
             raw_first = request(
                 "raw_first", f"/api/file/{index}/frame/0/raw", ("x-cache",) + RAW_HEADERS
@@ -985,14 +1042,20 @@ def probe_case(
                 raw_first["headers"].get("x-cache") == "MISS"
                 and raw_second["headers"].get("x-cache") == "HIT"
             )
+            checks["raw_headers"] = raw_header_observation(raw_first["headers"], image)
             expected_hashes = pixel_data.get("frame_hashes") or []
             transfer_syntax = (expected.get("dicom") or {}).get("transfer_syntax_uid")
             if expected_hashes and transfer_syntax not in LOSSY_TRANSFER_SYNTAXES:
+                first_canonical_hash = (
+                    hashlib.sha256(canonical_raw_bytes(raw_first["body"], image)).hexdigest()
+                    if raw_first["status"] == 200 else None
+                )
                 checks["lossless_frame_hash"] = {
                     "expected": expected_hashes[0],
-                    "observed": raw_first["body_sha256"] if raw_first["status"] == 200 else None,
+                    "observed": first_canonical_hash,
+                    "response_body_sha256": raw_first["body_sha256"] if raw_first["status"] == 200 else None,
                     "passed": raw_first["status"] == 200
-                    and raw_first["body_sha256"] == expected_hashes[0],
+                    and first_canonical_hash == expected_hashes[0],
                 }
                 observed_hashes = []
                 for frame_index, expected_hash in enumerate(expected_hashes):
@@ -1001,9 +1064,9 @@ def probe_case(
                         f"/api/file/{index}/frame/{frame_index}/raw",
                         RAW_HEADERS,
                     )
-                    observed_hashes.append(
-                        raw_frame["body_sha256"] if raw_frame["status"] == 200 else None
-                    )
+                    observed_hashes.append(hashlib.sha256(
+                        canonical_raw_bytes(raw_frame["body"], image)
+                    ).hexdigest() if raw_frame["status"] == 200 else None)
                 checks["lossless_frame_hashes"] = {
                     "expected": expected_hashes,
                     "observed": observed_hashes,
@@ -1051,6 +1114,7 @@ def _finish_result(
             "frame_navigation",
             "lossless_frame_hash",
             "lossless_frame_hashes",
+            "raw_headers",
             "pixel_geometry",
             "references",
             "overlay_display",
