@@ -113,7 +113,7 @@ impl NativeFrameLayout<'_> {
             .ok_or(NativeLayoutError::SizeOverflow)
     }
 
-    pub(crate) fn extract_frame(
+    pub(crate) fn extract_raw_frame(
         self,
         source: &[u8],
         frame: u32,
@@ -137,27 +137,35 @@ impl NativeFrameLayout<'_> {
                 available: source.len(),
             })?;
 
-        let mut expanded = if self.is_ybr_full_422() {
-            expand_ybr_full_422(stored, self.rows, self.columns)?
+        if let Some(planar) = self.planar_configuration {
+            if planar > 1 {
+                return Err(NativeLayoutError::UnsupportedPlanarConfiguration(planar));
+            }
+        }
+        let mut raw = stored.to_vec();
+        canonicalize_little_endian(&mut raw, self.bits_allocated, self.byte_order)?;
+        Ok(raw)
+    }
+
+    pub(crate) fn extract_display_frame(
+        self,
+        source: &[u8],
+        frame: u32,
+    ) -> Result<Vec<u8>, NativeLayoutError> {
+        let raw = self.extract_raw_frame(source, frame)?;
+        if self.is_ybr_full_422() {
+            expand_ybr_full_422(&raw, self.rows, self.columns)
         } else if self.planar_configuration == Some(1) {
             interleave_planar_samples(
-                stored,
+                &raw,
                 self.rows,
                 self.columns,
                 self.samples_per_pixel,
                 self.bits_allocated,
-            )?
+            )
         } else {
-            if let Some(planar) = self.planar_configuration {
-                if planar > 1 {
-                    return Err(NativeLayoutError::UnsupportedPlanarConfiguration(planar));
-                }
-            }
-            stored.to_vec()
-        };
-
-        canonicalize_little_endian(&mut expanded, self.bits_allocated, self.byte_order)?;
-        Ok(expanded)
+            Ok(raw)
+        }
     }
 
     fn is_ybr_full_422(self) -> bool {
@@ -402,13 +410,17 @@ mod tests {
         rgb.samples_per_pixel = 3;
         rgb.planar_configuration = Some(0);
         assert_eq!(
-            rgb.extract_frame(&[1, 2, 3, 4, 5, 6], 0).unwrap(),
+            rgb.extract_display_frame(&[1, 2, 3, 4, 5, 6], 0).unwrap(),
             [1, 2, 3, 4, 5, 6]
         );
 
         rgb.planar_configuration = Some(1);
         assert_eq!(
-            rgb.extract_frame(&[1, 4, 2, 5, 3, 6], 0).unwrap(),
+            rgb.extract_raw_frame(&[1, 4, 2, 5, 3, 6], 0).unwrap(),
+            [1, 4, 2, 5, 3, 6]
+        );
+        assert_eq!(
+            rgb.extract_display_frame(&[1, 4, 2, 5, 3, 6], 0).unwrap(),
             [1, 2, 3, 4, 5, 6]
         );
     }
@@ -421,7 +433,11 @@ mod tests {
         assert_eq!(ybr.stored_frame_bytes().unwrap(), 4);
         assert_eq!(ybr.expanded_frame_bytes().unwrap(), 6);
         assert_eq!(
-            ybr.extract_frame(&[10, 20, 30, 40], 0).unwrap(),
+            ybr.extract_raw_frame(&[10, 20, 30, 40], 0).unwrap(),
+            [10, 20, 30, 40]
+        );
+        assert_eq!(
+            ybr.extract_display_frame(&[10, 20, 30, 40], 0).unwrap(),
             [10, 30, 40, 20, 30, 40]
         );
 
@@ -439,10 +455,16 @@ mod tests {
         packed.bits_allocated = 1;
         let source = [0b1100_1101, 0b0000_0010];
         assert_eq!(packed.expanded_frame_bytes().unwrap(), 5);
-        assert_eq!(packed.extract_frame(&source, 0).unwrap(), [1, 0, 1, 1, 0]);
-        assert_eq!(packed.extract_frame(&source, 1).unwrap(), [0, 1, 1, 0, 1]);
         assert_eq!(
-            packed.extract_frame(&source, 3),
+            packed.extract_raw_frame(&source, 0).unwrap(),
+            [1, 0, 1, 1, 0]
+        );
+        assert_eq!(
+            packed.extract_display_frame(&source, 1).unwrap(),
+            [0, 1, 1, 0, 1]
+        );
+        assert_eq!(
+            packed.extract_raw_frame(&source, 3),
             Err(NativeLayoutError::FrameOutOfBounds {
                 frame: 3,
                 available: 2
@@ -457,7 +479,7 @@ mod tests {
         big_endian.byte_order = NativeByteOrder::BigEndian;
         assert_eq!(
             big_endian
-                .extract_frame(&[0x12, 0x34, 0xab, 0xcd], 0)
+                .extract_raw_frame(&[0x12, 0x34, 0xab, 0xcd], 0)
                 .unwrap(),
             [0x34, 0x12, 0xcd, 0xab]
         );

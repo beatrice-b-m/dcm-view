@@ -1,10 +1,12 @@
 mod cache;
+mod color;
 mod encapsulated;
 mod error;
 mod jpeg;
 mod jpeg2000;
 mod native;
 mod native_layout;
+mod palette;
 mod render;
 mod rle;
 mod service;

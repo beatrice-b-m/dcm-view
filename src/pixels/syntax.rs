@@ -164,7 +164,10 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
     match (file.samples_per_pixel, photometric.as_str()) {
         (1, "MONOCHROME1" | "MONOCHROME2") => PixelSupport::renderable(),
         (1, "PALETTE COLOR")
-            if syntax_class == TransferSyntaxClass::Rle && file.bits_allocated == 8 =>
+            if matches!(
+                syntax_class,
+                TransferSyntaxClass::Rle | TransferSyntaxClass::Uncompressed
+            ) && file.bits_allocated == 8 =>
         {
             PixelSupport::renderable()
         }
@@ -172,7 +175,15 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
             PixelSupport::unsupported(PixelSupportReason::PaletteColorNotSupported)
         }
         (3, "RGB" | "YBR_FULL")
-            if syntax_class == TransferSyntaxClass::Rle && file.bits_allocated == 8 =>
+            if matches!(
+                syntax_class,
+                TransferSyntaxClass::Rle | TransferSyntaxClass::Uncompressed
+            ) && file.bits_allocated == 8 =>
+        {
+            PixelSupport::renderable()
+        }
+        (3, "YBR_FULL_422")
+            if syntax_class == TransferSyntaxClass::Uncompressed && file.bits_allocated == 8 =>
         {
             PixelSupport::renderable()
         }
@@ -352,7 +363,7 @@ mod tests {
                 PixelSupportReason::PaletteColorNotSupported,
             ),
         ] {
-            let mut entry = file("1.2.840.10008.1.2.1");
+            let mut entry = file("1.2.840.10008.1.2.4.50");
             entry.bits_allocated = 8;
             entry.samples_per_pixel = samples_per_pixel;
             entry.photometric_interpretation = photometric.to_string();
@@ -367,6 +378,29 @@ mod tests {
             assert!(support
                 .reason_id()
                 .is_some_and(|id| id.starts_with("pixel_layout.")));
+        }
+    }
+
+    #[test]
+    fn supported_uncompressed_color_layouts_are_renderable() {
+        for (samples_per_pixel, photometric) in [
+            (1, "PALETTE COLOR"),
+            (3, "RGB"),
+            (3, "YBR_FULL"),
+            (3, "YBR_FULL_422"),
+        ] {
+            let mut entry = file("1.2.840.10008.1.2.1");
+            entry.bits_allocated = 8;
+            entry.samples_per_pixel = samples_per_pixel;
+            entry.photometric_interpretation = photometric.to_string();
+
+            let support = classify_pixel_support(&entry);
+            assert_eq!(
+                support.state,
+                PixelSupportState::Renderable,
+                "{photometric}"
+            );
+            assert_eq!(support.reason, None, "{photometric}");
         }
     }
 
