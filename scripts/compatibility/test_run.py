@@ -468,7 +468,7 @@ class RunnerTests(unittest.TestCase):
         result = {
             "root": "smoke", "case_id": "classic/sc/example", "path": "x.dcm",
             "identity": {"file_sha256": "0" * 64}, "execution_safety": "safe",
-            "compatibility": "full_support",
+            "compatibility": "verified",
         }
         report = {
             "detail_schema_version": "0.1.0", "generated_at": "now", "worklist": {},

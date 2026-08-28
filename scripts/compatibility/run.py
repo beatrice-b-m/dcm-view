@@ -33,9 +33,9 @@ except ModuleNotFoundError:
 DETAIL_SCHEMA_VERSION = "0.1.0"
 EXECUTION_OUTCOMES = {"safe", "timeout", "crash", "flaky"}
 COMPATIBILITY_OUTCOMES = {
-    "full_support",
+    "verified",
     "metadata_only",
-    "known_gap",
+    "unverified",
     "failure",
     "unavailable",
 }
@@ -1101,7 +1101,7 @@ def _finish_result(
     if safety != "safe" or server_failure or not all(required_checks):
         compatibility = "failure"
     elif unprobed or controlled_gap:
-        compatibility = "known_gap"
+        compatibility = "unverified"
     elif checks.get("metadata_only_response"):
         compatibility = "metadata_only"
     else:
@@ -1132,7 +1132,7 @@ def _finish_result(
         visual = checks.get("visual")
         if visual and visual["status"] in {"failed", "unautomated"}:
             validation_failures.append("visual")
-        compatibility = "known_gap" if validation_failures else "full_support"
+        compatibility = "unverified" if validation_failures else "verified"
     return {
         "root": occurrence["root"],
         "case_id": occurrence["case_id"],
