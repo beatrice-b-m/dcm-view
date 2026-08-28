@@ -7,6 +7,11 @@ use image::{GrayImage, Luma};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Keep generated fixtures byte-for-byte stable across dicom-rs upgrades. These
+// values are fixture provenance, not the implementation identity of dcmview.
+const FIXTURE_IMPLEMENTATION_CLASS_UID: &str = "2.25.214312761802046835989399652652980912193";
+const FIXTURE_IMPLEMENTATION_VERSION_NAME: &str = "DICOM-rs 0.9.0";
+
 fn main() {
     let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     fs::create_dir_all(&fixture_dir).expect("create fixture directory");
@@ -82,6 +87,8 @@ fn write_uncompressed_multiframe(path: &Path) {
     let file_object = obj
         .with_meta(
             FileMetaTableBuilder::new()
+                .implementation_class_uid(FIXTURE_IMPLEMENTATION_CLASS_UID)
+                .implementation_version_name(FIXTURE_IMPLEMENTATION_VERSION_NAME)
                 .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
                 .media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
                 .media_storage_sop_instance_uid("2.25.2000001"),
@@ -148,6 +155,8 @@ fn write_large_jpeg_single_frame(path: &Path) {
     let file_object = obj
         .with_meta(
             FileMetaTableBuilder::new()
+                .implementation_class_uid(FIXTURE_IMPLEMENTATION_CLASS_UID)
+                .implementation_version_name(FIXTURE_IMPLEMENTATION_VERSION_NAME)
                 .transfer_syntax(uids::JPEG_BASELINE8_BIT)
                 .media_storage_sop_class_uid(
                     uids::DIGITAL_MAMMOGRAPHY_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION,
@@ -288,6 +297,8 @@ fn write_grayscale_encapsulated_fixture(
     let file_object = obj
         .with_meta(
             FileMetaTableBuilder::new()
+                .implementation_class_uid(FIXTURE_IMPLEMENTATION_CLASS_UID)
+                .implementation_version_name(FIXTURE_IMPLEMENTATION_VERSION_NAME)
                 .transfer_syntax(spec.transfer_syntax_uid)
                 .media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
                 .media_storage_sop_instance_uid(spec.sop_instance_uid),
@@ -345,6 +356,8 @@ fn write_jpeg_fixture(
     let file_object = obj
         .with_meta(
             FileMetaTableBuilder::new()
+                .implementation_class_uid(FIXTURE_IMPLEMENTATION_CLASS_UID)
+                .implementation_version_name(FIXTURE_IMPLEMENTATION_VERSION_NAME)
                 .transfer_syntax(uids::JPEG_BASELINE8_BIT)
                 .media_storage_sop_class_uid(
                     uids::DIGITAL_MAMMOGRAPHY_X_RAY_IMAGE_STORAGE_FOR_PRESENTATION,
@@ -376,6 +389,8 @@ fn write_sr_without_pixels(path: &Path) {
     let file_object = obj
         .with_meta(
             FileMetaTableBuilder::new()
+                .implementation_class_uid(FIXTURE_IMPLEMENTATION_CLASS_UID)
+                .implementation_version_name(FIXTURE_IMPLEMENTATION_VERSION_NAME)
                 .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
                 .media_storage_sop_class_uid(uids::BASIC_TEXT_SR_STORAGE)
                 .media_storage_sop_instance_uid("2.25.2000004"),
@@ -425,6 +440,8 @@ fn write_image_without_pixels(path: &Path) {
     let file_object = obj
         .with_meta(
             FileMetaTableBuilder::new()
+                .implementation_class_uid(FIXTURE_IMPLEMENTATION_CLASS_UID)
+                .implementation_version_name(FIXTURE_IMPLEMENTATION_VERSION_NAME)
                 .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
                 .media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
                 .media_storage_sop_instance_uid("2.25.2000006"),
