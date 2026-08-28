@@ -9,6 +9,7 @@ import type {
 	FrameInfo,
 	JsonApiEndpointId,
 	RawFrameMetadata,
+	ReferenceCatalogResponse,
 	SeriesCatalogResponse,
 	TagNode,
 	TagQuery,
@@ -40,6 +41,10 @@ export type {
 	FrameInfo,
 	HealthResponse,
 	RawFrameMetadata,
+	ReferenceCatalogResponse,
+	ReferenceMatchSummary,
+	ReferenceSummary,
+	ReferenceTargetSummary,
 	SeriesCatalogResponse,
 	SeriesSummary,
 	SeriesStackSummary,
@@ -101,6 +106,10 @@ export function fetchFiles(): Promise<FilesResponse> {
 
 export function fetchSeries(): Promise<SeriesCatalogResponse> {
 	return requestJsonEndpoint("series", {});
+}
+
+export function fetchReferences(fileIndex: number): Promise<ReferenceCatalogResponse> {
+	return requestJsonEndpoint("fileReferences", { index: fileIndex });
 }
 
 export function fetchFrameInfo(fileIndex: number): Promise<FrameInfo> {
