@@ -3,6 +3,7 @@ pub mod api;
 pub mod loader;
 pub mod object_kind;
 pub mod pixels;
+pub mod references;
 pub mod series;
 pub mod server;
 pub mod tunnel;
