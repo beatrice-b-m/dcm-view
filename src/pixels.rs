@@ -1,5 +1,6 @@
 mod cache;
 mod color;
+mod deflated_frame;
 mod encapsulated;
 mod error;
 mod jpeg;

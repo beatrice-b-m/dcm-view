@@ -122,6 +122,22 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
         return PixelSupport::metadata_only(PixelSupportReason::PixelDataAbsentOrUnrecognized);
     }
 
+    if file.transfer_syntax_uid == super::deflated_frame::DEFLATED_IMAGE_FRAME_UID {
+        return if file.rows > 0
+            && file.columns > 0
+            && file.bits_allocated == 1
+            && file.pixel_representation == 0
+            && file.samples_per_pixel == 1
+            && matches!(
+                file.photometric_interpretation.trim(),
+                "MONOCHROME1" | "MONOCHROME2"
+            ) {
+            PixelSupport::renderable()
+        } else {
+            PixelSupport::unsupported(PixelSupportReason::BitPackedPixelsNotSupported)
+        };
+    }
+
     let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
     match syntax_class {
         TransferSyntaxClass::Unsupported => {
@@ -311,11 +327,6 @@ mod tests {
                 "transfer_syntax.jpeg_xl_not_supported",
             ),
             (
-                "1.2.840.10008.1.2.8.1",
-                PixelSupportReason::DeflatedImageFrameNotSupported,
-                "transfer_syntax.deflated_image_frame_not_supported",
-            ),
-            (
                 "9.9.9",
                 PixelSupportReason::TransferSyntaxNotSupported,
                 "transfer_syntax.not_supported",
@@ -328,6 +339,24 @@ mod tests {
             assert_eq!(support.reason, Some(reason), "{uid}");
             assert_eq!(support.reason_id(), Some(reason_id), "{uid}");
         }
+    }
+
+    #[test]
+    fn only_the_bounded_deflated_binary_layout_is_renderable() {
+        let mut entry = file("1.2.840.10008.1.2.8.1");
+        entry.bits_allocated = 1;
+        assert_eq!(
+            classify_pixel_support(&entry).state,
+            PixelSupportState::Renderable
+        );
+
+        entry.bits_allocated = 8;
+        let unsupported = classify_pixel_support(&entry);
+        assert_eq!(unsupported.state, PixelSupportState::Unsupported);
+        assert_eq!(
+            unsupported.reason,
+            Some(PixelSupportReason::BitPackedPixelsNotSupported)
+        );
     }
 
     #[test]
