@@ -37,7 +37,7 @@ pub(super) async fn files(State(state): State<AppState>) -> Json<FilesResponse> 
         files: state.registry().summaries_snapshot(),
         discovery: state
             .registry()
-            .discovery_ledger_snapshot()
+            .discovery_response_snapshot()
             .into_iter()
             .map(|record| DiscoveryResult {
                 path: record.path.display().to_string(),

@@ -130,10 +130,11 @@ The executable contract is kept consistent by three layers:
   context without changing automation behavior.
 - `/api/health` exposes the package version plus build source revision, target,
   and profile so compatibility evidence can identify the tested viewer build.
-- `/api/files` exposes the memory-only discovery ledger and each file's SOP
-  Class, coarse object kind, and explicit `renderable`, `metadata_only`, or
-  `unsupported` state with a stable reason when applicable. These states
-  describe viewer capability, not DICOM conformance.
+- `/api/files` exposes a response-bounded view of the 256 most recent entries
+  in the memory-only discovery ledger and each file's SOP Class, coarse object
+  kind, and explicit `renderable`, `metadata_only`, or `unsupported` state with
+  a stable reason when applicable. Exact scan totals remain separate. These
+  states describe viewer capability, not DICOM conformance.
 - `/api/series` builds an ephemeral server-owned catalog grouped strictly by
   Study and Series UID. Its typed stacks map virtual positions to source file
   and frame, prefer patient-geometry ordering for classic slices, surface

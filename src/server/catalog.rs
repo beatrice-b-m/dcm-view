@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{futures::Notified, Notify};
 
+pub const DISCOVERY_RESPONSE_MAX_RECORDS: usize = 256;
+
 #[derive(Clone)]
 pub struct FileRegistry {
     inner: Arc<RwLock<FileRegistryInner>>,
@@ -153,6 +155,21 @@ impl FileRegistry {
             .expect("file registry lock poisoned")
             .discovery_ledger
             .clone();
+        records.sort();
+        records
+    }
+
+    pub fn discovery_response_snapshot(&self) -> Vec<DiscoveryRecord> {
+        let mut records = self
+            .inner
+            .read()
+            .expect("file registry lock poisoned")
+            .discovery_ledger
+            .iter()
+            .rev()
+            .take(DISCOVERY_RESPONSE_MAX_RECORDS)
+            .cloned()
+            .collect::<Vec<_>>();
         records.sort();
         records
     }
@@ -412,7 +429,7 @@ impl Default for FileRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::FileRegistry;
+    use super::{FileRegistry, DISCOVERY_RESPONSE_MAX_RECORDS};
     use crate::loader::{DiscoveryDisposition, DiscoveryReason, DiscoveryRecord};
     use std::path::PathBuf;
 
@@ -459,5 +476,32 @@ mod tests {
         let clone = registry.clone();
         assert_eq!(clone.discovery_ledger_snapshot(), records);
         assert!(FileRegistry::new().discovery_ledger_snapshot().is_empty());
+    }
+
+    #[test]
+    fn discovery_response_snapshot_is_bounded_to_recent_records() {
+        let registry = FileRegistry::new();
+        for index in 0..DISCOVERY_RESPONSE_MAX_RECORDS + 2 {
+            registry.record_discovery(DiscoveryRecord {
+                path: PathBuf::from(format!("/scan/{index:04}.dcm")),
+                disposition: DiscoveryDisposition::Selected,
+                reason: DiscoveryReason::ValidDicom,
+            });
+        }
+
+        let response = registry.discovery_response_snapshot();
+        assert_eq!(response.len(), DISCOVERY_RESPONSE_MAX_RECORDS);
+        assert_eq!(response[0].path, PathBuf::from("/scan/0002.dcm"));
+        assert_eq!(
+            response.last().expect("last bounded record").path,
+            PathBuf::from(format!(
+                "/scan/{:04}.dcm",
+                DISCOVERY_RESPONSE_MAX_RECORDS + 1
+            ))
+        );
+        assert_eq!(
+            registry.discovery_ledger_snapshot().len(),
+            DISCOVERY_RESPONSE_MAX_RECORDS + 2
+        );
     }
 }

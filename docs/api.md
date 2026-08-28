@@ -149,7 +149,7 @@ Progress fields:
 | `scanned` | Count of valid DICOM files accepted into the registry. |
 | `skipped` | Count of files skipped because they could not be read as supported DICOM objects. |
 | `filtered` | Count of readable DICOM files excluded by `--filter` metadata filters. |
-| `discovery` | Ephemeral per-input ledger with normalized path, disposition, and stable reason code. |
+| `discovery` | Up to the 256 most recently observed ephemeral ledger entries, sorted by normalized path, with disposition and stable reason code. Exact totals remain in `scanned`, `skipped`, and `filtered`. |
 
 `support_state` is `renderable`, `metadata_only`, or `unsupported`. A non-null
 `support_reason` is a stable machine identifier such as
