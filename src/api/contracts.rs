@@ -461,6 +461,8 @@ pub struct FileSummary {
     pub frame_count: u32,
     pub rows: u32,
     pub columns: u32,
+    /// Effective physical row-to-column pixel extent ratio.
+    pub pixel_aspect_ratio: Option<f64>,
     pub transfer_syntax_uid: String,
     pub default_window: Option<WindowPreset>,
 }

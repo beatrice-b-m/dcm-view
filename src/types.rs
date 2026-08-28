@@ -31,6 +31,14 @@ pub struct NativePixelMetadata {
     pub normalized_pixel_aspect: Option<[f64; 2]>,
 }
 
+impl NativePixelMetadata {
+    pub fn effective_pixel_aspect_ratio(&self) -> Option<f64> {
+        let [row, column] = self.normalized_pixel_aspect?;
+        let ratio = row / column;
+        (ratio.is_finite() && ratio > 0.0).then_some(ratio)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub index: usize,
@@ -192,6 +200,10 @@ impl From<&FileEntry> for FileSummary {
             frame_count: value.frame_count,
             rows: value.rows,
             columns: value.columns,
+            pixel_aspect_ratio: value
+                .series_metadata
+                .native_pixel
+                .effective_pixel_aspect_ratio(),
             transfer_syntax_uid: value.transfer_syntax_uid.clone(),
             default_window: value.default_window,
         }
@@ -304,7 +316,8 @@ impl std::error::Error for WindowRequestError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        frame_geometry_value, FrameCacheKey, WindowMode, WindowRequest, WindowRequestError,
+        frame_geometry_value, FrameCacheKey, NativePixelMetadata, WindowMode, WindowRequest,
+        WindowRequestError,
     };
 
     #[test]
@@ -316,6 +329,20 @@ mod tests {
         assert_eq!(frame_geometry_value(&per_frame, top_level, 1), top_level);
         assert_eq!(frame_geometry_value(&per_frame, top_level, 2), top_level);
         assert_eq!(frame_geometry_value::<3>(&[], None, 0), None);
+    }
+
+    #[test]
+    fn effective_pixel_aspect_ratio_requires_positive_finite_geometry() {
+        let mut metadata = NativePixelMetadata {
+            normalized_pixel_aspect: Some([2.0, 1.0]),
+            ..Default::default()
+        };
+        assert_eq!(metadata.effective_pixel_aspect_ratio(), Some(2.0));
+
+        metadata.normalized_pixel_aspect = Some([f64::INFINITY, 1.0]);
+        assert_eq!(metadata.effective_pixel_aspect_ratio(), None);
+        metadata.normalized_pixel_aspect = Some([1.0, 0.0]);
+        assert_eq!(metadata.effective_pixel_aspect_ratio(), None);
     }
 
     #[test]

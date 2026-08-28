@@ -330,6 +330,7 @@ export interface FileSummary {
 	frame_count: number;
 	rows: number;
 	columns: number;
+	pixel_aspect_ratio: number | null;
 	transfer_syntax_uid: string;
 	default_window: WindowPreset | null;
 }

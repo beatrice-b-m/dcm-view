@@ -33,6 +33,7 @@ function file(overrides: Partial<FileSummary>): FileSummary {
 		frame_count: 1,
 		rows: 512,
 		columns: 512,
+		pixel_aspect_ratio: null,
 		transfer_syntax_uid: "1.2.840.10008.1.2.1",
 		default_window: null,
 		...overrides,
