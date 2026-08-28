@@ -101,10 +101,16 @@ active tab. A sequence may describe frames from one multiframe object, many
 single-frame CT/MR objects, or a mixture of both. Viewport display and raw
 resources are keyed by source file/frame identity but retained for the logical
 tab lifetime, so crossing a source-file boundary does not clear already loaded
-frames. Byte-budgeted LRU eviction is the only active-stack discard policy;
-near-frame prefetch does not prune previously visited frames. Cine resolves
-logical positions to source frames and uses the same prepare-then-render cache
-path as manual navigation.
+frames. Raw foreground and prefetch consumers share one in-flight request per
+source frame; consumer navigation does not cancel reusable work, while logical
+tab teardown aborts the request registry. Display resources use independent
+byte-budgeted LRU tiers: a 320 MiB compressed PNG payload cache and a 128 MiB
+decoded RGBA bitmap working set. Bitmap eviction closes only the decoded browser
+resource and preserves its PNG for local re-decoding. Background display
+prefetch fills the PNG tier without eagerly decoding every frame. These byte
+budgets are the only active-stack discard policy; near-frame prefetch does not
+prune previously visited frames. Cine resolves logical positions to source
+frames and uses the same prepare-then-render cache path as manual navigation.
 
 ## Executable HTTP Contract
 
