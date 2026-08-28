@@ -81,6 +81,7 @@ async fn json_endpoints_match_frontend_contract_shapes() {
             "path",
             "patient_id",
             "patient_name",
+            "pixel_aspect_ratio",
             "rows",
             "series_description",
             "series_instance_uid",
