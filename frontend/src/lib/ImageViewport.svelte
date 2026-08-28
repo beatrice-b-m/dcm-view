@@ -331,6 +331,7 @@
 
 	function setSelectedRoi(index: number | null) {
 		if (!activeFile) return;
+		if ((selectedRoiByFile[activeFile.index] ?? null) === index) return;
 		selectedRoiByFile = {
 			...selectedRoiByFile,
 			[activeFile.index]: index,
