@@ -202,10 +202,11 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
         (1, "PALETTE COLOR") => {
             PixelSupport::unsupported(PixelSupportReason::PaletteColorNotSupported)
         }
-        (3, "RGB" | "YBR_FULL")
+        (3, "RGB" | "YBR_FULL" | "YBR_FULL_422")
             if matches!(
                 syntax_class,
-                TransferSyntaxClass::Rle
+                TransferSyntaxClass::Jpeg
+                    | TransferSyntaxClass::Rle
                     | TransferSyntaxClass::JpegXl
                     | TransferSyntaxClass::Uncompressed
             ) && file.bits_allocated == 8 =>
@@ -411,32 +412,29 @@ mod tests {
     }
 
     #[test]
-    fn generic_color_responses_are_not_declared_fully_renderable() {
-        for (samples_per_pixel, photometric, expected_reason) in [
-            (3, "RGB", PixelSupportReason::GenericColorRenderingOnly),
-            (3, "YBR_FULL", PixelSupportReason::GenericColorRenderingOnly),
-            (
-                1,
-                "PALETTE COLOR",
-                PixelSupportReason::PaletteColorNotSupported,
-            ),
-        ] {
+    fn baseline_jpeg_color_layouts_are_renderable_after_rgb_decode() {
+        for photometric in ["RGB", "YBR_FULL", "YBR_FULL_422"] {
             let mut entry = file("1.2.840.10008.1.2.4.50");
             entry.bits_allocated = 8;
-            entry.samples_per_pixel = samples_per_pixel;
+            entry.samples_per_pixel = 3;
             entry.photometric_interpretation = photometric.to_string();
 
             let support = classify_pixel_support(&entry);
             assert_eq!(
                 support.state,
-                PixelSupportState::Unsupported,
+                PixelSupportState::Renderable,
                 "{photometric}"
             );
-            assert_eq!(support.reason, Some(expected_reason), "{photometric}");
-            assert!(support
-                .reason_id()
-                .is_some_and(|id| id.starts_with("pixel_layout.")));
+            assert_eq!(support.reason, None, "{photometric}");
         }
+
+        let mut palette = file("1.2.840.10008.1.2.4.50");
+        palette.bits_allocated = 8;
+        palette.photometric_interpretation = "PALETTE COLOR".to_string();
+        assert_eq!(
+            classify_pixel_support(&palette).reason,
+            Some(PixelSupportReason::PaletteColorNotSupported)
+        );
     }
 
     #[test]

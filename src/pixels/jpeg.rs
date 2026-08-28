@@ -6,7 +6,9 @@ use dicom_object::open_file;
 use dicom_pixeldata::PixelDecoder;
 use tokio::task;
 
+use super::color::encode_rgb8_png_with_icc;
 use super::error::{PixelError, PixelResult};
+use super::icc::select_icc_profile;
 use super::render::encode_windowed_luminance_png;
 
 pub(crate) async fn decode_compressed_frame_to_png(
@@ -48,6 +50,29 @@ fn decode_compressed_frame_to_png_blocking(
             obj.meta().transfer_syntax()
         )
     })?;
+    if decoded.samples_per_pixel() == 3 {
+        if decoded.bits_allocated() != 8 {
+            return Err(anyhow!(
+                "compressed decode failed: unsupported color BitsAllocated {}",
+                decoded.bits_allocated()
+            ));
+        }
+        let rgb = decoded.frame_data(frame)?.to_vec();
+        return encode_rgb8_png_with_icc(
+            rgb,
+            decoded.columns(),
+            decoded.rows(),
+            select_icc_profile(&obj),
+        )
+        .context("compressed decode failed: color PNG encoding failed");
+    }
+    if decoded.samples_per_pixel() != 1 {
+        return Err(anyhow!(
+            "compressed decode failed: unsupported SamplesPerPixel {}",
+            decoded.samples_per_pixel()
+        ));
+    }
+
     let (samples, rows, columns) = decoded_luminance_samples(file, &decoded, frame)?;
     encode_windowed_luminance_png(
         file,
@@ -67,7 +92,6 @@ fn decoded_luminance_samples(
 ) -> Result<(Vec<f64>, u32, u32)> {
     let bits_allocated = decoded.bits_allocated() as u32;
     let signed = file.pixel_representation == 1;
-    let samples_per_pixel = decoded.samples_per_pixel().max(1) as usize;
     let raw_samples = match bits_allocated {
         8 => decoded
             .frame_data(frame)?
@@ -98,16 +122,7 @@ fn decoded_luminance_samples(
         }
     };
 
-    let luminance_samples = if samples_per_pixel == 1 {
-        raw_samples
-    } else {
-        raw_samples
-            .chunks(samples_per_pixel)
-            .map(|chunk| chunk[0])
-            .collect::<Vec<_>>()
-    };
-
-    let rescaled = luminance_samples
+    let rescaled = raw_samples
         .into_iter()
         .map(|value| value * file.rescale_slope + file.rescale_intercept)
         .collect::<Vec<_>>();
@@ -250,7 +265,8 @@ fn decode_raw_jpeg_lossless_blocking(
 
 #[cfg(test)]
 mod tests {
-    use super::read_raw_jpeg_samples_blocking;
+    use super::{decode_compressed_frame_to_png_blocking, read_raw_jpeg_samples_blocking};
+    use crate::api::contracts::WindowMode;
     use crate::types::FileEntry;
     use dicom_core::{value::PixelFragmentSequence, DataElement, PrimitiveValue, VR};
     use dicom_dictionary_std::{tags, uids};
@@ -374,5 +390,17 @@ mod tests {
         assert!(pixels[1][1] > pixels[1][0] && pixels[1][1] > pixels[1][2]);
         assert!(pixels[2][2] > pixels[2][0] && pixels[2][2] > pixels[2][1]);
         assert!(pixels[3].iter().all(|value| *value > 200));
+
+        let png =
+            decode_compressed_frame_to_png_blocking(&file, 0, None, None, WindowMode::Default)
+                .unwrap();
+        let display = image::load_from_memory(&png).unwrap().to_rgb8();
+        assert_eq!(display.dimensions(), (2, 2));
+        let display_pixels = display.into_raw();
+        let display_pixels = display_pixels.chunks_exact(3).collect::<Vec<_>>();
+        assert!(display_pixels[0][0] > display_pixels[0][1]);
+        assert!(display_pixels[1][1] > display_pixels[1][0]);
+        assert!(display_pixels[2][2] > display_pixels[2][0]);
+        assert!(display_pixels[3].iter().all(|value| *value > 200));
     }
 }
