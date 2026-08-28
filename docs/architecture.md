@@ -20,6 +20,7 @@ module:
 | HTTP wire model | `src/api/contracts.rs` | Typed endpoint registry, wire structs, query names, response header names, and error envelope. |
 | HTTP runtime | `src/server/` | Listener/runtime, route registration, handlers, state, registry, activity tracking, tags, and embedded assets. |
 | Pixel service | `src/pixels/` | Typed display/raw requests, cache behavior, transfer-syntax classification, decoding, rendering, and `PixelError`. |
+| DICOM references | `src/references.rs` | Bounded extraction of typed instance relationships without implying target presence or semantic rendering. |
 | DICOM discovery | `src/loader.rs` | Progressive events, cancellation, reports, metadata filters, and `FileEntry` construction. |
 | Frontend client | `frontend/src/api.ts` | Typed fetch wrappers over generated endpoint metadata and wire types. |
 | Cross-language generation | `scripts/generate_frontend_types.py` | Checked-in `frontend/src/generated/api-types.ts` derived from the Rust HTTP contract. |
@@ -69,7 +70,10 @@ modules, not the reverse:
    resources. `server/api/` owns HTTP concerns. `server/catalog.rs` owns the
    progressive file registry.
 6. `pixels/service.rs` is the server-facing pixel boundary. Codec, cache,
-   rendering, and window modules remain below it.
+   rendering, and window modules remain below it. `pixels/native_layout.rs`
+   validates native frame sizing and normalizes bit-packed, planar, subsampled,
+   and endian-sensitive storage before display decoding; `pixels/rle.rs` owns
+   the bounded Annex G/PackBits path.
 
 `src/api/contracts.rs` owns browser-visible wire declarations. `src/types.rs`
 owns internal DICOM, cache-key, transfer-syntax, and windowing domain types; it
@@ -151,6 +155,22 @@ Display cache keys include file, frame, normalized window parameters, and
 window mode. Full-dynamic mode ignores explicit window values. Raw cache keys
 include file and frame only. Cache locks are held for lookup or insertion, never
 while reading DICOM, decoding, rendering, or encoding.
+
+Native display decoding supports monochrome integer samples at 1, 8, 16, and
+32 bits, Float Pixel Data, Double Float Pixel Data, 8-bit RGB in either planar
+configuration, YBR_FULL, YBR_FULL_422, and palette color. Native raw responses
+retain stored sample ordering (including planar configuration) while
+normalizing multi-byte values to little endian; one-bit pixels are expanded to
+one byte per sample. Float and double-float objects are pixel-renderable, but
+real-world-value mapping remains a separate semantic capability rather than an
+implicit part of the display pipeline.
+
+RLE Lossless decoding validates the 64-byte Annex G header, segment offsets,
+PackBits runs, byte-plane counts, and decoded sizes before assembling a frame.
+It supports 8/16-bit monochrome plus common 8-bit RGB, YBR_FULL, and palette
+layouts. DICOM byte planes are interpreted in most-significant-byte-first
+order; non-conforming files with reversed 16-bit planes are not silently
+reinterpreted.
 
 See [the HTTP API reference](api.md) for endpoint payloads and headers.
 

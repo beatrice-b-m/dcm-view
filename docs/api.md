@@ -272,7 +272,7 @@ Transfer syntax behavior:
 | JPEG Lossless / Lossless SV1 | Decoded server-side and PNG-encoded. |
 | JPEG 2000 lossless/lossy | Decoded server-side and PNG-encoded. |
 | RLE Lossless | Decoded server-side and PNG-encoded for 8/16-bit monochrome plus 8-bit RGB, YBR_FULL, and palette-color layouts. |
-| Implicit LE / Explicit LE / Explicit BE | Windowed server-side and PNG-encoded. |
+| Implicit LE / Explicit LE / Explicit BE | Windowed server-side and PNG-encoded for 1/8/16/32-bit monochrome integer, float, double-float, RGB planar 0/1, YBR_FULL, YBR_FULL_422, and palette-color layouts. |
 | JPEG-LS / other | `422 {"code":"unsupported_transfer_syntax","error":"unsupported transfer syntax: ..."}`. |
 
 Every successful display-frame response includes `X-Cache: HIT` or
@@ -289,7 +289,7 @@ Supported raw paths:
 
 | Transfer syntax | Raw behavior |
 |---|---|
-| Uncompressed | Native sample bytes normalized to little-endian by `dicom-object`. |
+| Uncompressed | Native samples normalized to little endian. Stored planar ordering is retained; one-bit samples are expanded to one byte each. Integer samples through 32 bits plus Float Pixel Data and Double Float Pixel Data are supported. |
 | JPEG Baseline / Extended | Decoded to 8-bit grayscale samples. |
 | JPEG Lossless | Decoded to 8-bit or 16-bit grayscale samples when supported by the codec stack. |
 | Grayscale JPEG 2000 | Decoded to 8-bit or 16-bit samples. |
@@ -313,6 +313,12 @@ Required metadata headers:
 | `X-Frame-Photometric-Interpretation` | Photometric interpretation used by the renderer. |
 | `X-Frame-Rescale-Slope` | DICOM rescale slope. |
 | `X-Frame-Rescale-Intercept` | DICOM rescale intercept. |
+
+For expanded one-bit responses, `X-Frame-Bits-Allocated` remains `1` because it
+describes the DICOM sample type; each response byte contains one canonical
+sample value (`0` or `1`). Float and double-float responses contain IEEE 754
+little-endian values. Their pixel rendering does not imply application of Real
+World Value Mapping semantics.
 
 Optional metadata headers:
 
