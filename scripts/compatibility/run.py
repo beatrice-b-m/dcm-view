@@ -38,8 +38,10 @@ COMPATIBILITY_OUTCOMES = {
     "unavailable",
 }
 PROBED_CAPABILITIES = {
+    "apply_modality_lut",
     "apply_modality_rescale",
     "apply_rescale",
+    "apply_voi_lut",
     "apply_window",
     "decode_jpeg_2000_lossless_pixels",
     "decode_jpeg_baseline_pixels",

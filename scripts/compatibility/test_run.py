@@ -171,8 +171,10 @@ class RunnerTests(unittest.TestCase):
     def test_grayscale_capabilities_are_backed_by_display_and_raw_probes(self) -> None:
         self.assertTrue(
             {
+                "apply_modality_lut",
                 "apply_modality_rescale",
                 "apply_rescale",
+                "apply_voi_lut",
                 "apply_window",
                 "decode_jpeg_2000_lossless_pixels",
                 "decode_jpeg_baseline_pixels",
