@@ -6,7 +6,6 @@ use dicom_object::open_file;
 use dicom_pixeldata::PixelDecoder;
 use tokio::task;
 
-use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
 use super::render::encode_windowed_luminance_png;
 
@@ -129,16 +128,55 @@ fn read_raw_jpeg_samples_blocking(
     file: &FileEntry,
     frame: u32,
 ) -> Result<(Bytes, RawFrameMetadata)> {
-    let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
-    // Decode JPEG to 8-bit grayscale samples. Tolerates Baseline and Extended JPEG.
-    let img = image::load_from_memory(&fragment)
-        .context("JPEG decode failed for raw samples")?
-        .to_luma8();
-    let (columns, rows) = (img.width(), img.height());
-    let samples = img.into_raw();
-
-    let metadata = file.normalized_grayscale_u8_metadata(rows, columns);
-    Ok((Bytes::from(samples), metadata))
+    let obj = open_file(&file.path).with_context(|| {
+        format!(
+            "failed to open DICOM for raw JPEG decode: {}",
+            file.path.display()
+        )
+    })?;
+    // The transfer-syntax adapter assembles every fragment belonging to the
+    // requested frame using the Basic Offset Table before decoding. A frame is
+    // not required to have a one-to-one relationship with a fragment.
+    let decoded = obj
+        .decode_pixel_data_frame(frame)
+        .context("JPEG decode failed for raw samples")?;
+    let bits_allocated = decoded.bits_allocated() as u32;
+    let samples_per_pixel = decoded.samples_per_pixel() as u32;
+    let photometric_interpretation = match samples_per_pixel {
+        1 => "MONOCHROME2",
+        3 => "RGB",
+        value => {
+            return Err(anyhow!(
+                "raw JPEG does not support decoded SamplesPerPixel {value}"
+            ));
+        }
+    };
+    let decoded_frame = decoded.frame_data(0)?;
+    let samples = match (bits_allocated, samples_per_pixel) {
+        (8, 1 | 3) => Bytes::copy_from_slice(decoded_frame),
+        (16, 1) => Bytes::from(
+            decoded_frame
+                .chunks_exact(2)
+                .flat_map(|sample| u16::from_ne_bytes([sample[0], sample[1]]).to_le_bytes())
+                .collect::<Vec<_>>(),
+        ),
+        _ => {
+            return Err(anyhow!(
+                "raw JPEG does not support decoded BitsAllocated {bits_allocated} with SamplesPerPixel {samples_per_pixel}"
+            ));
+        }
+    };
+    let mut metadata = file.raw_metadata(
+        decoded.rows(),
+        decoded.columns(),
+        bits_allocated,
+        samples_per_pixel,
+    );
+    // JPEG Baseline output from the decoder is canonical unsigned,
+    // color-by-pixel RGB (or grayscale), regardless of stored DICOM layout.
+    metadata.pixel_representation = 0;
+    metadata.photometric_interpretation = photometric_interpretation.to_string();
+    Ok((samples, metadata))
 }
 
 pub(crate) async fn decode_raw_jpeg_lossless(
@@ -208,4 +246,133 @@ fn decode_raw_jpeg_lossless_blocking(
 
     let metadata = file.raw_metadata(decoded.rows(), decoded.columns(), bits_allocated, 1);
     Ok((sample_bytes, metadata))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_raw_jpeg_samples_blocking;
+    use crate::types::FileEntry;
+    use dicom_core::{value::PixelFragmentSequence, DataElement, PrimitiveValue, VR};
+    use dicom_dictionary_std::{tags, uids};
+    use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
+    use image::{codecs::jpeg::JpegEncoder, RgbImage};
+    use tempfile::tempdir;
+
+    #[test]
+    fn raw_baseline_rgb_assembles_multifragment_frame_as_interleaved_rgb() {
+        let source = RgbImage::from_raw(
+            2,
+            2,
+            vec![
+                255, 0, 0, // red
+                0, 255, 0, // green
+                0, 0, 255, // blue
+                255, 255, 255, // white
+            ],
+        )
+        .unwrap();
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 95)
+            .encode_image(&source)
+            .unwrap();
+        if !jpeg.len().is_multiple_of(2) {
+            jpeg.push(0);
+        }
+        let split = (jpeg.len() / 2) & !1;
+        let fragments = vec![jpeg[..split].to_vec(), jpeg[split..].to_vec()];
+
+        let mut obj = InMemDicomObject::from_element_iter([
+            DataElement::new(
+                tags::SOP_CLASS_UID,
+                VR::UI,
+                uids::SECONDARY_CAPTURE_IMAGE_STORAGE,
+            ),
+            DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.9001"),
+            DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(8_u16)),
+            DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(8_u16)),
+            DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(7_u16)),
+            DataElement::new(
+                tags::PIXEL_REPRESENTATION,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+            DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(3_u16)),
+            DataElement::new(
+                tags::PHOTOMETRIC_INTERPRETATION,
+                VR::CS,
+                PrimitiveValue::from("RGB"),
+            ),
+            DataElement::new(
+                tags::PLANAR_CONFIGURATION,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+            DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, "1"),
+        ]);
+        obj.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new(vec![0], fragments),
+        ));
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("multifragment-rgb-baseline.dcm");
+        obj.with_meta(
+            FileMetaTableBuilder::new()
+                .transfer_syntax(uids::JPEG_BASELINE8_BIT)
+                .media_storage_sop_class_uid(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
+                .media_storage_sop_instance_uid("2.25.9001"),
+        )
+        .unwrap()
+        .write_to_file(&path)
+        .unwrap();
+
+        let file = FileEntry {
+            index: 0,
+            path,
+            label: "fixture".to_string(),
+            patient_id: String::new(),
+            patient_name: String::new(),
+            study_instance_uid: String::new(),
+            study_date: String::new(),
+            study_description: String::new(),
+            series_instance_uid: String::new(),
+            series_number: String::new(),
+            series_description: String::new(),
+            modality: "OT".to_string(),
+            instance_number: "1".to_string(),
+            sop_instance_uid: "2.25.9001".to_string(),
+            sop_class_uid: uids::SECONDARY_CAPTURE_IMAGE_STORAGE.to_string(),
+            series_metadata: Default::default(),
+            has_pixels: true,
+            frame_count: 1,
+            rows: 2,
+            columns: 2,
+            bits_allocated: 8,
+            pixel_representation: 0,
+            samples_per_pixel: 3,
+            photometric_interpretation: "RGB".to_string(),
+            rescale_slope: 1.0,
+            rescale_intercept: 0.0,
+            transfer_syntax_uid: uids::JPEG_BASELINE8_BIT.to_string(),
+            default_window: None,
+        };
+
+        let (body, metadata) = read_raw_jpeg_samples_blocking(&file, 0).unwrap();
+        assert_eq!(body.len(), 12);
+        assert_eq!(metadata.rows, 2);
+        assert_eq!(metadata.columns, 2);
+        assert_eq!(metadata.bits_allocated, 8);
+        assert_eq!(metadata.samples_per_pixel, 3);
+        assert_eq!(metadata.pixel_representation, 0);
+        assert_eq!(metadata.photometric_interpretation, "RGB");
+
+        let pixels = body.chunks_exact(3).collect::<Vec<_>>();
+        assert!(pixels[0][0] > pixels[0][1] && pixels[0][0] > pixels[0][2]);
+        assert!(pixels[1][1] > pixels[1][0] && pixels[1][1] > pixels[1][2]);
+        assert!(pixels[2][2] > pixels[2][0] && pixels[2][2] > pixels[2][1]);
+        assert!(pixels[3].iter().all(|value| *value > 200));
+    }
 }
