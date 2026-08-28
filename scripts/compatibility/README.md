@@ -34,5 +34,10 @@ The runner launches a loopback, port-zero, no-browser process with structured
 startup output and VS Code bridge bypass. It waits for `scan_complete`, maps
 files by normalized path plus SOP Instance UID, and probes file information,
 tags, display and raw frames, structured errors, and cache MISS/HIT behavior.
+It also captures the completed `/api/series` catalog once per shard and records
+each file's logical stack, virtual position, ordered source frames, geometry
+warnings, concatenation identity, and WSI level/companion classification.
+Manifest-declared series capabilities are evaluated from that server-owned
+evidence rather than by reimplementing DICOM ordering in the harness.
 It writes separate process logs, a companion-schema detail report, a timing-free
 normalized report for reproducibility comparison, and a SHA-256 artifact index.

@@ -10,6 +10,7 @@ from pathlib import Path
 from scripts.compatibility.run import (
     normalized_report,
     png_pixels,
+    series_observation,
     validate_json_schema,
     validate_report,
     validate_visual,
@@ -42,6 +43,51 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(
             validate_visual("2x2_monochrome_gradient", pixels)["status"], "passed"
         )
+
+    def test_series_observation_validates_geometry_and_gantry_capabilities(self) -> None:
+        catalog = {
+            "series": [{
+                "id": "series-id",
+                "study_instance_uid": "study",
+                "series_instance_uid": "series",
+                "frame_of_reference_uids": ["for"],
+                "stacks": [{
+                    "id": "stack-id",
+                    "kind": "ordinary",
+                    "warnings": [{"code": "gantry_tilt"}],
+                    "frames": [
+                        {
+                            "virtual_index": 0,
+                            "file_index": 7,
+                            "frame_index": 0,
+                            "source_path": "/scan/a.dcm",
+                            "position_along_normal_mm": 0.0,
+                        },
+                        {
+                            "virtual_index": 1,
+                            "file_index": 9,
+                            "frame_index": 0,
+                            "source_path": "/scan/b.dcm",
+                            "position_along_normal_mm": 5.0,
+                        },
+                    ],
+                }],
+            }],
+        }
+        observed = series_observation(
+            catalog,
+            {"index": 9},
+            {
+                "expected_capabilities": [
+                    "sort_series_by_geometry",
+                    "interpret_gantry_tilt",
+                ],
+                "expected_geometry": {"geometric_order_index": 2},
+            },
+        )
+        self.assertTrue(observed["mapped"])
+        self.assertTrue(observed["capabilities"]["sort_series_by_geometry"]["passed"])
+        self.assertTrue(observed["capabilities"]["interpret_gantry_tilt"]["passed"])
 
     def test_report_validation_rejects_duplicate_result_identity(self) -> None:
         result = {

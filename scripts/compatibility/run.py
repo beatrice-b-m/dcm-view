@@ -42,6 +42,11 @@ PROBED_CAPABILITIES = {
     "render_native_pixels",
     "render_compressed_pixels",
     "navigate_multiframe",
+    "sort_series_by_geometry",
+    "parse_multiframe_functional_groups",
+    "interpret_gantry_tilt",
+    "organize_series_by_study_and_frame_of_reference",
+    "reconstruct_wsi_pyramid",
 }
 LOSSY_TRANSFER_SYNTAXES = {
     "1.2.840.10008.1.2.4.50",
@@ -329,12 +334,111 @@ def poll_files(base_url: str, request_timeout: float, startup_deadline: float) -
     raise TimeoutError("discovery did not report scan_complete before startup deadline")
 
 
+def series_observation(
+    catalog: dict[str, Any], file_summary: dict[str, Any], expected: dict[str, Any]
+) -> dict[str, Any]:
+    index = file_summary["index"]
+    located_series = None
+    located_stack = None
+    located_frame = None
+    for series in catalog.get("series") or []:
+        for stack in series.get("stacks") or []:
+            for frame in stack.get("frames") or []:
+                if frame.get("file_index") == index:
+                    located_series = series
+                    located_stack = stack
+                    located_frame = frame
+                    break
+            if located_frame is not None:
+                break
+        if located_frame is not None:
+            break
+    if located_series is None or located_stack is None or located_frame is None:
+        return {"mapped": False, "capabilities": {}}
+
+    warnings = [row.get("code") for row in located_stack.get("warnings") or []]
+    observation: dict[str, Any] = {
+        "mapped": True,
+        "series_id": located_series.get("id"),
+        "series_instance_uid": located_series.get("series_instance_uid"),
+        "frame_of_reference_uids": located_series.get("frame_of_reference_uids") or [],
+        "stack_id": located_stack.get("id"),
+        "stack_kind": located_stack.get("kind"),
+        "virtual_index": located_frame.get("virtual_index"),
+        "source_frame_index": located_frame.get("frame_index"),
+        "position_along_normal_mm": located_frame.get("position_along_normal_mm"),
+        "ordered_sources": [
+            {"path": frame.get("source_path"), "frame_index": frame.get("frame_index")}
+            for frame in located_stack.get("frames") or []
+        ],
+        "warning_codes": warnings,
+        "capabilities": {},
+    }
+    capabilities = set(expected.get("expected_capabilities") or [])
+    geometry = expected.get("expected_geometry") or {}
+    semantics = expected.get("expected_semantics") or {}
+    checks = observation["capabilities"]
+    if "sort_series_by_geometry" in capabilities:
+        expected_index = geometry.get("geometric_order_index")
+        if not isinstance(expected_index, int):
+            expected_index = (semantics.get("geometry_sort_key") or {}).get(
+                "slice_order_index"
+            )
+        checks["sort_series_by_geometry"] = {
+            "expected_virtual_index": expected_index - 1 if isinstance(expected_index, int) else None,
+            "observed_virtual_index": located_frame.get("virtual_index"),
+            "passed": isinstance(expected_index, int)
+            and located_frame.get("virtual_index") == expected_index - 1,
+        }
+    if "interpret_gantry_tilt" in capabilities:
+        checks["interpret_gantry_tilt"] = {
+            "expected_warning": "gantry_tilt",
+            "observed_warnings": warnings,
+            "passed": "gantry_tilt" in warnings,
+        }
+    if "organize_series_by_study_and_frame_of_reference" in capabilities:
+        frame_uids = set(located_series.get("frame_of_reference_uids") or [])
+        peers = [
+            series
+            for series in catalog.get("series") or []
+            if series.get("study_instance_uid") == located_series.get("study_instance_uid")
+            and frame_uids.intersection(series.get("frame_of_reference_uids") or [])
+        ]
+        checks["organize_series_by_study_and_frame_of_reference"] = {
+            "peer_series_ids": sorted(series.get("id") for series in peers),
+            "passed": len(peers) >= 2
+            and len({series.get("series_instance_uid") for series in peers}) == len(peers),
+        }
+    if "parse_multiframe_functional_groups" in capabilities:
+        concatenation = semantics.get("concatenation") or {}
+        expected_kind = "concatenation" if concatenation else "ordinary"
+        checks["parse_multiframe_functional_groups"] = {
+            "expected_stack_kind": expected_kind,
+            "observed_stack_kind": located_stack.get("kind"),
+            "passed": located_stack.get("kind") == expected_kind,
+        }
+    if "reconstruct_wsi_pyramid" in capabilities:
+        membership = semantics.get("pyramid_membership")
+        expected_kind = (
+            "wsi_companion" if membership == "non_member_companion" else "wsi_pyramid_level"
+        )
+        checks["reconstruct_wsi_pyramid"] = {
+            "expected_stack_kind": expected_kind,
+            "observed_stack_kind": located_stack.get("kind"),
+            "series_stack_kinds": [stack.get("kind") for stack in located_series.get("stacks") or []],
+            "passed": located_stack.get("kind") == expected_kind,
+        }
+    return observation
+
+
 def probe_case(
     base_url: str,
     entry: dict[str, Any],
     file_summary: dict[str, Any],
     request_timeout: float,
     case_timeout: float,
+    series_catalog: dict[str, Any],
+    series_http: dict[str, Any],
 ) -> dict[str, Any]:
     started = time.monotonic()
     index = file_summary["index"]
@@ -345,7 +449,8 @@ def probe_case(
     image = expected.get("image") or {}
     pixel_data = expected.get("pixel_data") or {}
     checks: dict[str, Any] = {"mapped_after_scan": True}
-    http: dict[str, Any] = {}
+    checks["series_navigation"] = series_observation(series_catalog, file_summary, expected)
+    http: dict[str, Any] = {"series_catalog": series_http}
     errors: list[dict[str, Any]] = []
 
     def request(name: str, path: str, headers: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -452,6 +557,12 @@ def _finish_result(
         for name in ("png_dimensions", "lossless_frame_hash"):
             if name in checks and checks[name].get("passed") is not True:
                 validation_failures.append(name)
+        series_checks = (checks.get("series_navigation") or {}).get("capabilities") or {}
+        validation_failures.extend(
+            f"series:{name}"
+            for name, check in series_checks.items()
+            if check.get("passed") is not True
+        )
         visual = checks.get("visual")
         if visual and visual["status"] in {"failed", "unautomated"}:
             validation_failures.append("visual")
@@ -641,6 +752,12 @@ def run_campaign(args: argparse.Namespace) -> dict[str, Any]:
             args.request_timeout,
             time.monotonic() + args.startup_timeout,
         )
+        series_response = http_request(base_url, "/api/series", args.request_timeout)
+        if series_response["status"] != 200 or not isinstance(series_response["json"], dict):
+            raise CampaignError("series catalog did not return a JSON success response")
+        if series_response["json"].get("scan_complete") is not True:
+            raise CampaignError("series catalog did not report scan_complete")
+        series_http = evidence(series_response)
         by_identity = {
             (_normalized_path(row["path"]), row["sop_instance_uid"]): row
             for row in scan["files"]
@@ -663,7 +780,13 @@ def run_campaign(args: argparse.Namespace) -> dict[str, Any]:
                 )
             else:
                 result = probe_case(
-                    base_url, entry, summary, args.request_timeout, args.case_timeout
+                    base_url,
+                    entry,
+                    summary,
+                    args.request_timeout,
+                    args.case_timeout,
+                    series_response["json"],
+                    series_http,
                 )
             if process.process.poll() is not None:
                 result["execution_safety"] = "crash"
