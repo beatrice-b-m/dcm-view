@@ -3,6 +3,9 @@ use dcmview::pixels::{
     load_frame, load_raw_frame, new_cache, new_raw_cache, FrameRequest, RawFrameRequest,
 };
 use dcmview::types::WindowPreset;
+use dicom_core::{DataElement, PrimitiveValue, VR};
+use dicom_dictionary_std::tags;
+use dicom_object::open_file;
 use image::ImageFormat;
 use tempfile::tempdir;
 
@@ -136,6 +139,64 @@ async fn monochrome1_display_png_matches_raw_renderer_inversion_semantics() {
         vec![255, 170, 85, 0],
         "display PNG must apply MONOCHROME1 inversion after default windowing"
     );
+}
+
+#[tokio::test]
+async fn pixel_padding_range_is_excluded_from_auto_window_and_drawn_as_background() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("pixel-padding-range.dcm");
+    support::write_uncompressed_u16_dicom(
+        &path,
+        "1.2.840.10008.1.2.1",
+        2,
+        2,
+        vec![0, 1000, 2000, 3000],
+        None,
+        None,
+    );
+    let mut object = open_file(&path).expect("open generated DICOM");
+    object.put(DataElement::new(
+        tags::PIXEL_PADDING_VALUE,
+        VR::US,
+        PrimitiveValue::from(0_u16),
+    ));
+    object.put(DataElement::new(
+        tags::PIXEL_PADDING_RANGE_LIMIT,
+        VR::US,
+        PrimitiveValue::from(1000_u16),
+    ));
+    object.write_to_file(&path).expect("write padding tags");
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 2;
+    entry.columns = 2;
+
+    let display = load_frame(
+        entry.clone(),
+        new_cache(),
+        FrameRequest {
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+        },
+    )
+    .await
+    .expect("pixel-padded display frame");
+    let raw = load_raw_frame(entry, new_raw_cache(), RawFrameRequest { frame: 0 })
+        .await
+        .expect("pixel-padded raw frame");
+
+    assert_eq!(
+        raw.body.as_ref(),
+        &[0, 0, 0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B],
+        "padding presentation must not alter raw stored samples"
+    );
+    let pixels = image::load_from_memory_with_format(display.body.as_ref(), ImageFormat::Png)
+        .expect("valid pixel-padded PNG")
+        .to_luma8()
+        .into_raw();
+    assert_eq!(pixels, [0, 0, 0, 255]);
 }
 
 #[tokio::test]

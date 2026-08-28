@@ -1,6 +1,45 @@
 use crate::api::contracts::{WindowMode, WindowPreset};
 use crate::types::{DicomLut, ResolvedWindow};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PixelPaddingRange {
+    low: f64,
+    high: f64,
+}
+
+impl PixelPaddingRange {
+    pub(crate) fn new(value: f64, range_limit: Option<f64>) -> Self {
+        let limit = range_limit.unwrap_or(value);
+        Self {
+            low: value.min(limit),
+            high: value.max(limit),
+        }
+    }
+
+    pub(crate) fn mask(self, stored_samples: &[f64]) -> Vec<bool> {
+        stored_samples
+            .iter()
+            .map(|sample| *sample >= self.low && *sample <= self.high)
+            .collect()
+    }
+}
+
+pub(crate) fn exclude_padding_samples(samples: &[f64], padding_mask: &[bool]) -> Vec<f64> {
+    samples
+        .iter()
+        .zip(padding_mask)
+        .filter_map(|(sample, is_padding)| (!is_padding).then_some(*sample))
+        .collect()
+}
+
+pub(crate) fn apply_padding_background(windowed: &mut [u8], padding_mask: &[bool]) {
+    for (sample, is_padding) in windowed.iter_mut().zip(padding_mask) {
+        if *is_padding {
+            *sample = 0;
+        }
+    }
+}
+
 pub(crate) fn apply_modality_transform(
     samples: &[f64],
     modality_lut: Option<&DicomLut>,
@@ -297,5 +336,23 @@ mod tests {
             apply_window(&[9.0, 9.5, 9.500_001, 10.0], 10.0, 1.0),
             [0, 0, 255, 255]
         );
+    }
+
+    #[test]
+    fn padding_ranges_are_inclusive_order_independent_and_excludable() {
+        let samples = [-2048.0, -1024.0, -1023.0, 0.0, 512.0];
+        let mask = super::PixelPaddingRange::new(-2048.0, Some(-1024.0)).mask(&samples);
+        assert_eq!(mask, [true, true, false, false, false]);
+        assert_eq!(
+            super::exclude_padding_samples(&samples, &mask),
+            [-1023.0, 0.0, 512.0]
+        );
+
+        let reversed = super::PixelPaddingRange::new(-1024.0, Some(-2048.0)).mask(&samples);
+        assert_eq!(reversed, mask);
+
+        let mut windowed = [255, 170, 85, 42, 0];
+        super::apply_padding_background(&mut windowed, &mask);
+        assert_eq!(windowed, [0, 0, 85, 42, 0]);
     }
 }
