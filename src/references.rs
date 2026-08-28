@@ -9,7 +9,7 @@ use dicom_core::Tag;
 use dicom_dictionary_std::{tags, StandardDataDictionary};
 use dicom_object::{InMemDicomObject, OpenFileOptions};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_SEQUENCE_DEPTH: usize = 16;
 const MAX_SEQUENCE_ITEMS: usize = 4_096;
@@ -111,6 +111,117 @@ pub struct ReferenceIdentity {
 pub struct ReferenceEdge {
     pub relationship: ReferenceRelationship,
     pub target: ReferenceIdentity,
+}
+
+/// Minimal local identity used to resolve declared references without relying
+/// on nondeterministic registry positions alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceCandidate {
+    pub file_index: usize,
+    pub path: PathBuf,
+    pub sop_class_uid: String,
+    pub sop_instance_uid: String,
+    pub series_instance_uid: String,
+    pub frame_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceMatch {
+    pub file_index: usize,
+    pub path: PathBuf,
+    pub sop_instance_uid: String,
+    /// Zero-based, in-range frames suitable for viewer navigation.
+    pub frame_indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedReferenceEdge {
+    pub relationship: ReferenceRelationship,
+    pub target: ReferenceIdentity,
+    pub matches: Vec<ReferenceMatch>,
+}
+
+/// Resolve edges against the current ephemeral registry snapshot.
+///
+/// SOP Instance UID is the preferred key. A series-only declaration resolves
+/// to every member of that series. Optional SOP Class and Series identities
+/// further constrain a match, and invalid one-based frame numbers are retained
+/// in the target identity but omitted from navigable zero-based frame indices.
+pub fn resolve_reference_edges(
+    edges: &[ReferenceEdge],
+    candidates: &[ReferenceCandidate],
+) -> Vec<ResolvedReferenceEdge> {
+    edges
+        .iter()
+        .map(|edge| {
+            let mut matches = candidates
+                .iter()
+                .filter(|candidate| reference_matches_candidate(&edge.target, candidate))
+                .map(|candidate| ReferenceMatch {
+                    file_index: candidate.file_index,
+                    path: candidate.path.clone(),
+                    sop_instance_uid: candidate.sop_instance_uid.clone(),
+                    frame_indices: navigable_frame_indices(
+                        &edge.target.frame_numbers,
+                        candidate.frame_count,
+                    ),
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by(|left, right| {
+                left.file_index
+                    .cmp(&right.file_index)
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+            ResolvedReferenceEdge {
+                relationship: edge.relationship,
+                target: edge.target.clone(),
+                matches,
+            }
+        })
+        .collect()
+}
+
+fn reference_matches_candidate(
+    target: &ReferenceIdentity,
+    candidate: &ReferenceCandidate,
+) -> bool {
+    if target.sop_instance_uid.is_none() && target.series_instance_uid.is_none() {
+        return false;
+    }
+    if target
+        .sop_instance_uid
+        .as_ref()
+        .is_some_and(|uid| uid != &candidate.sop_instance_uid)
+    {
+        return false;
+    }
+    if target
+        .series_instance_uid
+        .as_ref()
+        .is_some_and(|uid| uid != &candidate.series_instance_uid)
+    {
+        return false;
+    }
+    !target
+        .sop_class_uid
+        .as_ref()
+        .is_some_and(|uid| uid != &candidate.sop_class_uid)
+}
+
+fn navigable_frame_indices(frame_numbers: &[u32], frame_count: u32) -> Vec<u32> {
+    if frame_numbers.is_empty() {
+        return (frame_count > 0).then_some(0).into_iter().collect();
+    }
+    let mut indices = Vec::new();
+    for frame_number in frame_numbers {
+        let Some(index) = frame_number.checked_sub(1).filter(|index| *index < frame_count) else {
+            continue;
+        };
+        if !indices.contains(&index) {
+            indices.push(index);
+        }
+    }
+    indices
 }
 
 /// Open one Part 10 object and extract its declared semantic reference edges.
@@ -586,6 +697,89 @@ mod tests {
             Some("1.2.3.series")
         );
         assert_eq!(edges[0].target.frame_numbers, [1, 2]);
+    }
+
+    #[test]
+    fn resolves_instance_and_series_references_to_deterministic_local_frames() {
+        let candidates = vec![
+            super::ReferenceCandidate {
+                file_index: 7,
+                path: "/scan/b.dcm".into(),
+                sop_class_uid: "1.2.class".into(),
+                sop_instance_uid: "1.2.instance.b".into(),
+                series_instance_uid: "1.2.series".into(),
+                frame_count: 2,
+            },
+            super::ReferenceCandidate {
+                file_index: 3,
+                path: "/scan/a.dcm".into(),
+                sop_class_uid: "1.2.class".into(),
+                sop_instance_uid: "1.2.instance.a".into(),
+                series_instance_uid: "1.2.series".into(),
+                frame_count: 4,
+            },
+        ];
+        let edges = vec![
+            super::ReferenceEdge {
+                relationship: super::ReferenceRelationship::SourceImage,
+                target: super::ReferenceIdentity {
+                    sop_class_uid: Some("1.2.class".into()),
+                    sop_instance_uid: Some("1.2.instance.a".into()),
+                    series_instance_uid: Some("1.2.series".into()),
+                    frame_numbers: vec![1, 4, 5, 4],
+                    segment_numbers: vec![],
+                },
+            },
+            super::ReferenceEdge {
+                relationship: super::ReferenceRelationship::BlendingInput,
+                target: super::ReferenceIdentity {
+                    series_instance_uid: Some("1.2.series".into()),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let resolved = super::resolve_reference_edges(&edges, &candidates);
+        assert_eq!(resolved[0].matches.len(), 1);
+        assert_eq!(resolved[0].matches[0].file_index, 3);
+        assert_eq!(resolved[0].matches[0].frame_indices, [0, 3]);
+        assert_eq!(
+            resolved[1]
+                .matches
+                .iter()
+                .map(|target| target.file_index)
+                .collect::<Vec<_>>(),
+            [3, 7]
+        );
+        assert_eq!(resolved[1].matches[0].frame_indices, [0]);
+    }
+
+    #[test]
+    fn unresolved_or_class_mismatched_references_remain_visible() {
+        let candidates = vec![super::ReferenceCandidate {
+            file_index: 1,
+            path: "/scan/source.dcm".into(),
+            sop_class_uid: "1.2.class".into(),
+            sop_instance_uid: "1.2.instance".into(),
+            series_instance_uid: "1.2.series".into(),
+            frame_count: 1,
+        }];
+        let edges = vec![super::ReferenceEdge {
+            relationship: super::ReferenceRelationship::Unknown,
+            target: super::ReferenceIdentity {
+                sop_class_uid: Some("different.class".into()),
+                sop_instance_uid: Some("1.2.instance".into()),
+                ..Default::default()
+            },
+        }];
+
+        let resolved = super::resolve_reference_edges(&edges, &candidates);
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].matches.is_empty());
+        assert_eq!(
+            resolved[0].target.sop_instance_uid.as_deref(),
+            Some("1.2.instance")
+        );
     }
 
     #[test]
