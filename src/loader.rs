@@ -1,6 +1,6 @@
 use crate::api::contracts::WindowPreset;
 use crate::types::{
-    FileEntry, LoadReport, NativePixelDataKind, NativePixelMetadata, PatientOrientation,
+    DicomLut, FileEntry, LoadReport, NativePixelDataKind, NativePixelMetadata, PatientOrientation,
     PatientPosition, SeriesMetadata,
 };
 use anyhow::{anyhow, Context, Result};
@@ -643,6 +643,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let pixel_spacing = read_positive_f64_pair(&obj, "PixelSpacing");
     let pixel_aspect_ratio = read_positive_u32_pair(&obj, "PixelAspectRatio");
     let normalized_pixel_aspect = normalize_pixel_aspect(pixel_spacing, pixel_aspect_ratio);
+    let modality_lut = read_lut_sequence(&obj, tags::MODALITY_LUT_SEQUENCE);
     let pixel_representation = read_u32(&obj, "PixelRepresentation").unwrap_or(0);
     let samples_per_pixel = read_u32(&obj, "SamplesPerPixel").unwrap_or(1).max(1);
     let photometric_interpretation =
@@ -691,6 +692,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
                 pixel_spacing,
                 pixel_aspect_ratio,
                 normalized_pixel_aspect,
+                modality_lut,
             },
             frame_of_reference_uid,
             image_position_patient,
@@ -893,6 +895,41 @@ fn normalize_pixel_aspect(
         pixel_aspect_ratio.map(|[vertical, horizontal]| [vertical as f64, horizontal as f64])
     })?;
     Some([row / column, 1.0])
+}
+
+fn read_lut_sequence(
+    obj: &dicom_object::DefaultDicomObject,
+    sequence_tag: dicom_core::Tag,
+) -> Option<DicomLut> {
+    let item = obj.element(sequence_tag).ok()?.items()?.first()?;
+    let descriptor = item
+        .element(tags::LUT_DESCRIPTOR)
+        .ok()?
+        .to_multi_int::<i32>()
+        .ok()?;
+    let [entry_count, first_mapped_value, bits_per_entry]: [i32; 3] = descriptor.try_into().ok()?;
+    let entry_count = if entry_count == 0 {
+        65_536
+    } else {
+        usize::try_from(entry_count).ok()?
+    };
+    let bits_per_entry = u16::try_from(bits_per_entry).ok()?;
+    if bits_per_entry != 16 {
+        return None;
+    }
+    let entries = item
+        .element(tags::LUT_DATA)
+        .ok()?
+        .to_multi_int::<u16>()
+        .ok()?;
+    if entries.len() < entry_count {
+        return None;
+    }
+    Some(DicomLut {
+        first_mapped_value,
+        bits_per_entry,
+        entries: entries.into_iter().take(entry_count).collect(),
+    })
 }
 
 fn read_exact_f64s<const N: usize>(
@@ -1238,6 +1275,57 @@ mod tests {
                 Some(expected_kind)
             );
         }
+    }
+
+    #[test]
+    fn extracts_prepared_modality_lut_sequence() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("modality-lut.dcm");
+        let lut_item = InMemDicomObject::from_element_iter([
+            DataElement::new(
+                tags::LUT_DESCRIPTOR,
+                VR::US,
+                PrimitiveValue::U16(vec![4, 0, 16].into()),
+            ),
+            DataElement::new(
+                tags::LUT_DATA,
+                VR::OW,
+                PrimitiveValue::U16(vec![0, 1024, 2048, 4095].into()),
+            ),
+        ]);
+        let mut object = base_object();
+        object.put(DataElement::new(
+            tags::MODALITY_LUT_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![lut_item]),
+        ));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PrimitiveValue::U8(vec![0_u8, 1, 2, 3].into()),
+        ));
+        let object = object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::COMPUTED_RADIOGRAPHY_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.300"),
+            )
+            .expect("file meta");
+        object.write_to_file(&path).expect("write fixture");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        let lut = file
+            .series_metadata
+            .native_pixel
+            .modality_lut
+            .as_ref()
+            .expect("modality LUT");
+        assert_eq!(lut.first_mapped_value, 0);
+        assert_eq!(lut.bits_per_entry, 16);
+        assert_eq!(lut.entries, [0, 1024, 2048, 4095]);
     }
 
     fn write_series_identity_fixture(path: &std::path::Path) {

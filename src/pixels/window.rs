@@ -1,5 +1,27 @@
 use crate::api::contracts::{WindowMode, WindowPreset};
-use crate::types::ResolvedWindow;
+use crate::types::{DicomLut, ResolvedWindow};
+
+pub(crate) fn apply_modality_transform(
+    samples: &[f64],
+    modality_lut: Option<&DicomLut>,
+    rescale_slope: f64,
+    rescale_intercept: f64,
+) -> Vec<f64> {
+    let Some(lut) = modality_lut.filter(|lut| !lut.entries.is_empty()) else {
+        return samples
+            .iter()
+            .map(|value| value * rescale_slope + rescale_intercept)
+            .collect();
+    };
+    let last = lut.entries.len().saturating_sub(1) as i64;
+    samples
+        .iter()
+        .map(|value| {
+            let offset = (*value as i64) - i64::from(lut.first_mapped_value);
+            f64::from(lut.entries[offset.clamp(0, last) as usize])
+        })
+        .collect()
+}
 
 pub fn resolve_window(
     requested_wc: Option<f64>,
@@ -74,4 +96,31 @@ pub fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
         .iter()
         .map(|sample| (((sample.clamp(low, high) - low) / (high - low)) * 255.0).round() as u8)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_modality_transform;
+    use crate::types::DicomLut;
+
+    #[test]
+    fn modality_lut_maps_and_clamps_stored_values_before_rescale() {
+        let lut = DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 16,
+            entries: vec![0, 1024, 2048, 4095],
+        };
+        assert_eq!(
+            apply_modality_transform(&[-1.0, 0.0, 1.0, 2.0, 3.0, 4.0], Some(&lut), 99.0, -20.0,),
+            [0.0, 0.0, 1024.0, 2048.0, 4095.0, 4095.0]
+        );
+    }
+
+    #[test]
+    fn rescale_remains_the_fallback_without_a_modality_lut() {
+        assert_eq!(
+            apply_modality_transform(&[0.0, 1.0, 2.0], None, 2.0, -1.0),
+            [-1.0, 1.0, 3.0]
+        );
+    }
 }

@@ -18,6 +18,13 @@ pub enum NativePixelDataKind {
     Float64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DicomLut {
+    pub first_mapped_value: i32,
+    pub bits_per_entry: u16,
+    pub entries: Vec<u16>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct NativePixelMetadata {
     pub planar_configuration: Option<u32>,
@@ -29,6 +36,7 @@ pub struct NativePixelMetadata {
     /// Relative physical row and column extents, normalized so column is 1.0.
     /// Pixel Spacing is authoritative when valid; Pixel Aspect Ratio is fallback.
     pub normalized_pixel_aspect: Option<[f64; 2]>,
+    pub modality_lut: Option<DicomLut>,
 }
 
 impl NativePixelMetadata {

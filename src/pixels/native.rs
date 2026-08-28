@@ -11,7 +11,7 @@ use super::color::{encode_rgb8_png, rgb8_interleaved, ybr_full_to_rgb8};
 use super::native_layout::{native_pixel_element_tag, NativeByteOrder, NativeFrameLayout};
 use super::palette::palette_indices_to_rgb8;
 use super::render::apply_monochrome1_inversion;
-use super::window::{apply_window, resolve_window_with_mode};
+use super::window::{apply_modality_transform, apply_window, resolve_window_with_mode};
 
 pub(crate) async fn decode_uncompressed_to_png(
     file: FileEntry,
@@ -94,10 +94,12 @@ fn decode_uncompressed_to_png_blocking(
         false,
         native_pixel_data_kind(file),
     )?;
-    let rescaled: Vec<f64> = raw_samples
-        .into_iter()
-        .map(|value| value * file.rescale_slope + file.rescale_intercept)
-        .collect();
+    let rescaled = apply_modality_transform(
+        &raw_samples,
+        file.series_metadata.native_pixel.modality_lut.as_ref(),
+        file.rescale_slope,
+        file.rescale_intercept,
+    );
 
     let luminance_samples = if samples_per_pixel > 1 {
         rescaled
