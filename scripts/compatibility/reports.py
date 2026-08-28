@@ -21,14 +21,20 @@ def _passed(value: Any) -> bool:
 
 def assertion_evidence(observations: dict[str, Any]) -> dict[str, Any]:
     series = observations.get("series_navigation")
+    series_capabilities = (series or {}).get("capabilities") or {}
+    series_evidence = None if not series_capabilities else {
+        "passed": bool((series or {}).get("mapped")) and all(_passed(value) for value in series_capabilities.values())
+    }
     presentation = [observations.get(key) for key in ("visual", "overlay_display", "display_shutter", "icc_profile") if key in observations]
+    visual = observations.get("visual")
+    normalized_display = visual if visual is not None else observations.get("png_dimensions")
     return {**observations,
             "mapped_after_scan": _passed(observations.get("mapped_after_scan")) and _passed(observations.get("file_info")),
             "raw_headers": observations.get("raw_headers"), "lossy_metrics": observations.get("lossy_metrics"),
-            "normalized_display_hash": observations.get("normalized_display_hash") or observations.get("visual"),
-            "presentation_checks": {"passed": bool(presentation) and all(_passed(v) for v in presentation)},
+            "normalized_display_hash": observations.get("normalized_display_hash") or normalized_display,
+            "presentation_checks": None if not presentation else {"passed": all(_passed(v) for v in presentation)},
             "frame_access": observations.get("frame_access") or observations.get("frame_navigation") or observations.get("png_dimensions"),
-            "series_navigation": series, "recovery_after_error": observations.get("recovery_after_error") or observations.get("error_envelope"),
+            "series_navigation": series_evidence, "recovery_after_error": observations.get("recovery_after_error") or observations.get("error_envelope"),
             "renderer_absent": observations.get("metadata_only_response")}
 
 def _status(result: dict[str, Any], policy: dict[str, Any], assertions: list[dict[str, Any]]) -> str:

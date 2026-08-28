@@ -17,4 +17,11 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(evidence["results"][0]["assertions"][0]["status"], "not_applicable")
         self.assertEqual(evidence["results"][0]["status"], "passed")
 
+    def test_generic_series_and_presentation_assertions_are_conditional(self) -> None:
+        from scripts.compatibility.reports import assertion_evidence
+        evidence = assertion_evidence({"series_navigation": {"mapped": True, "capabilities": {}}, "png_dimensions": {"passed": True}})
+        self.assertIsNone(evidence["series_navigation"])
+        self.assertIsNone(evidence["presentation_checks"])
+        self.assertEqual(evidence["normalized_display_hash"], {"passed": True})
+
 if __name__ == "__main__": unittest.main()
