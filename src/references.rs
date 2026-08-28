@@ -199,10 +199,10 @@ fn reference_matches_candidate(target: &ReferenceIdentity, candidate: &Reference
     {
         return false;
     }
-    !target
+    target
         .sop_class_uid
         .as_ref()
-        .is_some_and(|uid| uid != &candidate.sop_class_uid)
+        .is_none_or(|uid| uid == &candidate.sop_class_uid)
 }
 
 fn navigable_frame_indices(frame_numbers: &[u32], frame_count: u32) -> Vec<u32> {
