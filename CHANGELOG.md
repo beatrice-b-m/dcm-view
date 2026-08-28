@@ -10,6 +10,15 @@ diagnostic viewer.
 
 ## Unreleased
 
+### Viewer Reliability
+
+- Prevented active-file cleanup from recursively updating ROI selection during
+  logical stack source changes, and preserved later ROI selection and editing.
+- Restored frame slider, keyboard, scroll, and cine navigation for multiframe
+  files that use per-file fallback instead of a catalog-backed logical stack.
+- Kept files without complete Study and Series Instance UIDs independent rather
+  than merging unrelated objects into one logical navigation sequence.
+
 ## 0.2.9 - 2026-08-26
 
 ### Viewer Reliability
