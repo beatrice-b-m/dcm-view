@@ -107,7 +107,7 @@ pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
         | "1.2.840.10008.1.2.1"
         | "1.2.840.10008.1.2.2"
         | "1.2.840.10008.1.2.1.99" => TransferSyntaxClass::Uncompressed,
-        "1.2.840.10008.1.2.4.80" | "1.2.840.10008.1.2.4.81" => TransferSyntaxClass::JpegLs,
+        "1.2.840.10008.1.2.4.80" => TransferSyntaxClass::JpegLs,
         "1.2.840.10008.1.2.5" => TransferSyntaxClass::Rle,
         _ => TransferSyntaxClass::Unsupported,
     }
@@ -124,15 +124,13 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
 
     let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
     match syntax_class {
-        TransferSyntaxClass::JpegLs => {
-            return PixelSupport::unsupported(PixelSupportReason::JpegLsNotSupported);
-        }
         TransferSyntaxClass::Unsupported => {
             return PixelSupport::unsupported(unsupported_transfer_syntax_reason(
                 &file.transfer_syntax_uid,
             ));
         }
         TransferSyntaxClass::Rle
+        | TransferSyntaxClass::JpegLs
         | TransferSyntaxClass::Jpeg
         | TransferSyntaxClass::JpegLossless
         | TransferSyntaxClass::Jpeg2000
@@ -215,6 +213,7 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
 
 fn unsupported_transfer_syntax_reason(uid: &str) -> PixelSupportReason {
     match uid {
+        "1.2.840.10008.1.2.4.81" => PixelSupportReason::JpegLsNotSupported,
         "1.2.840.10008.1.2.4.111" | "1.2.840.10008.1.2.4.112" => {
             PixelSupportReason::JpegXlNotSupported
         }
@@ -272,6 +271,7 @@ mod tests {
             "1.2.840.10008.1.2.4.50",
             "1.2.840.10008.1.2.4.70",
             "1.2.840.10008.1.2.4.90",
+            "1.2.840.10008.1.2.4.80",
         ] {
             let support = classify_pixel_support(&file(uid));
             assert_eq!(support.state, PixelSupportState::Renderable, "{uid}");
@@ -301,7 +301,7 @@ mod tests {
     fn disabled_codecs_have_transfer_syntax_reasons() {
         let cases = [
             (
-                "1.2.840.10008.1.2.4.80",
+                "1.2.840.10008.1.2.4.81",
                 PixelSupportReason::JpegLsNotSupported,
                 "transfer_syntax.jpeg_ls_not_supported",
             ),

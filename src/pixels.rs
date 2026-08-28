@@ -4,6 +4,7 @@ mod encapsulated;
 mod error;
 mod jpeg;
 mod jpeg2000;
+mod jpegls;
 mod jpegxl;
 mod native;
 mod native_layout;

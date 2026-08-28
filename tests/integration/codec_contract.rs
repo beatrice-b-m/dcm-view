@@ -335,7 +335,7 @@ fn transfer_syntax_classification_table_covers_every_supported_status() {
         ("1.2.840.10008.1.2.2", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.1.99", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.4.80", TransferSyntaxClass::JpegLs),
-        ("1.2.840.10008.1.2.4.81", TransferSyntaxClass::JpegLs),
+        ("1.2.840.10008.1.2.4.81", TransferSyntaxClass::Unsupported),
         ("1.2.840.10008.1.2.5", TransferSyntaxClass::Rle),
         ("9.9.9", TransferSyntaxClass::Unsupported),
     ];
@@ -353,7 +353,6 @@ fn transfer_syntax_classification_table_covers_every_supported_status() {
 async fn unsupported_syntax_classes_return_422_from_both_frame_endpoints() {
     let dir = tempdir().expect("temporary fixture directory");
     let cases = [
-        ("jpeg-ls-lossless", "1.2.840.10008.1.2.4.80"),
         ("jpeg-ls-near-lossless", "1.2.840.10008.1.2.4.81"),
         ("unknown", "9.9.9"),
     ];

@@ -11,6 +11,7 @@ use super::jpeg::{
     decode_compressed_frame_to_png, decode_raw_jpeg_lossless, read_raw_jpeg_samples,
 };
 use super::jpeg2000::{decode_jp2_fragment_to_png, decode_raw_jp2_samples};
+use super::jpegls::{decode_jpeg_ls_to_png, decode_raw_jpeg_ls};
 use super::jpegxl::{decode_jpeg_xl_to_png, decode_raw_jpeg_xl};
 use super::native::{decode_uncompressed_to_png, read_raw_uncompressed};
 use super::rle::{decode_raw_rle, decode_rle_to_png};
@@ -41,10 +42,7 @@ pub async fn load_raw_frame(
     }
 
     let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
-    if matches!(
-        syntax_class,
-        TransferSyntaxClass::JpegLs | TransferSyntaxClass::Unsupported
-    ) {
+    if syntax_class == TransferSyntaxClass::Unsupported {
         return Err(PixelError::UnsupportedTransferSyntax(
             file.transfer_syntax_uid.clone(),
         ));
@@ -76,6 +74,7 @@ pub async fn load_raw_frame(
             decode_raw_jp2_samples(file.clone(), request.frame).await?
         }
         TransferSyntaxClass::JpegXl => decode_raw_jpeg_xl(file.clone(), request.frame).await?,
+        TransferSyntaxClass::JpegLs => decode_raw_jpeg_ls(file.clone(), request.frame).await?,
         TransferSyntaxClass::Uncompressed => read_raw_uncompressed(file.clone(), request.frame)
             .await
             .map_err(PixelError::raw_decode)?,
@@ -194,6 +193,17 @@ pub async fn load_frame(
             .await?,
             "image/png",
         ),
+        TransferSyntaxClass::JpegLs => (
+            decode_jpeg_ls_to_png(
+                file.clone(),
+                request.frame,
+                window.center(),
+                window.width(),
+                window.mode(),
+            )
+            .await?,
+            "image/png",
+        ),
         TransferSyntaxClass::Uncompressed => (
             decode_uncompressed_to_png(
                 file.clone(),
@@ -217,7 +227,7 @@ pub async fn load_frame(
             .await?,
             "image/png",
         ),
-        TransferSyntaxClass::JpegLs | TransferSyntaxClass::Unsupported => {
+        TransferSyntaxClass::Unsupported => {
             return Err(PixelError::UnsupportedTransferSyntax(
                 file.transfer_syntax_uid.clone(),
             ));
