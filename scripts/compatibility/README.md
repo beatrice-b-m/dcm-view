@@ -19,6 +19,23 @@ will not be replaced by non-identical content. It separately records execution
 safety (`safe`, `timeout`, `crash`, `flaky`) and compatibility outcomes (`full_support`,
 `metadata_only`, `known_gap`, `failure`, `unavailable`).
 
+When a smaller corrected corpus is a strict subset of an already frozen
+canonical corpus, merge it without weakening the canonical inventory:
+
+```bash
+python scripts/compatibility/merge.py \
+  --base /outside/canonical-worklist.json \
+  --overlay /outside/corrected-subset-worklist.json \
+  --output /outside/corrected-canonical-worklist.json
+```
+
+The merger re-verifies both worklist content hashes, every selected DICOM hash,
+and every expected-contract hash. An overlay row may replace a base row only
+when case ID, selected relative path, SOP Instance UID, DICOM identity, image
+layout, and UIDs remain unchanged; the DICOM file and expected contract must
+change together. The merged worklist records both source worklist hashes and
+the exact replacement count.
+
 Run a bounded HTTP campaign against a previously built binary:
 
 ```bash
@@ -65,3 +82,6 @@ nor frame-to-optical-path profile selection is measured.
 
 It writes separate process logs, a companion-schema detail report, a timing-free
 normalized report for reproducibility comparison, and a SHA-256 artifact index.
+The normalized form removes transient registry indices and omits body hashes and
+sizes only for index-bearing series and reference JSON responses. Stable
+path/SOP identity and pixel payload hashes remain available for comparison.
