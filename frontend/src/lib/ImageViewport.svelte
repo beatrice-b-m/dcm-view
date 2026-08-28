@@ -1143,7 +1143,7 @@ function startDisplayPrefetch(
 		currentRawFrame = null;
 		liveWindowCenter = null;
 		liveWindowWidth = null;
-		setSelectedRoi(null);
+		untrack(() => setSelectedRoi(null));
 		clearCanvas();
 	});
 
