@@ -134,6 +134,11 @@ The executable contract is kept consistent by three layers:
   and frame, prefer patient-geometry ordering for classic slices, surface
   geometry-quality warnings, use concatenation offsets for enhanced parts, and
   keep WSI pyramid levels and non-member companions distinct.
+- `/api/file/{index}/references` extracts bounded typed relationships on a
+  blocking worker and resolves targets against the current registry by stable
+  SOP/Series identity. Declared one-based frame numbers remain visible while
+  local navigation matches contain only validated zero-based frames; missing
+  targets remain explicit empty matches.
 - `/api/file/{index}/tags/select` traverses explicit tag/item paths against the
   original object and pages sequence items, allowing targeted retrieval beyond
   legacy tag-tree preview caps.

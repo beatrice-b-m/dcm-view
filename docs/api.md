@@ -57,6 +57,7 @@ Static frontend assets are served at `/` and `/assets/*`.
 | GET | `/api/files` | File registry, tunnel metadata, and progressive scan status. |
 | GET | `/api/series` | Server-owned logical series and ordered virtual frame stacks. |
 | GET | `/api/file/:index/info` | Frame metadata for one file. |
+| GET | `/api/file/:index/references` | Typed DICOM relationships plus resolved local file/frame targets. |
 | GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG. |
 | GET | `/api/file/:index/frame/:frame/raw` | Decoded frame sample bytes plus rendering metadata headers. |
 | GET | `/api/file/:index/tags` | Lazy DICOM tag tree. |
@@ -118,6 +119,7 @@ ready.
       "frame_count": 60,
       "rows": 3000,
       "columns": 2500,
+      "pixel_aspect_ratio": 1.0,
       "transfer_syntax_uid": "1.2.840.10008.1.2.4.50",
       "default_window": { "center": 200.0, "width": 4000.0 }
     }
@@ -153,6 +155,10 @@ Progress fields:
 `support_reason` is a stable machine identifier such as
 `transfer_syntax.jpeg_ls_not_supported`; it describes current viewer
 capability and does not judge DICOM conformance.
+
+`pixel_aspect_ratio` is the effective physical row-to-column pixel extent used
+by the viewport. It is derived from Pixel Spacing when available, otherwise
+Pixel Aspect Ratio, and is `null` when neither yields a finite positive value.
 
 Scripts should poll `/api/files` while `scan_complete` is `false` if they need a
 complete scan result:
@@ -216,6 +222,44 @@ Instance Number and path. Warning codes include `missing_positions`,
 `gantry_tilt`. Enhanced concatenations use their Concatenation UID and frame
 offset. WSI Pyramid UID members are exposed as separate level stacks, while
 same-series LABEL and other non-member companions remain isolated stacks.
+
+## Typed References
+
+`GET /api/file/:index/references` extracts declared relationships without
+loading Pixel Data, then resolves them against the current ephemeral registry
+snapshot by SOP Instance UID or, for series-only declarations, Series Instance
+UID. A response retains unresolved identities rather than silently dropping
+them:
+
+```json
+{
+  "source_file_index": 4,
+  "source_sop_instance_uid": "1.2.3.derived",
+  "references": [{
+    "relationship": "source_image_for_segmentation",
+    "target": {
+      "sop_class_uid": "1.2.840.10008.5.1.4.1.1.2",
+      "sop_instance_uid": "1.2.3.source",
+      "series_instance_uid": "1.2.3.series",
+      "frame_numbers": [1, 4],
+      "segment_numbers": [1]
+    },
+    "matches": [{
+      "file_index": 1,
+      "path": "/path/to/source.dcm",
+      "sop_instance_uid": "1.2.3.source",
+      "frame_indices": [0, 3]
+    }]
+  }]
+}
+```
+
+`target.frame_numbers` preserves DICOM one-based declarations.
+`matches[].frame_indices` contains only validated zero-based frames suitable
+for viewer navigation. Empty `matches` means the declaration was understood
+but its target is not present in the current scan. Relationship names describe
+identity and navigation only; they do not claim SEG, SR, presentation-state,
+registration, RT, or other object-specific rendering semantics.
 
 ## File Info
 
