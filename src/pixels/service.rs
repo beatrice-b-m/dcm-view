@@ -12,6 +12,7 @@ use super::jpeg::{
 };
 use super::jpeg2000::{decode_jp2_fragment_to_png, decode_raw_jp2_samples};
 use super::native::{decode_uncompressed_to_png, read_raw_uncompressed};
+use super::rle::{decode_raw_rle, decode_rle_to_png};
 use super::syntax::classify_transfer_syntax;
 
 #[derive(Debug, Clone)]
@@ -41,7 +42,7 @@ pub async fn load_raw_frame(
     let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
     if matches!(
         syntax_class,
-        TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported
+        TransferSyntaxClass::JpegLs | TransferSyntaxClass::Unsupported
     ) {
         return Err(PixelError::UnsupportedTransferSyntax(
             file.transfer_syntax_uid.clone(),
@@ -76,6 +77,7 @@ pub async fn load_raw_frame(
         TransferSyntaxClass::Uncompressed => read_raw_uncompressed(file.clone(), request.frame)
             .await
             .map_err(PixelError::raw_decode)?,
+        TransferSyntaxClass::Rle => decode_raw_rle(file.clone(), request.frame).await?,
         _ => unreachable!("non-raw syntaxes filtered above"),
     };
 
@@ -191,9 +193,18 @@ pub async fn load_frame(
             .map_err(PixelError::frame_decode)?,
             "image/png",
         ),
-        TransferSyntaxClass::JpegLs
-        | TransferSyntaxClass::Rle
-        | TransferSyntaxClass::Unsupported => {
+        TransferSyntaxClass::Rle => (
+            decode_rle_to_png(
+                file.clone(),
+                request.frame,
+                window.center(),
+                window.width(),
+                window.mode(),
+            )
+            .await?,
+            "image/png",
+        ),
+        TransferSyntaxClass::JpegLs | TransferSyntaxClass::Unsupported => {
             return Err(PixelError::UnsupportedTransferSyntax(
                 file.transfer_syntax_uid.clone(),
             ));

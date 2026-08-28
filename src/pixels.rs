@@ -5,6 +5,7 @@ mod jpeg;
 mod jpeg2000;
 mod native;
 mod render;
+mod rle;
 mod service;
 mod syntax;
 mod window;
