@@ -114,14 +114,15 @@ Do not rely on browser-native DICOM fragment decoding for viewer correctness.
 | JPEG Baseline / Extended | `1.2.840.10008.1.2.4.50`, `.51` | Decode server-side with `dicom-pixeldata`; PNG encode |
 | JPEG Lossless | `1.2.840.10008.1.2.4.57`, `.70` | Decode server-side with `dicom-pixeldata`; PNG encode |
 | JPEG 2000 | `1.2.840.10008.1.2.4.90`, `.91` | Read encapsulated fragment with `DicomCollector`; decode via `jpeg2k`; PNG encode |
+| RLE Lossless | `1.2.840.10008.1.2.5` | Decode Annex G header/PackBits byte planes server-side; PNG encode |
 | Uncompressed | Implicit LE, Explicit LE, Explicit BE | Read decoded/native samples, rescale/window, PNG encode |
-| JPEG-LS / RLE | `.80`, `.81`, `.5` | HTTP 422 unsupported transfer syntax |
+| JPEG-LS | `.80`, `.81` | HTTP 422 unsupported transfer syntax |
 | Other | anything else | HTTP 422 unsupported transfer syntax |
 
 Raw-frame endpoints return decoded sample bytes plus metadata headers for
-uncompressed, JPEG Baseline/Extended, JPEG Lossless, and grayscale JPEG 2000
-paths. JPEG-LS, RLE, unsupported syntaxes, and unsupported raw component layouts
-return 422 or a decode error.
+uncompressed, JPEG Baseline/Extended, JPEG Lossless, RLE Lossless, and grayscale
+JPEG 2000 paths. JPEG-LS, unsupported syntaxes, and unsupported raw component
+layouts return 422 or a decode error.
 
 Both display and raw frame endpoints must include `X-Cache: HIT` or
 `X-Cache: MISS`.

@@ -151,7 +151,7 @@ Progress fields:
 
 `support_state` is `renderable`, `metadata_only`, or `unsupported`. A non-null
 `support_reason` is a stable machine identifier such as
-`transfer_syntax.rle_lossless_not_supported`; it describes current viewer
+`transfer_syntax.jpeg_ls_not_supported`; it describes current viewer
 capability and does not judge DICOM conformance.
 
 Scripts should poll `/api/files` while `scan_complete` is `false` if they need a
@@ -271,8 +271,9 @@ Transfer syntax behavior:
 | JPEG Baseline / Extended | Decoded server-side and PNG-encoded. |
 | JPEG Lossless / Lossless SV1 | Decoded server-side and PNG-encoded. |
 | JPEG 2000 lossless/lossy | Decoded server-side and PNG-encoded. |
+| RLE Lossless | Decoded server-side and PNG-encoded for 8/16-bit monochrome plus 8-bit RGB, YBR_FULL, and palette-color layouts. |
 | Implicit LE / Explicit LE / Explicit BE | Windowed server-side and PNG-encoded. |
-| JPEG-LS / RLE / other | `422 {"code":"unsupported_transfer_syntax","error":"unsupported transfer syntax: ..."}`. |
+| JPEG-LS / other | `422 {"code":"unsupported_transfer_syntax","error":"unsupported transfer syntax: ..."}`. |
 
 Every successful display-frame response includes `X-Cache: HIT` or
 `X-Cache: MISS`. The display cache key includes file index, frame index, window
@@ -292,7 +293,8 @@ Supported raw paths:
 | JPEG Baseline / Extended | Decoded to 8-bit grayscale samples. |
 | JPEG Lossless | Decoded to 8-bit or 16-bit grayscale samples when supported by the codec stack. |
 | Grayscale JPEG 2000 | Decoded to 8-bit or 16-bit samples. |
-| JPEG-LS / RLE / unsupported | `422` or a decode error. |
+| RLE Lossless | Decoded to interleaved, little-endian native sample bytes for supported layouts. |
+| JPEG-LS / unsupported | `422` or a decode error. |
 | Multi-component JPEG 2000 raw decode | `422` or a decode error. |
 
 Successful raw-frame responses include `X-Cache: HIT` or `X-Cache: MISS`. The

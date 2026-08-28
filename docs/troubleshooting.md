@@ -138,7 +138,9 @@ Symptom: the viewer cannot display a file and the API returns
 `422 {"error": "unsupported transfer syntax: ..."}`.
 
 Likely cause: the file uses a transfer syntax that `dcmview` intentionally does
-not decode yet. JPEG-LS, RLE, and unknown syntaxes are currently unsupported.
+not decode yet. JPEG-LS and unknown syntaxes are currently unsupported. RLE
+Lossless is supported for 8/16-bit monochrome and the common 8-bit RGB,
+YBR_FULL, and palette-color layouts.
 
 Fix: convert the file to an uncompressed, JPEG Baseline, JPEG Lossless, or
 JPEG 2000 transfer syntax with your normal DICOM tooling, or file a
