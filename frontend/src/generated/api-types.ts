@@ -258,6 +258,8 @@ export const CACHE_STATUS = {
 
 export type WindowMode = "default" | "full_dynamic";
 
+export type ApiErrorCode = "invalid_path" | "invalid_query" | "invalid_json" | "bad_request" | "not_found" | "route_not_found" | "asset_not_found" | "method_not_allowed" | "no_pixel_data" | "frame_out_of_range" | "invalid_window" | "unsupported_transfer_syntax" | "unsupported_pixel_layout" | "pixel_decode_failed" | "internal_error";
+
 export interface WindowPreset {
 	center: number;
 	width: number;
@@ -366,5 +368,6 @@ export interface TagNode {
 }
 
 export interface ErrorResponse {
+	code: ApiErrorCode;
 	error: string;
 }

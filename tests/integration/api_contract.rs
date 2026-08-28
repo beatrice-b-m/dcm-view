@@ -135,7 +135,8 @@ async fn json_endpoints_match_frontend_contract_shapes() {
     let missing = test_server.get("/api/file/99/info").await;
     missing.assert_status_not_found();
     let error: Value = missing.json();
-    assert_object_keys(&error, &["error"]);
+    assert_object_keys(&error, &["code", "error"]);
+    assert_eq!(error["code"], "not_found");
     assert_eq!(error["error"], "file index out of range");
 }
 
@@ -331,7 +332,7 @@ fn assert_json_error(name: &str, response: &TestResponse, expected_status: Statu
         "{name} must return JSON"
     );
     let payload: Value = response.json();
-    assert_object_keys(&payload, &["error"]);
+    assert_object_keys(&payload, &["code", "error"]);
     assert!(
         payload["error"]
             .as_str()

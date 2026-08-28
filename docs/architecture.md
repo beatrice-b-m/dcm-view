@@ -115,7 +115,10 @@ The executable contract is kept consistent by three layers:
 
 ### Endpoint Invariants
 
-- Every API error is a JSON `ErrorResponse` shaped as `{"error":"..."}`.
+- Every API error is a JSON `ErrorResponse` shaped as
+  `{"code":"stable_machine_code","error":"human-readable detail"}`. Codes are
+  owned by `ApiErrorCode` in the canonical Rust contract; messages may add
+  context without changing automation behavior.
   Path, query, and JSON extractor failures pass through the same envelope.
 - Unknown `/api` routes return JSON `404`; unsupported methods return JSON
   `405`.

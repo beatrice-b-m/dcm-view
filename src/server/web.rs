@@ -1,4 +1,4 @@
-use crate::api::contracts::ErrorResponse;
+use crate::api::contracts::{ApiErrorCode, ErrorResponse};
 use axum::extract::Path;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -14,6 +14,7 @@ pub(crate) async fn index() -> impl IntoResponse {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                code: ApiErrorCode::AssetNotFound,
                 error: "frontend index asset missing".to_string(),
             }),
         )
@@ -27,6 +28,7 @@ pub(crate) async fn asset(Path(path): Path<String>) -> impl IntoResponse {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
+                code: ApiErrorCode::AssetNotFound,
                 error: format!("asset not found: {path}"),
             }),
         )

@@ -195,7 +195,7 @@ Transfer syntax behavior:
 | JPEG Lossless / Lossless SV1 | Decoded server-side and PNG-encoded. |
 | JPEG 2000 lossless/lossy | Decoded server-side and PNG-encoded. |
 | Implicit LE / Explicit LE / Explicit BE | Windowed server-side and PNG-encoded. |
-| JPEG-LS / RLE / other | `422 {"error": "unsupported transfer syntax: ..."}`. |
+| JPEG-LS / RLE / other | `422 {"code":"unsupported_transfer_syntax","error":"unsupported transfer syntax: ..."}`. |
 
 Every successful display-frame response includes `X-Cache: HIT` or
 `X-Cache: MISS`. The display cache key includes file index, frame index, window
@@ -309,6 +309,11 @@ Common statuses:
 | `404` | Unknown API route or file index, missing pixel data, or out-of-range frame. |
 | `405` | Unsupported method on a known API route. |
 | `422` | Structurally invalid JSON, unsupported transfer syntax, or unsupported raw component layout. |
+
+All API failures use the shared envelope
+`{"code":"stable_machine_code","error":"human-readable detail"}`. Clients
+should branch on `code`; the `error` text is diagnostic context and is not a
+stable programmatic interface.
 | `500` | Decode, filesystem, tag serialization task, or export failure. |
 
 Frame decode errors are returned for the request that failed; the server remains

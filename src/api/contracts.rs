@@ -506,8 +506,29 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiErrorCode {
+    InvalidPath,
+    InvalidQuery,
+    InvalidJson,
+    BadRequest,
+    NotFound,
+    RouteNotFound,
+    AssetNotFound,
+    MethodNotAllowed,
+    NoPixelData,
+    FrameOutOfRange,
+    InvalidWindow,
+    UnsupportedTransferSyntax,
+    UnsupportedPixelLayout,
+    PixelDecodeFailed,
+    InternalError,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ErrorResponse {
+    pub code: ApiErrorCode,
     pub error: String,
 }
 

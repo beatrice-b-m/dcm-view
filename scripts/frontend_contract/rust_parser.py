@@ -335,15 +335,15 @@ def enum_tag(source: str, name: str, *, required: bool) -> str | None:
 	return tag
 
 
-def parse_window_mode_variants(source: str) -> list[str]:
+def parse_unit_enum_variants(source: str, name: str) -> list[str]:
 	ensure_only_container_serde_settings(
 		source,
 		"enum",
-		"WindowMode",
+		name,
 		allowed={"rename_all"},
 	)
-	enum_tag(source, "WindowMode", required=False)
-	body = extract_braced_block(source, "pub enum WindowMode")
+	enum_tag(source, name, required=False)
+	body = extract_braced_block(source, f"pub enum {name}")
 	variants = []
 	pending_attributes: list[str] = []
 	for line in body.splitlines():
@@ -357,15 +357,19 @@ def parse_window_mode_variants(source: str) -> list[str]:
 			variants.append(
 				variant_name(
 					source,
-					"WindowMode",
+					name,
 					line,
 					"\n".join(pending_attributes),
 				)
 			)
 			pending_attributes.clear()
 	if not variants:
-		raise ValueError("WindowMode variants not found")
+		raise ValueError(f"{name} variants not found")
 	return variants
+
+
+def parse_window_mode_variants(source: str) -> list[str]:
+	return parse_unit_enum_variants(source, "WindowMode")
 
 
 def parse_variant_fields(

@@ -15,7 +15,7 @@ STRUCTS = (
 	"TagNode",
 	"ErrorResponse",
 )
-ENUMS = ("WindowMode", "TagValue")
+ENUMS = ("WindowMode", "ApiErrorCode", "TagValue")
 INPUT_STRUCTS = frozenset({"FrameQuery"})
 
 ENDPOINT_TYPE_MARKERS = {

@@ -15,6 +15,7 @@ from .rust_parser import (
 	parse_raw_frame_headers,
 	parse_struct,
 	parse_tag_value_variants,
+	parse_unit_enum_variants,
 	parse_window_mode_variants,
 	rust_string_constant,
 	validate_field_constant_coverage,
@@ -46,6 +47,7 @@ def ts_type(rust_type: str, *, option_as_optional: bool = False) -> str:
 		"TagNode",
 		"TagValue",
 		"WindowMode",
+		"ApiErrorCode",
 	}:
 		return rust_type
 	raise ValueError(f"unsupported Rust type: {rust_type}")
@@ -86,6 +88,11 @@ def render_struct(source: str, name: str) -> str:
 def render_window_mode(source: str) -> str:
 	variants = parse_window_mode_variants(source)
 	return "export type WindowMode = " + " | ".join(f'"{variant}"' for variant in variants) + ";"
+
+
+def render_api_error_code(source: str) -> str:
+	variants = parse_unit_enum_variants(source, "ApiErrorCode")
+	return "export type ApiErrorCode = " + " | ".join(f'"{variant}"' for variant in variants) + ";"
 
 
 def render_tag_value(source: str) -> str:
@@ -331,6 +338,7 @@ def render(source: str) -> str:
 		render_frame_query_keys(source),
 		render_cache_contract(source),
 		render_window_mode(source),
+		render_api_error_code(source),
 	]
 	sections.extend(render_struct(source, name) for name in STRUCTS[:8])
 	sections.append(render_raw_frame_headers(source))

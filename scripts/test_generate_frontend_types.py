@@ -87,6 +87,11 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn('export type WindowMode = "default" | "fullDynamic";', output)
 		self.assertNotEqual(output, generator.render(self.source))
 
+	def test_stable_api_error_codes_are_generated_from_the_rust_enum(self) -> None:
+		output = generator.render(self.source)
+		self.assertIn('export type ApiErrorCode = "invalid_path"', output)
+		self.assertIn("\tcode: ApiErrorCode;", output)
+
 	def test_field_level_rename_mutation_changes_the_generated_property(self) -> None:
 		mutated = self.source.replace(
 			"\tpub patient_id: String,",
