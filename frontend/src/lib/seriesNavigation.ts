@@ -1,5 +1,10 @@
 import type { FrameRefSummary, SeriesStackSummary, SeriesSummary } from "../api";
 
+export type NavigationFrameRef = Pick<
+	FrameRefSummary,
+	"virtual_index" | "file_index" | "frame_index"
+>;
+
 export interface LocatedSeriesStack {
 	series: SeriesSummary;
 	stack: SeriesStackSummary;
@@ -46,4 +51,24 @@ export function navigationTabId(
 	fileIndex: number,
 ): string {
 	return findSeriesStackForFile(series, fileIndex)?.stack.id ?? `file:${fileIndex}`;
+}
+
+export function navigationFramesForFile(
+	fileIndex: number,
+	frameCount: number,
+): NavigationFrameRef[] {
+	return Array.from({ length: Math.max(0, frameCount) }, (_, frameIndex) => ({
+		virtual_index: frameIndex,
+		file_index: fileIndex,
+		frame_index: frameIndex,
+	}));
+}
+
+export function navigationFrameAtPosition(
+	frames: readonly NavigationFrameRef[],
+	position: number,
+): NavigationFrameRef | null {
+	if (frames.length === 0) return null;
+	const bounded = Math.max(0, Math.min(frames.length - 1, position));
+	return frames[bounded] ?? null;
 }

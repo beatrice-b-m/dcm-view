@@ -4,6 +4,8 @@ import {
 	findSeriesStackForFile,
 	frameAtPosition,
 	framePosition,
+	navigationFrameAtPosition,
+	navigationFramesForFile,
 	navigationTabId,
 } from "./seriesNavigation";
 
@@ -74,5 +76,27 @@ describe("series navigation", () => {
 		expect(framePosition(value, 99, 0)).toBeNull();
 		expect(frameAtPosition(value, -1)?.file_index).toBe(7);
 		expect(frameAtPosition(value, 99)?.frame_index).toBe(1);
+	});
+
+	it("normalizes single-file and mixed-source stacks to the same frame identity", () => {
+		expect(navigationFramesForFile(4, 3)).toEqual([
+		{ virtual_index: 0, file_index: 4, frame_index: 0 },
+		{ virtual_index: 1, file_index: 4, frame_index: 1 },
+		{ virtual_index: 2, file_index: 4, frame_index: 2 },
+	]);
+
+		const mixed = stack().frames;
+		expect(navigationFrameAtPosition(mixed, 0)).toMatchObject({
+			file_index: 7,
+			frame_index: 0,
+		});
+		expect(navigationFrameAtPosition(mixed, 2)).toMatchObject({
+			file_index: 9,
+			frame_index: 1,
+		});
+		expect(navigationFrameAtPosition(mixed, 99)).toMatchObject({
+			file_index: 9,
+			frame_index: 1,
+		});
 	});
 });
