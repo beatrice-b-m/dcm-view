@@ -72,8 +72,9 @@ modules, not the reverse:
 6. `pixels/service.rs` is the server-facing pixel boundary. Codec, cache,
    rendering, and window modules remain below it. `pixels/native_layout.rs`
    validates native frame sizing and normalizes bit-packed, planar, subsampled,
-   and endian-sensitive storage before display decoding; `pixels/rle.rs` owns
-   the bounded Annex G/PackBits path.
+   and endian-sensitive storage before display decoding. `pixels/overlay.rs`
+   and `pixels/shutter.rs` own bounded native presentation compositing;
+   `pixels/rle.rs` owns the bounded Annex G/PackBits path.
 
 `src/api/contracts.rs` owns browser-visible wire declarations. `src/types.rs`
 owns internal DICOM, cache-key, transfer-syntax, and windowing domain types; it
@@ -173,6 +174,13 @@ normalizing multi-byte values to little endian; one-bit pixels are expanded to
 one byte per sample. Float and double-float objects are pixel-renderable, but
 real-world-value mapping remains a separate semantic capability rather than an
 implicit part of the display pipeline.
+
+For native monochrome display, Modality LUT or rescale precedes VOI LUT or
+windowing, followed by MONOCHROME1 presentation inversion. A validated
+rectangular shutter then replaces pixels outside its one-based inclusive
+opening with the encoded P-value, and standalone one-bit overlay planes are
+composited last in DICOM LSB-first order. These presentation operations affect
+PNG display frames only; raw-frame bytes remain the decoded source samples.
 
 RLE Lossless decoding validates the 64-byte Annex G header, segment offsets,
 PackBits runs, byte-plane counts, and decoded sizes before assembling a frame.
