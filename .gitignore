@@ -9,6 +9,7 @@ vscode/node_modules/
 vscode/out/
 .vscode-test/
 devscripts/
+artifacts/
 
 *.dcm
 *.dicom
