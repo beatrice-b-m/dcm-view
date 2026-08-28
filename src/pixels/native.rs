@@ -2,7 +2,6 @@ use crate::api::contracts::{RawFrameMetadata, WindowMode};
 use crate::types::{FileEntry, NativePixelDataKind};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use dicom_dictionary_std::tags;
 use dicom_object::open_file;
 use image::{ImageBuffer, ImageFormat, Luma};
 use std::io::Cursor;
@@ -18,7 +17,7 @@ use super::shutter::apply_rectangular_shutter;
 use super::stored_bits::canonicalize_integer_samples;
 use super::window::{
     apply_modality_transform, apply_padding_background, apply_voi_lut_if_selected, apply_window,
-    exclude_padding_samples, resolve_window_with_mode, PixelPaddingRange,
+    exclude_padding_samples, read_pixel_padding_range, resolve_window_with_mode,
 };
 
 pub(crate) async fn decode_uncompressed_to_png(
@@ -222,27 +221,6 @@ fn native_pixel_data_kind(file: &FileEntry) -> NativePixelDataKind {
         .native_pixel
         .pixel_data_kind
         .unwrap_or(NativePixelDataKind::Integer)
-}
-
-fn read_pixel_padding_range(
-    object: &dicom_object::DefaultDicomObject,
-    kind: NativePixelDataKind,
-) -> Option<PixelPaddingRange> {
-    let read = |tag| object.element(tag).ok()?.to_float64().ok();
-    let (value_tag, limit_tag) = match kind {
-        NativePixelDataKind::Integer => {
-            (tags::PIXEL_PADDING_VALUE, tags::PIXEL_PADDING_RANGE_LIMIT)
-        }
-        NativePixelDataKind::Float32 => (
-            tags::FLOAT_PIXEL_PADDING_VALUE,
-            tags::FLOAT_PIXEL_PADDING_RANGE_LIMIT,
-        ),
-        NativePixelDataKind::Float64 => (
-            tags::DOUBLE_FLOAT_PIXEL_PADDING_VALUE,
-            tags::DOUBLE_FLOAT_PIXEL_PADDING_RANGE_LIMIT,
-        ),
-    };
-    Some(PixelPaddingRange::new(read(value_tag)?, read(limit_tag)))
 }
 
 fn decode_numeric_samples(

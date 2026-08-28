@@ -161,11 +161,12 @@ fn encode_monochrome(
     window_mode: WindowMode,
 ) -> PixelResult<Bytes> {
     let rescaled = samples
-        .into_iter()
+        .iter()
         .map(|value| value * file.rescale_slope + file.rescale_intercept)
         .collect();
     encode_windowed_luminance_png(
         file,
+        &samples,
         rescaled,
         rows,
         columns,

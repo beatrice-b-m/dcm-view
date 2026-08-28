@@ -1,5 +1,6 @@
 use crate::api::contracts::{WindowMode, WindowPreset};
-use crate::types::{DicomLut, ResolvedWindow};
+use crate::types::{DicomLut, NativePixelDataKind, ResolvedWindow};
+use dicom_dictionary_std::tags;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PixelPaddingRange {
@@ -22,6 +23,27 @@ impl PixelPaddingRange {
             .map(|sample| *sample >= self.low && *sample <= self.high)
             .collect()
     }
+}
+
+pub(crate) fn read_pixel_padding_range(
+    object: &dicom_object::DefaultDicomObject,
+    kind: NativePixelDataKind,
+) -> Option<PixelPaddingRange> {
+    let read = |tag| object.element(tag).ok()?.to_float64().ok();
+    let (value_tag, limit_tag) = match kind {
+        NativePixelDataKind::Integer => {
+            (tags::PIXEL_PADDING_VALUE, tags::PIXEL_PADDING_RANGE_LIMIT)
+        }
+        NativePixelDataKind::Float32 => (
+            tags::FLOAT_PIXEL_PADDING_VALUE,
+            tags::FLOAT_PIXEL_PADDING_RANGE_LIMIT,
+        ),
+        NativePixelDataKind::Float64 => (
+            tags::DOUBLE_FLOAT_PIXEL_PADDING_VALUE,
+            tags::DOUBLE_FLOAT_PIXEL_PADDING_RANGE_LIMIT,
+        ),
+    };
+    Some(PixelPaddingRange::new(read(value_tag)?, read(limit_tag)))
 }
 
 pub(crate) fn exclude_padding_samples(samples: &[f64], padding_mask: &[bool]) -> Vec<f64> {

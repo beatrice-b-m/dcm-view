@@ -1,14 +1,18 @@
 use crate::api::contracts::WindowMode;
-use crate::types::FileEntry;
+use crate::types::{FileEntry, NativePixelDataKind};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use image::{ImageBuffer, ImageFormat, Luma};
 use std::io::Cursor;
 
-use super::window::{apply_window, resolve_window_with_mode};
+use super::window::{
+    apply_padding_background, apply_window, exclude_padding_samples, read_pixel_padding_range,
+    resolve_window_with_mode,
+};
 
 pub(crate) fn encode_windowed_luminance_png(
     file: &FileEntry,
+    stored: &[f64],
     rescaled: Vec<f64>,
     rows: u32,
     columns: u32,
@@ -16,12 +20,23 @@ pub(crate) fn encode_windowed_luminance_png(
     requested_ww: Option<f64>,
     window_mode: WindowMode,
 ) -> Result<Bytes> {
+    let padding_mask = dicom_object::open_file(&file.path)
+        .ok()
+        .and_then(|object| read_pixel_padding_range(&object, NativePixelDataKind::Integer))
+        .map(|padding| padding.mask(stored));
+    let unpadded = padding_mask
+        .as_deref()
+        .map(|mask| exclude_padding_samples(&rescaled, mask));
+    let window_source = unpadded
+        .as_deref()
+        .filter(|samples| !samples.is_empty())
+        .unwrap_or(&rescaled);
     let resolved_window = resolve_window_with_mode(
         window_mode,
         requested_wc,
         requested_ww,
         file.default_window,
-        &rescaled,
+        window_source,
     )
     .ok_or_else(|| anyhow!("compressed decode failed: could not resolve window"))?;
     let mut windowed = apply_window(
@@ -29,6 +44,9 @@ pub(crate) fn encode_windowed_luminance_png(
         resolved_window.center,
         resolved_window.width.max(1.0),
     );
+    if let Some(mask) = padding_mask.as_deref() {
+        apply_padding_background(&mut windowed, mask);
+    }
     apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
 
     let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)

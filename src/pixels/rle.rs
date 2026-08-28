@@ -82,11 +82,12 @@ fn decode_rle_to_png_blocking(
                 file.pixel_representation,
             )?;
             let rescaled = samples
-                .into_iter()
+                .iter()
                 .map(|value| value * file.rescale_slope + file.rescale_intercept)
                 .collect();
             encode_windowed_luminance_png(
                 file,
+                &samples,
                 rescaled,
                 file.rows,
                 file.columns,
@@ -504,9 +505,15 @@ fn read_palette_channel(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_packbits_segment, decode_rle_frame, normalize_color_for_display, RleDecodeError,
-        RLE_HEADER_LEN,
+        decode_packbits_segment, decode_rle_frame, decode_rle_to_png_blocking,
+        normalize_color_for_display, RleDecodeError, RLE_HEADER_LEN,
     };
+    use crate::api::contracts::WindowMode;
+    use crate::types::FileEntry;
+    use dicom_core::{value::PixelFragmentSequence, DataElement, PrimitiveValue, VR};
+    use dicom_dictionary_std::{tags, uids};
+    use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
+    use tempfile::tempdir;
 
     fn literal(values: &[u8]) -> Vec<u8> {
         assert!(!values.is_empty() && values.len() <= 128);
@@ -539,6 +546,98 @@ mod tests {
         assert_eq!(
             decode_rle_frame(&rgb, 1, 2, 3, 8).unwrap(),
             [255, 0, 10, 0, 255, 20]
+        );
+    }
+
+    #[test]
+    fn rle_padding_range_is_excluded_and_painted_as_background() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("rle-padding-range.dcm");
+        let encoded = fragment(&[literal(&[0, 64, 128, 255])]);
+        let mut object = InMemDicomObject::from_element_iter([
+            DataElement::new(
+                tags::SOP_CLASS_UID,
+                VR::UI,
+                uids::SECONDARY_CAPTURE_IMAGE_STORAGE,
+            ),
+            DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.72001"),
+            DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(8_u16)),
+            DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(8_u16)),
+            DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(7_u16)),
+            DataElement::new(
+                tags::PIXEL_REPRESENTATION,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+            DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
+            DataElement::new(
+                tags::PHOTOMETRIC_INTERPRETATION,
+                VR::CS,
+                PrimitiveValue::from("MONOCHROME2"),
+            ),
+            DataElement::new(
+                tags::PIXEL_PADDING_VALUE,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+            DataElement::new(
+                tags::PIXEL_PADDING_RANGE_LIMIT,
+                VR::US,
+                PrimitiveValue::from(64_u16),
+            ),
+        ]);
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new(vec![0], vec![encoded]),
+        ));
+        object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::RLE_LOSSLESS)
+                    .media_storage_sop_class_uid(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.72001"),
+            )
+            .unwrap()
+            .write_to_file(&path)
+            .unwrap();
+        let file = FileEntry {
+            index: 0,
+            path,
+            label: String::new(),
+            patient_id: String::new(),
+            patient_name: String::new(),
+            study_instance_uid: String::new(),
+            study_date: String::new(),
+            study_description: String::new(),
+            series_instance_uid: String::new(),
+            series_number: String::new(),
+            series_description: String::new(),
+            modality: "OT".to_string(),
+            instance_number: "1".to_string(),
+            sop_instance_uid: "2.25.72001".to_string(),
+            sop_class_uid: uids::SECONDARY_CAPTURE_IMAGE_STORAGE.to_string(),
+            series_metadata: Default::default(),
+            has_pixels: true,
+            frame_count: 1,
+            rows: 2,
+            columns: 2,
+            bits_allocated: 8,
+            pixel_representation: 0,
+            samples_per_pixel: 1,
+            photometric_interpretation: "MONOCHROME2".to_string(),
+            rescale_slope: 1.0,
+            rescale_intercept: 0.0,
+            transfer_syntax_uid: uids::RLE_LOSSLESS.to_string(),
+            default_window: None,
+        };
+
+        let png = decode_rle_to_png_blocking(&file, 0, None, None, WindowMode::Default).unwrap();
+        assert_eq!(
+            image::load_from_memory(&png).unwrap().to_luma8().into_raw(),
+            [0, 0, 0, 255]
         );
     }
 
