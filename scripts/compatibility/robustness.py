@@ -100,6 +100,45 @@ class BoundedProcess:
             "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
         }
 
+
+class PeakRssSampler:
+    """Best-effort process RSS sampler; unsupported platforms report null."""
+
+    def __init__(self, pid: int, interval: float = 0.05):
+        self.pid = pid
+        self.interval = interval
+        self.peak_bytes: int | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> int | None:
+        self._stop.set(); self._thread.join(timeout=1.0); return self.peak_bytes
+
+    def _read(self) -> int | None:
+        status = Path(f"/proc/{self.pid}/status")
+        if status.is_file():
+            for line in status.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+        try:
+            value = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(self.pid)], capture_output=True,
+                text=True, timeout=1, check=False,
+            ).stdout.strip()
+            return int(value) * 1024 if value else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+
+    def _sample(self) -> None:
+        while not self._stop.is_set():
+            value = self._read()
+            if value is not None:
+                self.peak_bytes = max(self.peak_bytes or 0, value)
+            self._stop.wait(self.interval)
+
     def logs(self) -> dict[str, Any]:
         return {
             "stdout": bytes(self._stdout), "stderr": bytes(self._stderr),
