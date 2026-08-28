@@ -98,6 +98,7 @@ class CheckProfileCompositionTests(unittest.TestCase):
 				"remote-fixtures",
 				"--test",
 				"integration",
+				"integration::remote_fixtures",
 				"--",
 				"--ignored",
 			],

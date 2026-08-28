@@ -244,6 +244,7 @@ class CheckRunner:
 				"remote-fixtures",
 				"--test",
 				"integration",
+				"integration::remote_fixtures",
 				"--",
 				"--ignored",
 			],
