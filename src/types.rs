@@ -25,6 +25,39 @@ pub struct DicomLut {
     pub entries: Vec<u16>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayPlane {
+    pub group: u16,
+    pub rows: u32,
+    pub columns: u32,
+    /// One-based row and column origin in the displayed image.
+    pub origin: [i32; 2],
+    pub overlay_type: String,
+    pub number_of_frames: u32,
+    /// One-based source image frame to which the first overlay frame applies.
+    pub image_frame_origin: u32,
+    /// Overlay Data words in DICOM's least-significant-bit-first pixel order.
+    pub data: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RectangularDisplayShutter {
+    /// One-based inclusive image column bounds.
+    pub left_vertical_edge: i32,
+    pub right_vertical_edge: i32,
+    /// One-based inclusive image row bounds.
+    pub upper_horizontal_edge: i32,
+    pub lower_horizontal_edge: i32,
+    /// Unsigned 16-bit P-value used outside the shutter opening.
+    pub presentation_value: u16,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PresentationMetadata {
+    pub overlay_planes: Vec<OverlayPlane>,
+    pub rectangular_shutter: Option<RectangularDisplayShutter>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct NativePixelMetadata {
     pub planar_configuration: Option<u32>,
@@ -83,6 +116,7 @@ pub struct FileEntry {
 #[derive(Debug, Clone, Default)]
 pub struct SeriesMetadata {
     pub native_pixel: NativePixelMetadata,
+    pub presentation: PresentationMetadata,
     pub frame_of_reference_uid: String,
     pub image_position_patient: Option<PatientPosition>,
     pub image_orientation_patient: Option<PatientOrientation>,

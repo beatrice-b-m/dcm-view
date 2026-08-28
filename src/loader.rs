@@ -1,7 +1,8 @@
 use crate::api::contracts::WindowPreset;
 use crate::types::{
-    DicomLut, FileEntry, LoadReport, NativePixelDataKind, NativePixelMetadata, PatientOrientation,
-    PatientPosition, SeriesMetadata,
+    DicomLut, FileEntry, LoadReport, NativePixelDataKind, NativePixelMetadata, OverlayPlane,
+    PatientOrientation, PatientPosition, PresentationMetadata, RectangularDisplayShutter,
+    SeriesMetadata,
 };
 use anyhow::{anyhow, Context, Result};
 use dicom_dictionary_std::{tags, uids};
@@ -645,6 +646,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let normalized_pixel_aspect = normalize_pixel_aspect(pixel_spacing, pixel_aspect_ratio);
     let modality_lut = read_lut_sequence(&obj, tags::MODALITY_LUT_SEQUENCE);
     let voi_lut = read_lut_sequence(&obj, tags::VOILUT_SEQUENCE);
+    let presentation = read_presentation_metadata(&obj);
     let pixel_representation = read_u32(&obj, "PixelRepresentation").unwrap_or(0);
     let samples_per_pixel = read_u32(&obj, "SamplesPerPixel").unwrap_or(1).max(1);
     let photometric_interpretation =
@@ -696,6 +698,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
                 modality_lut,
                 voi_lut,
             },
+            presentation,
             frame_of_reference_uid,
             image_position_patient,
             image_orientation_patient,
@@ -871,6 +874,10 @@ fn read_u32(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {
     read_str(obj, name)?.parse::<u32>().ok()
 }
 
+fn read_i32(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<i32> {
+    read_str(obj, name)?.parse::<i32>().ok()
+}
+
 fn read_f64(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<f64> {
     read_str(obj, name)?.parse::<f64>().ok()
 }
@@ -932,6 +939,103 @@ fn read_lut_sequence(
         bits_per_entry,
         entries: entries.into_iter().take(entry_count).collect(),
     })
+}
+
+fn read_presentation_metadata(obj: &dicom_object::DefaultDicomObject) -> PresentationMetadata {
+    PresentationMetadata {
+        overlay_planes: read_overlay_planes(obj),
+        rectangular_shutter: read_rectangular_display_shutter(obj),
+    }
+}
+
+fn read_overlay_planes(obj: &dicom_object::DefaultDicomObject) -> Vec<OverlayPlane> {
+    (0x6000_u16..=0x601e)
+        .step_by(2)
+        .filter_map(|group| read_overlay_plane(obj, group))
+        .collect()
+}
+
+fn read_overlay_plane(obj: &dicom_object::DefaultDicomObject, group: u16) -> Option<OverlayPlane> {
+    let rows = read_u32_tag(obj, dicom_core::Tag(group, 0x0010))?;
+    let columns = read_u32_tag(obj, dicom_core::Tag(group, 0x0011))?;
+    let origin = obj
+        .element(dicom_core::Tag(group, 0x0050))
+        .ok()?
+        .to_multi_int::<i32>()
+        .ok()?
+        .try_into()
+        .ok()?;
+    if rows == 0
+        || columns == 0
+        || read_u32_tag(obj, dicom_core::Tag(group, 0x0100))? != 1
+        || read_u32_tag(obj, dicom_core::Tag(group, 0x0102))? != 0
+    {
+        return None;
+    }
+    let number_of_frames = read_u32_tag(obj, dicom_core::Tag(group, 0x0015)).unwrap_or(1);
+    let image_frame_origin = read_u32_tag(obj, dicom_core::Tag(group, 0x0051)).unwrap_or(1);
+    if number_of_frames == 0 || image_frame_origin == 0 {
+        return None;
+    }
+    let required_words = u64::from(rows)
+        .checked_mul(u64::from(columns))?
+        .checked_mul(u64::from(number_of_frames))?
+        .checked_add(15)?
+        / 16;
+    let required_words = usize::try_from(required_words).ok()?;
+    let mut data = obj
+        .element(dicom_core::Tag(group, 0x3000))
+        .ok()?
+        .to_multi_int::<u16>()
+        .ok()?;
+    if data.len() < required_words {
+        return None;
+    }
+    data.truncate(required_words);
+
+    Some(OverlayPlane {
+        group,
+        rows,
+        columns,
+        origin,
+        overlay_type: read_string_tag(obj, dicom_core::Tag(group, 0x0040)).unwrap_or_default(),
+        number_of_frames,
+        image_frame_origin,
+        data,
+    })
+}
+
+fn read_rectangular_display_shutter(
+    obj: &dicom_object::DefaultDicomObject,
+) -> Option<RectangularDisplayShutter> {
+    if !read_strings(obj, "ShutterShape")
+        .iter()
+        .any(|shape| shape.eq_ignore_ascii_case("RECTANGULAR"))
+    {
+        return None;
+    }
+    let shutter = RectangularDisplayShutter {
+        left_vertical_edge: read_i32(obj, "ShutterLeftVerticalEdge")?,
+        right_vertical_edge: read_i32(obj, "ShutterRightVerticalEdge")?,
+        upper_horizontal_edge: read_i32(obj, "ShutterUpperHorizontalEdge")?,
+        lower_horizontal_edge: read_i32(obj, "ShutterLowerHorizontalEdge")?,
+        presentation_value: u16::try_from(read_u32(obj, "ShutterPresentationValue")?).ok()?,
+    };
+    (shutter.left_vertical_edge <= shutter.right_vertical_edge
+        && shutter.upper_horizontal_edge <= shutter.lower_horizontal_edge)
+        .then_some(shutter)
+}
+
+fn read_u32_tag(obj: &dicom_object::DefaultDicomObject, tag: dicom_core::Tag) -> Option<u32> {
+    obj.element(tag).ok()?.to_int::<u32>().ok()
+}
+
+fn read_string_tag(obj: &dicom_object::DefaultDicomObject, tag: dicom_core::Tag) -> Option<String> {
+    obj.element(tag)
+        .ok()?
+        .to_str()
+        .ok()
+        .map(|value| value.trim().to_string())
 }
 
 fn read_exact_f64s<const N: usize>(
@@ -1403,6 +1507,124 @@ mod tests {
         assert_eq!(lut.first_mapped_value, 0);
         assert_eq!(lut.bits_per_entry, 16);
         assert_eq!(lut.entries, [0, 21_845, 43_690, 65_535]);
+    }
+
+    #[test]
+    fn extracts_overlay_plane_and_rectangular_shutter_metadata() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("presentation-metadata.dcm");
+        let mut object = base_object();
+        for element in [
+            DataElement::new(Tag(0x6000, 0x0010), VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(Tag(0x6000, 0x0011), VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(Tag(0x6000, 0x0040), VR::CS, "G"),
+            DataElement::new(
+                Tag(0x6000, 0x0050),
+                VR::SS,
+                PrimitiveValue::I16(vec![1, 1].into()),
+            ),
+            DataElement::new(Tag(0x6000, 0x0100), VR::US, PrimitiveValue::from(1_u16)),
+            DataElement::new(Tag(0x6000, 0x0102), VR::US, PrimitiveValue::from(0_u16)),
+            DataElement::new(
+                Tag(0x6000, 0x3000),
+                VR::OW,
+                PrimitiveValue::U16(vec![0x0009].into()),
+            ),
+            DataElement::new(tags::SHUTTER_SHAPE, VR::CS, "RECTANGULAR"),
+            DataElement::new(tags::SHUTTER_LEFT_VERTICAL_EDGE, VR::IS, "1"),
+            DataElement::new(tags::SHUTTER_RIGHT_VERTICAL_EDGE, VR::IS, "2"),
+            DataElement::new(tags::SHUTTER_UPPER_HORIZONTAL_EDGE, VR::IS, "1"),
+            DataElement::new(tags::SHUTTER_LOWER_HORIZONTAL_EDGE, VR::IS, "2"),
+            DataElement::new(
+                tags::SHUTTER_PRESENTATION_VALUE,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+        ] {
+            object.put(element);
+        }
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OW,
+            PrimitiveValue::U16(vec![0_u16; 8].into()),
+        ));
+        object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::COMPUTED_RADIOGRAPHY_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.300"),
+            )
+            .expect("file meta")
+            .write_to_file(&path)
+            .expect("write fixture");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        let presentation = &file.series_metadata.presentation;
+        assert_eq!(presentation.overlay_planes.len(), 1);
+        let overlay = &presentation.overlay_planes[0];
+        assert_eq!(overlay.group, 0x6000);
+        assert_eq!((overlay.rows, overlay.columns), (2, 2));
+        assert_eq!(overlay.origin, [1, 1]);
+        assert_eq!(overlay.overlay_type, "G");
+        assert_eq!(overlay.number_of_frames, 1);
+        assert_eq!(overlay.image_frame_origin, 1);
+        assert_eq!(overlay.data, [0x0009]);
+        assert_eq!(
+            presentation.rectangular_shutter,
+            Some(crate::types::RectangularDisplayShutter {
+                left_vertical_edge: 1,
+                right_vertical_edge: 2,
+                upper_horizontal_edge: 1,
+                lower_horizontal_edge: 2,
+                presentation_value: 0,
+            })
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the independently generated prepared DICOM corpus"]
+    fn prepared_overlay_and_shutter_metadata_match_locked_cases() {
+        let root = std::env::var_os("DCMVIEW_PREPARED_CORPUS")
+            .map(std::path::PathBuf::from)
+            .expect("set DCMVIEW_PREPARED_CORPUS to the generated suite directory");
+        let overlay_path = root
+            .join("core")
+            .join("classic/cr/overlay_modality_voi_explicit_le/instance.dcm");
+        let shutter_path = root
+            .join("core")
+            .join("classic/dx/display_shutter_mono2_u16_explicit_le/instance.dcm");
+
+        let EntryInspection::Selected(overlay_file) =
+            build_entry(&overlay_path).expect("inspect prepared CR")
+        else {
+            panic!("prepared CR should be selected");
+        };
+        let overlay = &overlay_file.series_metadata.presentation.overlay_planes[0];
+        assert_eq!((overlay.rows, overlay.columns), (2, 2));
+        assert_eq!(overlay.origin, [1, 1]);
+        assert_eq!(overlay.data, [0x0009]);
+
+        let EntryInspection::Selected(shutter_file) =
+            build_entry(&shutter_path).expect("inspect prepared DX")
+        else {
+            panic!("prepared DX should be selected");
+        };
+        assert_eq!(
+            shutter_file
+                .series_metadata
+                .presentation
+                .rectangular_shutter,
+            Some(crate::types::RectangularDisplayShutter {
+                left_vertical_edge: 1,
+                right_vertical_edge: 2,
+                upper_horizontal_edge: 1,
+                lower_horizontal_edge: 2,
+                presentation_value: 0,
+            })
+        );
     }
 
     fn write_series_identity_fixture(path: &std::path::Path) {
