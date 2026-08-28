@@ -224,11 +224,11 @@ async fn raw_endpoint_returns_404_for_file_without_pixel_data() {
 async fn raw_endpoint_returns_422_for_unsupported_transfer_syntax() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("raw-unsupported.dcm");
-    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.80", vec![vec![1, 2, 3, 4]]);
+    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.81", vec![vec![1, 2, 3, 4]]);
 
     let app = server::router(support::app_state(vec![support::file_entry(
         path,
-        "1.2.840.10008.1.2.4.80",
+        "1.2.840.10008.1.2.4.81",
         1,
     )]));
     let test_server = TestServer::new(app);
@@ -237,7 +237,7 @@ async fn raw_endpoint_returns_422_for_unsupported_transfer_syntax() {
     assert_eq!(
         response.status_code(),
         axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-        "JPEG-LS syntax must return 422 on /raw"
+        "JPEG-LS Near-Lossless must return 422 on /raw"
     );
 }
 
