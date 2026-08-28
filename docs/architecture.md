@@ -292,6 +292,13 @@ installation and VS Code Electron integration can also use network/cache state;
   wrappers are tested as TypeScript modules.
 - Python unit tests isolate subprocess policy; `python-integration` adds the real
   binary. VS Code compile and Electron integration remain separate layers.
+- The compatibility runner promotes manifest capabilities only from exact
+  observations. Prepared diagonal overlays have an exact decoded-PNG pixel
+  oracle. The current rectangular shutter fixture covers the full frame and
+  therefore records bounds-preserving non-regression without claiming that
+  outside-opening replacement was exercised. ICC evidence compares the
+  decompressed PNG `iCCP` bytes to the manifest size and SHA-256, while leaving
+  numeric color transformation and optical-path mapping explicitly unprobed.
 - `python/tests/test_check_profiles.py` locks the documented
   `quick`/`core`/`e2e` composition and the exact independent `external` command
   without launching toolchains.

@@ -51,5 +51,17 @@ frames are also decoded far enough to validate PNG dimensions, while declared
 small visual patterns are checked from decoded PNG pixels where an explicit
 validator exists.
 
+Presentation evidence follows the same exact-contract rule. The prepared
+2-by-2 diagonal overlay cases mark `read_overlay_plane` as probed only when the
+declared overlay pixels are white and the two non-overlay pixels remain
+distinct. The prepared rectangular shutter opening covers the full image, so
+the report records its bounds and a passing display non-regression check but
+keeps `apply_display_shutter` explicitly unprobed: there are no outside-opening
+pixels with which to prove replacement. When a manifest supplies an exact ICC
+profile size and SHA-256, the runner decompresses the PNG `iCCP` chunk and
+compares those bytes. That proves profile preservation only;
+`apply_icc_profile` remains unprobed because neither a numeric color transform
+nor frame-to-optical-path profile selection is measured.
+
 It writes separate process logs, a companion-schema detail report, a timing-free
 normalized report for reproducibility comparison, and a SHA-256 artifact index.
