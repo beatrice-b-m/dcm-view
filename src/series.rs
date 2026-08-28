@@ -175,7 +175,11 @@ impl SeriesCatalog {
     ) -> Self {
         let mut grouped = BTreeMap::<SeriesId, Vec<SeriesFileInput>>::new();
         for file in files {
-            grouped.entry(file.series_id()).or_default().push(file);
+            let id = file.series_id();
+            if id.study_instance_uid.is_empty() || id.series_instance_uid.is_empty() {
+                continue;
+            }
+            grouped.entry(id).or_default().push(file);
         }
 
         let series = grouped
@@ -781,6 +785,20 @@ mod tests {
         assert_eq!(catalog.series()[0].id.study_instance_uid, "other-study");
         assert_eq!(catalog.series()[1].id.series_instance_uid, "series-a");
         assert_eq!(catalog.series()[2].id.series_instance_uid, "series-b");
+    }
+
+    #[test]
+    fn omits_files_without_complete_series_identity() {
+        let catalog = SeriesCatalog::build([
+            input(0, "", "series", "for", "missing-study.dcm", Some(1), None),
+            input(1, "study", "", "for", "missing-series.dcm", Some(1), None),
+            input(2, "study", "series", "for", "complete.dcm", Some(1), None),
+        ]);
+
+        assert_eq!(catalog.series().len(), 1);
+        assert_eq!(catalog.series()[0].id.study_instance_uid, "study");
+        assert_eq!(catalog.series()[0].id.series_instance_uid, "series");
+        assert_eq!(catalog.series()[0].stacks[0].frames[0].file_index, 2);
     }
 
     #[test]

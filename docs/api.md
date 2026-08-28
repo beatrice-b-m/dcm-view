@@ -222,6 +222,9 @@ Instance Number and path. Warning codes include `missing_positions`,
 `gantry_tilt`. Enhanced concatenations use their Concatenation UID and frame
 offset. WSI Pyramid UID members are exposed as separate level stacks, while
 same-series LABEL and other non-member companions remain isolated stacks.
+Files without both Study Instance UID and Series Instance UID are omitted from
+the logical series catalog; the frontend keeps them navigable as independent
+files instead of combining incomplete identities across unrelated objects.
 
 ## Typed References
 
