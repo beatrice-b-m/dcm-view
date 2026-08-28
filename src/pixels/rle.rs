@@ -3,13 +3,13 @@ use crate::types::FileEntry;
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use dicom_object::open_file;
-use image::{ImageBuffer, ImageFormat, Rgb};
-use std::io::Cursor;
 use thiserror::Error;
 use tokio::task;
 
+use super::color::encode_rgb8_png_with_icc;
 use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
+use super::icc::select_icc_profile;
 use super::render::encode_windowed_luminance_png;
 
 const RLE_HEADER_LEN: usize = 64;
@@ -95,10 +95,10 @@ fn decode_rle_to_png_blocking(
             )
             .map_err(PixelError::frame_decode)
         }
-        (3, "RGB") => encode_rgb_png(file, decoded),
+        (3, "RGB") => encode_rgb_png(file, decoded, read_icc_profile(file)?),
         (3, "YBR_FULL") => {
             let rgb = ybr_full_to_rgb(&decoded);
-            encode_rgb_png(file, rgb)
+            encode_rgb_png(file, rgb, read_icc_profile(file)?)
         }
         (1, "PALETTE COLOR") => encode_palette_png(file, &decoded),
         _ => Err(PixelError::UnsupportedLayout(format!(
@@ -325,16 +325,27 @@ fn decode_monochrome_samples(
     }
 }
 
-fn encode_rgb_png(file: &FileEntry, rgb: Vec<u8>) -> PixelResult<Bytes> {
+fn read_icc_profile(file: &FileEntry) -> PixelResult<Option<Vec<u8>>> {
+    let object = open_file(&file.path)
+        .with_context(|| format!("failed to open RLE DICOM: {}", file.path.display()))
+        .map_err(PixelError::frame_decode)?;
+    Ok(select_icc_profile(&object))
+}
+
+fn encode_rgb_png(
+    file: &FileEntry,
+    rgb: Vec<u8>,
+    icc_profile: Option<Vec<u8>>,
+) -> PixelResult<Bytes> {
     if file.bits_allocated != 8 {
         return Err(PixelError::UnsupportedLayout(format!(
             "RLE color display requires 8-bit samples, found {}",
             file.bits_allocated
         )));
     }
-    let image = ImageBuffer::<Rgb<u8>, Vec<u8>>::from_raw(file.columns, file.rows, rgb)
-        .ok_or_else(|| PixelError::frame_decode(anyhow!("RLE RGB buffer size mismatch")))?;
-    encode_dynamic_png(image::DynamicImage::ImageRgb8(image))
+    encode_rgb8_png_with_icc(rgb, file.columns, file.rows, icc_profile)
+        .context("RLE RGB PNG encoding failed")
+        .map_err(PixelError::frame_decode)
 }
 
 fn encode_palette_png(file: &FileEntry, indices: &[u8]) -> PixelResult<Bytes> {
@@ -385,7 +396,8 @@ fn encode_palette_png(file: &FileEntry, indices: &[u8]) -> PixelResult<Bytes> {
             blue.values[lut_index],
         ]);
     }
-    encode_rgb_png(file, rgb)
+    let icc_profile = select_icc_profile(&object);
+    encode_rgb_png(file, rgb, icc_profile)
 }
 
 struct PaletteChannel {
@@ -460,15 +472,6 @@ fn ybr_full_to_rgb(ybr: &[u8]) -> Vec<u8> {
 
 fn clamp_u8(value: f64) -> u8 {
     value.round().clamp(0.0, 255.0) as u8
-}
-
-fn encode_dynamic_png(image: image::DynamicImage) -> PixelResult<Bytes> {
-    let mut encoded = Cursor::new(Vec::new());
-    image
-        .write_to(&mut encoded, ImageFormat::Png)
-        .context("RLE PNG encoding failed")
-        .map_err(PixelError::frame_decode)?;
-    Ok(Bytes::from(encoded.into_inner()))
 }
 
 #[cfg(test)]
