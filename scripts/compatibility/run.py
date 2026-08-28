@@ -287,11 +287,32 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
         passed = len(luminance) == 4 and luminance == sorted(luminance)
     elif pattern == "2x2_inverse_monochrome_gradient":
         passed = len(luminance) == 4 and luminance == sorted(luminance, reverse=True)
-    elif pattern == "2x2_rgb_red_green_blue_white":
+    elif pattern in {
+        "2x2_rgb_red_green_blue_white",
+        "2x2_rgb_planar1_red_green_blue_white",
+        "2x2_ybr_full_red_green_blue_white",
+        "2x2_palette_red_green_blue_white",
+        "2x2_vl_endoscopic_rgb_red_green_blue_white",
+        "2x2_vl_microscopic_rgb_red_green_blue_white",
+        "2x2_vl_photo_palette_red_green_blue_white",
+        "2x2_vl_photo_rgb_red_green_blue_white",
+        "2x2_vl_photo_rgb_red_green_blue_white_with_srgb_icc",
+    }:
         passed = len(pixels) == 4 and (
             pixels[0][0] > pixels[0][1] and pixels[0][0] > pixels[0][2]
             and pixels[1][1] > pixels[1][0] and pixels[1][1] > pixels[1][2]
             and pixels[2][2] > pixels[2][0] and pixels[2][2] > pixels[2][1]
+            and min(pixels[3][:3]) > 200
+        )
+    elif pattern == "2x2_ybr_full_422_red_green_blue_white":
+        # The red/green and blue/white neighbors share chroma by definition.
+        # Lock the two shared-chroma pairs rather than pretending 4:2:2 can
+        # retain four independent RGB primaries.
+        passed = len(pixels) == 4 and (
+            abs(pixels[0][0] - pixels[0][1]) <= 2 and pixels[0][2] < 10
+            and abs(pixels[1][0] - pixels[1][1]) <= 2 and pixels[1][2] < 50
+            and pixels[1][0] > pixels[0][0]
+            and pixels[2][2] > pixels[2][0] * 5 and pixels[2][2] > pixels[2][1] * 5
             and min(pixels[3][:3]) > 200
         )
     else:

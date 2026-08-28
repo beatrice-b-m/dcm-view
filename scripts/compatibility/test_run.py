@@ -48,6 +48,28 @@ class RunnerTests(unittest.TestCase):
             validate_visual("2x2_monochrome_gradient", pixels)["status"], "passed"
         )
 
+    def test_color_pattern_aliases_and_ybr_422_chroma_pairs(self) -> None:
+        quadrants = [
+            (255, 0, 0, 255),
+            (0, 255, 0, 255),
+            (0, 0, 255, 255),
+            (255, 255, 255, 255),
+        ]
+        self.assertEqual(
+            validate_visual("2x2_palette_red_green_blue_white", quadrants)["status"],
+            "passed",
+        )
+        subsampled = [
+            (90, 91, 0, 255),
+            (164, 165, 38, 255),
+            (15, 14, 142, 255),
+            (241, 240, 255, 255),
+        ]
+        self.assertEqual(
+            validate_visual("2x2_ybr_full_422_red_green_blue_white", subsampled)["status"],
+            "passed",
+        )
+
     def test_series_observation_validates_geometry_and_gantry_capabilities(self) -> None:
         catalog = {
             "series": [{
