@@ -26,6 +26,7 @@
 		findSeriesStackForFile,
 		frameAtPosition,
 		framePosition,
+		navigationFrameAtPosition,
 		navigationFramesForFile,
 		navigationTabId,
 		type NavigationFrameRef,
@@ -194,8 +195,7 @@
 	}
 
 	function setStackPosition(position: number) {
-		const stack = stackById(activeTabId) ?? activeStack;
-		const frame = frameAtPosition(stack, position);
+		const frame = navigationFrameAtPosition(navigationFrames, position);
 		if (!frame) return;
 		stackPosition = frame.virtual_index;
 		activeFileIndex = frame.file_index;
