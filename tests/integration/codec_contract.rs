@@ -329,6 +329,7 @@ fn transfer_syntax_classification_table_covers_every_supported_status() {
         ("1.2.840.10008.1.2.4.70", TransferSyntaxClass::JpegLossless),
         ("1.2.840.10008.1.2.4.90", TransferSyntaxClass::Jpeg2000),
         ("1.2.840.10008.1.2.4.91", TransferSyntaxClass::Jpeg2000),
+        ("1.2.840.10008.1.2.4.110", TransferSyntaxClass::JpegXl),
         ("1.2.840.10008.1.2", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.1", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.2", TransferSyntaxClass::Uncompressed),

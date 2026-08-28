@@ -11,6 +11,7 @@ use super::jpeg::{
     decode_compressed_frame_to_png, decode_raw_jpeg_lossless, read_raw_jpeg_samples,
 };
 use super::jpeg2000::{decode_jp2_fragment_to_png, decode_raw_jp2_samples};
+use super::jpegxl::{decode_jpeg_xl_to_png, decode_raw_jpeg_xl};
 use super::native::{decode_uncompressed_to_png, read_raw_uncompressed};
 use super::rle::{decode_raw_rle, decode_rle_to_png};
 use super::syntax::classify_transfer_syntax;
@@ -74,6 +75,7 @@ pub async fn load_raw_frame(
         TransferSyntaxClass::Jpeg2000 => {
             decode_raw_jp2_samples(file.clone(), request.frame).await?
         }
+        TransferSyntaxClass::JpegXl => decode_raw_jpeg_xl(file.clone(), request.frame).await?,
         TransferSyntaxClass::Uncompressed => read_raw_uncompressed(file.clone(), request.frame)
             .await
             .map_err(PixelError::raw_decode)?,
@@ -179,6 +181,17 @@ pub async fn load_frame(
             )
             .await
             .map_err(PixelError::frame_decode)?,
+            "image/png",
+        ),
+        TransferSyntaxClass::JpegXl => (
+            decode_jpeg_xl_to_png(
+                file.clone(),
+                request.frame,
+                window.center(),
+                window.width(),
+                window.mode(),
+            )
+            .await?,
             "image/png",
         ),
         TransferSyntaxClass::Uncompressed => (

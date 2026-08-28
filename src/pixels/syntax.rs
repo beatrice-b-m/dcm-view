@@ -102,6 +102,7 @@ pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
         // JPEG Lossless: browsers cannot decode — must be decoded server-side
         "1.2.840.10008.1.2.4.57" | "1.2.840.10008.1.2.4.70" => TransferSyntaxClass::JpegLossless,
         "1.2.840.10008.1.2.4.90" | "1.2.840.10008.1.2.4.91" => TransferSyntaxClass::Jpeg2000,
+        "1.2.840.10008.1.2.4.110" => TransferSyntaxClass::JpegXl,
         "1.2.840.10008.1.2"
         | "1.2.840.10008.1.2.1"
         | "1.2.840.10008.1.2.2"
@@ -135,6 +136,7 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
         | TransferSyntaxClass::Jpeg
         | TransferSyntaxClass::JpegLossless
         | TransferSyntaxClass::Jpeg2000
+        | TransferSyntaxClass::JpegXl
         | TransferSyntaxClass::Uncompressed => {}
     }
 
@@ -189,7 +191,9 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
         (3, "RGB" | "YBR_FULL")
             if matches!(
                 syntax_class,
-                TransferSyntaxClass::Rle | TransferSyntaxClass::Uncompressed
+                TransferSyntaxClass::Rle
+                    | TransferSyntaxClass::JpegXl
+                    | TransferSyntaxClass::Uncompressed
             ) && file.bits_allocated == 8 =>
         {
             PixelSupport::renderable()
@@ -211,7 +215,7 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
 
 fn unsupported_transfer_syntax_reason(uid: &str) -> PixelSupportReason {
     match uid {
-        "1.2.840.10008.1.2.4.110" | "1.2.840.10008.1.2.4.111" | "1.2.840.10008.1.2.4.112" => {
+        "1.2.840.10008.1.2.4.111" | "1.2.840.10008.1.2.4.112" => {
             PixelSupportReason::JpegXlNotSupported
         }
         "1.2.840.10008.1.2.8.1" => PixelSupportReason::DeflatedImageFrameNotSupported,
@@ -302,7 +306,7 @@ mod tests {
                 "transfer_syntax.jpeg_ls_not_supported",
             ),
             (
-                "1.2.840.10008.1.2.4.110",
+                "1.2.840.10008.1.2.4.111",
                 PixelSupportReason::JpegXlNotSupported,
                 "transfer_syntax.jpeg_xl_not_supported",
             ),
@@ -357,6 +361,24 @@ mod tests {
             classify_pixel_support(&unsupported).reason,
             Some(PixelSupportReason::GenericColorRenderingOnly)
         );
+    }
+
+    #[test]
+    fn only_lossless_jpeg_xl_rgb_is_declared_renderable() {
+        let mut lossless = file("1.2.840.10008.1.2.4.110");
+        lossless.bits_allocated = 8;
+        lossless.samples_per_pixel = 3;
+        lossless.photometric_interpretation = "RGB".to_string();
+        assert_eq!(
+            classify_pixel_support(&lossless).state,
+            PixelSupportState::Renderable
+        );
+
+        for uid in ["1.2.840.10008.1.2.4.111", "1.2.840.10008.1.2.4.112"] {
+            let support = classify_pixel_support(&file(uid));
+            assert_eq!(support.state, PixelSupportState::Unsupported, "{uid}");
+            assert_eq!(support.reason, Some(PixelSupportReason::JpegXlNotSupported));
+        }
     }
 
     #[test]

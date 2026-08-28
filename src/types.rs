@@ -414,6 +414,7 @@ pub enum TransferSyntaxClass {
     Jpeg,
     JpegLossless,
     Jpeg2000,
+    JpegXl,
     Uncompressed,
     JpegLs,
     Rle,
