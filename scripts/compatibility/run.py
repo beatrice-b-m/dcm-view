@@ -37,8 +37,15 @@ COMPATIBILITY_OUTCOMES = {
     "unavailable",
 }
 PROBED_CAPABILITIES = {
+    "apply_modality_rescale",
+    "apply_rescale",
+    "apply_window",
+    "decode_jpeg_2000_lossless_pixels",
+    "decode_jpeg_baseline_pixels",
+    "decode_native_pixels",
     "open_file",
     "read_metadata",
+    "render_grayscale",
     "render_native_pixels",
     "render_compressed_pixels",
     "decode_rle_lossless_pixels",
@@ -53,6 +60,50 @@ PROBED_CAPABILITIES = {
     "interpret_gantry_tilt",
     "organize_series_by_study_and_frame_of_reference",
     "reconstruct_wsi_pyramid",
+}
+
+ASCENDING_GRAYSCALE_PATTERNS = {
+    "1x1_monochrome_u16_tiny_maximum",
+    "2x2_monochrome_gradient_with_empty_type2_attributes",
+    "2x2_monochrome_gradient_with_iso2022_person_name",
+    "2x2_monochrome_gradient_with_private_creator_blocks",
+    "2x2_monochrome_gradient_with_sequence_length_variants",
+    "2x2_monochrome_gradient_with_string_vr_boundaries",
+    "2x2_monochrome_gradient_with_utf8_patient_name",
+    "2x2_monochrome_i16_gradient",
+    "2x2_monochrome_u16_gradient",
+    "2x2_signed_ct_hu_gradient",
+    "2x2_ultrasound_mono2_gradient",
+    "2x3_monochrome_u16_rect_gradient",
+    "3_slice_oblique_mr_gradient_stack",
+    "3x3_monochrome_u16_odd_gradient",
+    "single_member_enhanced_ct_concatenation_gradient",
+    "two_2x2_monochrome_gradients_with_timezone_extrema",
+    "two_frame_enhanced_ct_unsigned_gradient_stack",
+    "two_frame_enhanced_mr_echo_gradient_stack",
+    "two_frame_enhanced_mr_phase_velocity_encoding_stack",
+    "two_frame_enhanced_mr_temporal_gradient_stack",
+}
+
+DESCENDING_GRAYSCALE_PATTERNS = {
+    "1x1_inverse_monochrome_i16_rle_lossless_tiny_minimum",
+    "1x1_inverse_monochrome_u16_rle_lossless_tiny_maximum",
+    "1x2_inverse_monochrome_rle_lossless_odd_fragment",
+    "2x2_inverse_monochrome_i16_rle_lossless_gradient",
+    "2x2_inverse_monochrome_i16_rle_lossless_with_signed_padding_value",
+    "2x2_inverse_monochrome_rle_lossless_gradient",
+    "2x2_inverse_monochrome_u16_rle_lossless_gradient",
+    "2x2_inverse_monochrome_u16_rle_lossless_with_padding_value",
+    "2x2x2_inverse_monochrome_i16_rle_lossless_gradient_reversed",
+    "2x2x2_inverse_monochrome_i16_rle_lossless_signed_padding_reversed",
+    "2x2x2_inverse_monochrome_rle_lossless_gradient_reversed",
+    "2x2x2_inverse_monochrome_u16_rle_lossless_gradient_reversed",
+    "2x2x2_inverse_monochrome_u16_rle_lossless_padding_reversed",
+    "2x2x2_inverse_monochrome_u8_rle_lossless_padding_reversed",
+    "2x3_inverse_monochrome_i16_rle_lossless_centered_gradient",
+    "2x3_inverse_monochrome_u16_rle_lossless_gradient",
+    "3x3_inverse_monochrome_i16_odd_rle_lossless_centered_gradient",
+    "3x3_inverse_monochrome_u16_odd_rle_lossless_gradient",
 }
 LOSSY_TRANSFER_SYNTAXES = {
     "1.2.840.10008.1.2.4.50",
@@ -290,8 +341,12 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
     luminance = [round(0.2126 * r + 0.7152 * g + 0.0722 * b, 3) for r, g, b, _ in pixels]
     if pattern == "2x2_monochrome_gradient":
         passed = len(luminance) == 4 and luminance == sorted(luminance)
+    elif pattern in ASCENDING_GRAYSCALE_PATTERNS:
+        passed = bool(luminance) and luminance == sorted(luminance)
     elif pattern == "2x2_inverse_monochrome_gradient":
         passed = len(luminance) == 4 and luminance == sorted(luminance, reverse=True)
+    elif pattern in DESCENDING_GRAYSCALE_PATTERNS:
+        passed = bool(luminance) and luminance == sorted(luminance, reverse=True)
     elif pattern in {
         "2x2_rgb_red_green_blue_white",
         "2x2_rgb_planar1_red_green_blue_white",

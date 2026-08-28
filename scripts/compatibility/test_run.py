@@ -33,6 +33,19 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("render_color", PROBED_CAPABILITIES)
         self.assertIn("render_palette_color", PROBED_CAPABILITIES)
 
+    def test_grayscale_capabilities_are_backed_by_display_and_raw_probes(self) -> None:
+        self.assertTrue(
+            {
+                "apply_modality_rescale",
+                "apply_rescale",
+                "apply_window",
+                "decode_jpeg_2000_lossless_pixels",
+                "decode_jpeg_baseline_pixels",
+                "decode_native_pixels",
+                "render_grayscale",
+            }.issubset(PROBED_CAPABILITIES)
+        )
+
     def test_extended_native_numeric_patterns_are_automated(self) -> None:
         checkerboard = [
             (255, 255, 255, 255),
@@ -62,6 +75,29 @@ class RunnerTests(unittest.TestCase):
                 "status"
             ],
             "passed",
+        )
+
+    def test_named_monochrome_gradient_families_are_automated(self) -> None:
+        ascending = [
+            (0, 0, 0, 255),
+            (85, 85, 85, 255),
+            (170, 170, 170, 255),
+            (255, 255, 255, 255),
+        ]
+        descending = list(reversed(ascending))
+        self.assertEqual(
+            validate_visual("2x2_signed_ct_hu_gradient", ascending)["status"],
+            "passed",
+        )
+        self.assertEqual(
+            validate_visual(
+                "2x2_inverse_monochrome_i16_rle_lossless_gradient", descending
+            )["status"],
+            "passed",
+        )
+        self.assertEqual(
+            validate_visual("2x2_signed_ct_hu_gradient", descending)["status"],
+            "failed",
         )
 
     def test_runner_supports_documented_direct_invocation(self) -> None:
