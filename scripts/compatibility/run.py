@@ -45,6 +45,7 @@ PROBED_CAPABILITIES = {
     "apply_window",
     "decode_jpeg_2000_lossless_pixels",
     "decode_jpeg_baseline_pixels",
+    "decode_jpeg_ls_lossless_pixels",
     "decode_jpeg_xl_lossless_pixels",
     "decode_native_pixels",
     "open_file",
