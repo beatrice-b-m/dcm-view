@@ -8,6 +8,8 @@ and a Python wrapper that resolves or bundles the same binary.
 
 - Rust 1.88+
 - Node.js 20.19+ and npm at build time
+- CMake and a C++ toolchain at Rust build time for the vendored, statically
+  linked CharLS JPEG-LS decoder
 - Python 3.9+ for wrappers and the canonical check runner
 - `ssh` on `PATH` only when testing SSH forwarding helpers
 

@@ -315,9 +315,11 @@ Transfer syntax behavior:
 | JPEG Baseline / Extended | Decoded server-side and PNG-encoded. |
 | JPEG Lossless / Lossless SV1 | Decoded server-side and PNG-encoded. |
 | JPEG 2000 lossless/lossy | Decoded server-side and PNG-encoded. |
+| JPEG-LS Lossless (`.80`) | Grayscale decoded server-side through statically linked CharLS and PNG-encoded. |
+| JPEG XL Lossless (`.110`) | RGB decoded server-side and PNG-encoded without discarding channels. |
 | RLE Lossless | Decoded server-side and PNG-encoded for 8/16-bit monochrome plus 8-bit RGB, YBR_FULL, and palette-color layouts. |
-| Implicit LE / Explicit LE / Explicit BE | Windowed server-side and PNG-encoded for 1/8/16/32-bit monochrome integer, float, double-float, RGB planar 0/1, YBR_FULL, YBR_FULL_422, and palette-color layouts. |
-| JPEG-LS / other | `422 {"code":"unsupported_transfer_syntax","error":"unsupported transfer syntax: ..."}`. |
+| Implicit LE / Explicit LE / Explicit BE / Deflated Explicit LE | Windowed server-side and PNG-encoded for 1/8/16/32-bit monochrome integer, float, double-float, RGB planar 0/1, YBR_FULL, YBR_FULL_422, and palette-color layouts. |
+| JPEG-LS Near-Lossless (`.81`), JPEG XL `.111`/`.112`, other | `422 {"code":"unsupported_transfer_syntax","error":"unsupported transfer syntax: ..."}`. |
 
 Every successful display-frame response includes `X-Cache: HIT` or
 `X-Cache: MISS`. The display cache key includes file index, frame index, window
@@ -337,8 +339,10 @@ Supported raw paths:
 | JPEG Baseline / Extended | Decoded to 8-bit grayscale samples. |
 | JPEG Lossless | Decoded to 8-bit or 16-bit grayscale samples when supported by the codec stack. |
 | Grayscale JPEG 2000 | Decoded to 8-bit or 16-bit samples. |
+| JPEG-LS Lossless (`.80`) | Decoded to unsigned 8-bit grayscale samples. |
+| JPEG XL Lossless (`.110`) | Decoded to unsigned, interleaved 8-bit RGB samples. |
 | RLE Lossless | Decoded to interleaved, little-endian native sample bytes for supported layouts. |
-| JPEG-LS / unsupported | `422` or a decode error. |
+| JPEG-LS Near-Lossless (`.81`), JPEG XL `.111`/`.112`, unsupported | `422` or a decode error. |
 | Multi-component JPEG 2000 raw decode | `422` or a decode error. |
 
 Successful raw-frame responses include `X-Cache: HIT` or `X-Cache: MISS`. The
