@@ -43,6 +43,11 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("export interface RawFrameMetadata", output)
 		self.assertIn("export interface ViewerIdentity", output)
 		self.assertIn("viewer: ViewerIdentity;", output)
+		self.assertIn("discovery: DiscoveryResult[];", output)
+		self.assertIn(
+			'export type SupportState = "renderable" | "metadata_only" | "unsupported";',
+			output,
+		)
 		self.assertIn("bitsAllocated: number;", output)
 		self.assertNotIn("bits_allocated: number;", output)
 

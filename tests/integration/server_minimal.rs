@@ -1,6 +1,7 @@
 use super::support;
 use axum::http::{header, HeaderValue};
 use axum_test::TestServer;
+use dcmview::loader::{DiscoveryDisposition, DiscoveryReason, DiscoveryRecord};
 use dcmview::server;
 use dcmview::server::FileRegistry;
 use serde_json::{json, Value};
@@ -153,12 +154,23 @@ async fn file_registry_serves_snapshots_while_scan_is_incomplete() {
         center: 1500.0,
         width: 3000.0,
     });
-    registry.record_scanned();
+    let discovered_path = entry.path.clone();
     registry.insert(entry);
+    registry.record_discovery(DiscoveryRecord {
+        path: discovered_path.clone(),
+        disposition: DiscoveryDisposition::Selected,
+        reason: DiscoveryReason::ValidDicom,
+    });
 
     let mid_files: Value = test_server.get("/api/files").await.json();
     assert_eq!(mid_files["scan_complete"], false);
     assert_eq!(mid_files["scanned"], 1);
+    assert_eq!(
+        mid_files["discovery"][0]["path"],
+        discovered_path.display().to_string()
+    );
+    assert_eq!(mid_files["discovery"][0]["disposition"], "selected");
+    assert_eq!(mid_files["discovery"][0]["reason"], "valid_dicom");
     let mid_file = &mid_files["files"].as_array().expect("files array")[0];
     assert_eq!(mid_file["index"], 0);
 

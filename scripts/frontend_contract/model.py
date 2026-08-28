@@ -7,6 +7,7 @@ STRUCTS = (
 	"WindowPreset",
 	"FileSummary",
 	"FilesResponse",
+	"DiscoveryResult",
 	"FrameInfo",
 	"ViewerIdentity",
 	"HealthResponse",
@@ -16,7 +17,7 @@ STRUCTS = (
 	"TagNode",
 	"ErrorResponse",
 )
-ENUMS = ("WindowMode", "ApiErrorCode", "TagValue")
+ENUMS = ("WindowMode", "SupportState", "ApiErrorCode", "TagValue")
 INPUT_STRUCTS = frozenset({"FrameQuery"})
 
 ENDPOINT_TYPE_MARKERS = {

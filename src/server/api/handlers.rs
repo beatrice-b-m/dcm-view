@@ -1,13 +1,13 @@
 use super::error::{self, ApiError};
 use super::state::AppState;
 use crate::api::contracts::{
-    EmbedRoiAnnotations, FilesResponse, FrameInfo, FrameQuery, HealthResponse, TagNode,
-    ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER,
-    EXPORT_CONTENT_DISPOSITION_VALUE, RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS,
-    RAW_FRAME_HEADER_DEFAULT_WC, RAW_FRAME_HEADER_DEFAULT_WW,
-    RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION, RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
-    RAW_FRAME_HEADER_RESCALE_INTERCEPT, RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS,
-    RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
+    DiscoveryResult, EmbedRoiAnnotations, FileSummary, FilesResponse, FrameInfo, FrameQuery,
+    HealthResponse, TagNode, ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS,
+    EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
+    RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS, RAW_FRAME_HEADER_DEFAULT_WC,
+    RAW_FRAME_HEADER_DEFAULT_WW, RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
+    RAW_FRAME_HEADER_PIXEL_REPRESENTATION, RAW_FRAME_HEADER_RESCALE_INTERCEPT,
+    RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS, RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
 };
 use crate::pixels::{self, FrameRequest, RawFrameRequest};
 use crate::server::tags;
@@ -32,6 +32,21 @@ pub(super) async fn files(State(state): State<AppState>) -> Json<FilesResponse> 
     let tunnel = state.tunnel_info();
     Json(FilesResponse {
         files: state.registry().summaries_snapshot(),
+        discovery: state
+            .registry()
+            .discovery_ledger_snapshot()
+            .into_iter()
+            .map(|record| DiscoveryResult {
+                path: record.path.display().to_string(),
+                disposition: match record.disposition {
+                    crate::loader::DiscoveryDisposition::Selected => "selected",
+                    crate::loader::DiscoveryDisposition::Skipped => "skipped",
+                    crate::loader::DiscoveryDisposition::Filtered => "filtered",
+                }
+                .to_string(),
+                reason: record.reason.code().to_string(),
+            })
+            .collect(),
         tunnelled: tunnel.is_some(),
         tunnel_host: tunnel.map(|info| info.tunnel_host.clone()),
         server_start_ms: state.server_start_ms(),
@@ -51,12 +66,17 @@ pub(super) async fn info(
         .registry()
         .get(index)
         .ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    let summary = FileSummary::from(&file);
     Ok(Json(FrameInfo {
         frame_count: file.frame_count,
         rows: file.rows,
         columns: file.columns,
         transfer_syntax_uid: file.transfer_syntax_uid.clone(),
         has_pixels: file.has_pixels,
+        sop_class_uid: summary.sop_class_uid,
+        object_kind: summary.object_kind,
+        support_state: summary.support_state,
+        support_reason: summary.support_reason,
         default_window: file.default_window,
     }))
 }

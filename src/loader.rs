@@ -582,6 +582,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let patient_name = read_str(&obj, "PatientName").unwrap_or_default();
     let modality = read_str(&obj, "Modality").unwrap_or_default();
     let sop_instance_uid = read_str(&obj, "SOPInstanceUID").unwrap_or_default();
+    let sop_class_uid = read_str(&obj, "SOPClassUID").unwrap_or_default();
     let study_instance_uid = read_str(&obj, "StudyInstanceUID").unwrap_or_default();
     let study_date = read_str(&obj, "StudyDate").unwrap_or_default();
     let study_description = read_str(&obj, "StudyDescription").unwrap_or_default();
@@ -630,6 +631,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         modality,
         instance_number,
         sop_instance_uid,
+        sop_class_uid,
         has_pixels,
         frame_count,
         rows,

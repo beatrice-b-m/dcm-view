@@ -44,11 +44,13 @@ def ts_type(rust_type: str, *, option_as_optional: bool = False) -> str:
 	if rust_type in {
 		"WindowPreset",
 		"FileSummary",
+		"DiscoveryResult",
 		"ViewerIdentity",
 		"TagNode",
 		"TagValue",
 		"WindowMode",
 		"ApiErrorCode",
+		"SupportState",
 	}:
 		return rust_type
 	raise ValueError(f"unsupported Rust type: {rust_type}")
@@ -94,6 +96,11 @@ def render_window_mode(source: str) -> str:
 def render_api_error_code(source: str) -> str:
 	variants = parse_unit_enum_variants(source, "ApiErrorCode")
 	return "export type ApiErrorCode = " + " | ".join(f'"{variant}"' for variant in variants) + ";"
+
+
+def render_support_state(source: str) -> str:
+	variants = parse_unit_enum_variants(source, "SupportState")
+	return "export type SupportState = " + " | ".join(f'"{variant}"' for variant in variants) + ";"
 
 
 def render_tag_value(source: str) -> str:
@@ -339,6 +346,7 @@ def render(source: str) -> str:
 		render_frame_query_keys(source),
 		render_cache_contract(source),
 		render_window_mode(source),
+		render_support_state(source),
 		render_api_error_code(source),
 	]
 	sections.extend(render_struct(source, name) for name in STRUCTS[:8])

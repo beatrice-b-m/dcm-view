@@ -24,6 +24,7 @@ pub struct FileEntry {
     pub modality: String,
     pub instance_number: String,
     pub sop_instance_uid: String,
+    pub sop_class_uid: String,
     pub has_pixels: bool,
     pub frame_count: u32,
     pub rows: u32,
@@ -78,6 +79,7 @@ impl FileEntry {
 
 impl From<&FileEntry> for FileSummary {
     fn from(value: &FileEntry) -> Self {
+        let support = crate::pixels::classify_pixel_support(value);
         Self {
             index: value.index,
             path: value.path.display().to_string(),
@@ -93,6 +95,20 @@ impl From<&FileEntry> for FileSummary {
             modality: value.modality.clone(),
             instance_number: value.instance_number.clone(),
             sop_instance_uid: value.sop_instance_uid.clone(),
+            sop_class_uid: value.sop_class_uid.clone(),
+            object_kind: crate::object_kind::classify_sop_class(&value.sop_class_uid).to_string(),
+            support_state: match support.state {
+                crate::pixels::PixelSupportState::Renderable => {
+                    crate::api::contracts::SupportState::Renderable
+                }
+                crate::pixels::PixelSupportState::MetadataOnly => {
+                    crate::api::contracts::SupportState::MetadataOnly
+                }
+                crate::pixels::PixelSupportState::Unsupported => {
+                    crate::api::contracts::SupportState::Unsupported
+                }
+            },
+            support_reason: support.reason_id().map(ToString::to_string),
             has_pixels: value.has_pixels,
             frame_count: value.frame_count,
             rows: value.rows,

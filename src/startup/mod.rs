@@ -209,6 +209,7 @@ mod tests {
             modality: "CT".to_string(),
             instance_number: "1".to_string(),
             sop_instance_uid: "1.2.3.4.5".to_string(),
+            sop_class_uid: "1.2.840.10008.5.1.4.1.1.2".to_string(),
             has_pixels: true,
             frame_count: 1,
             rows: 16,

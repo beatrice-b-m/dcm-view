@@ -86,6 +86,7 @@ pub fn file_entry(path: PathBuf, transfer_syntax_uid: &str, frame_count: u32) ->
         modality: "OT".to_string(),
         instance_number: "1".to_string(),
         sop_instance_uid: "1.2.826.0.1.3680043.10.100.3".to_string(),
+        sop_class_uid: "1.2.840.10008.5.1.4.1.1.2".to_string(),
         has_pixels: true,
         frame_count,
         rows: 16,

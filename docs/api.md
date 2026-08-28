@@ -70,6 +70,13 @@ Static frontend assets are served at `/` and `/assets/*`.
 ```json
 {
   "status": "ok",
+  "viewer": {
+    "name": "dcmview",
+    "version": "0.2.10",
+    "build_git_sha": "0123456789abcdef...",
+    "build_target": "aarch64-apple-darwin",
+    "build_profile": "release"
+  },
   "file_count": 2,
   "server_start_ms": 1714300000000
 }
@@ -101,12 +108,23 @@ ready.
       "modality": "MG",
       "instance_number": "1",
       "sop_instance_uid": "1.2.3.4.5",
+      "sop_class_uid": "1.2.840.10008.5.1.4.1.1.4",
+      "object_kind": "classic_image",
+      "support_state": "renderable",
+      "support_reason": null,
       "has_pixels": true,
       "frame_count": 60,
       "rows": 3000,
       "columns": 2500,
       "transfer_syntax_uid": "1.2.840.10008.1.2.4.50",
       "default_window": { "center": 200.0, "width": 4000.0 }
+    }
+  ],
+  "discovery": [
+    {
+      "path": "/path/to/scan.dcm",
+      "disposition": "selected",
+      "reason": "valid_dicom"
     }
   ],
   "tunnelled": false,
@@ -127,6 +145,12 @@ Progress fields:
 | `scanned` | Count of valid DICOM files accepted into the registry. |
 | `skipped` | Count of files skipped because they could not be read as supported DICOM objects. |
 | `filtered` | Count of readable DICOM files excluded by `--filter` metadata filters. |
+| `discovery` | Ephemeral per-input ledger with normalized path, disposition, and stable reason code. |
+
+`support_state` is `renderable`, `metadata_only`, or `unsupported`. A non-null
+`support_reason` is a stable machine identifier such as
+`transfer_syntax.rle_lossless_not_supported`; it describes current viewer
+capability and does not judge DICOM conformance.
 
 Scripts should poll `/api/files` while `scan_complete` is `false` if they need a
 complete scan result:
@@ -158,11 +182,16 @@ fetch the complete registry payload. It returns:
   "columns": 2500,
   "transfer_syntax_uid": "1.2.840.10008.1.2.4.50",
   "has_pixels": true,
+  "sop_class_uid": "1.2.840.10008.5.1.4.1.1.4",
+  "object_kind": "classic_image",
+  "support_state": "renderable",
+  "support_reason": null,
   "default_window": { "center": 200.0, "width": 4000.0 }
 }
 ```
 
-An unknown file index returns `404 {"error": "file index out of range"}`.
+An unknown file index returns
+`404 {"code":"not_found","error":"file index out of range"}`.
 
 ## Display Frames
 

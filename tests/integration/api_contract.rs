@@ -54,6 +54,7 @@ async fn json_endpoints_match_frontend_contract_shapes() {
     assert_object_keys(
         &files,
         &[
+            "discovery",
             "files",
             "filtered",
             "scan_complete",
@@ -76,6 +77,7 @@ async fn json_endpoints_match_frontend_contract_shapes() {
             "instance_number",
             "label",
             "modality",
+            "object_kind",
             "path",
             "patient_id",
             "patient_name",
@@ -84,9 +86,12 @@ async fn json_endpoints_match_frontend_contract_shapes() {
             "series_instance_uid",
             "series_number",
             "sop_instance_uid",
+            "sop_class_uid",
             "study_date",
             "study_description",
             "study_instance_uid",
+            "support_reason",
+            "support_state",
             "transfer_syntax_uid",
         ],
     );
@@ -100,10 +105,19 @@ async fn json_endpoints_match_frontend_contract_shapes() {
             "default_window",
             "frame_count",
             "has_pixels",
+            "object_kind",
             "rows",
+            "sop_class_uid",
+            "support_reason",
+            "support_state",
             "transfer_syntax_uid",
         ],
     );
+    assert_eq!(file["object_kind"], "classic_image");
+    assert_eq!(file["support_state"], "renderable");
+    assert!(file["support_reason"].is_null());
+    assert_eq!(info["object_kind"], "classic_image");
+    assert_eq!(info["support_state"], "renderable");
     assert_object_keys(&info["default_window"], &["center", "width"]);
 
     let tags: Value = test_server.get("/api/file/0/tags").await.json();

@@ -258,6 +258,8 @@ export const CACHE_STATUS = {
 
 export type WindowMode = "default" | "full_dynamic";
 
+export type SupportState = "renderable" | "metadata_only" | "unsupported";
+
 export type ApiErrorCode = "invalid_path" | "invalid_query" | "invalid_json" | "bad_request" | "not_found" | "route_not_found" | "asset_not_found" | "method_not_allowed" | "no_pixel_data" | "frame_out_of_range" | "invalid_window" | "unsupported_transfer_syntax" | "unsupported_pixel_layout" | "pixel_decode_failed" | "internal_error";
 
 export interface WindowPreset {
@@ -280,6 +282,10 @@ export interface FileSummary {
 	modality: string;
 	instance_number: string;
 	sop_instance_uid: string;
+	sop_class_uid: string;
+	object_kind: string;
+	support_state: SupportState;
+	support_reason: string | null;
 	has_pixels: boolean;
 	frame_count: number;
 	rows: number;
@@ -290,6 +296,7 @@ export interface FileSummary {
 
 export interface FilesResponse {
 	files: FileSummary[];
+	discovery: DiscoveryResult[];
 	tunnelled: boolean;
 	tunnel_host: string | null;
 	server_start_ms: number;
@@ -299,12 +306,22 @@ export interface FilesResponse {
 	filtered: number;
 }
 
+export interface DiscoveryResult {
+	path: string;
+	disposition: string;
+	reason: string;
+}
+
 export interface FrameInfo {
 	frame_count: number;
 	rows: number;
 	columns: number;
 	transfer_syntax_uid: string;
 	has_pixels: boolean;
+	sop_class_uid: string;
+	object_kind: string;
+	support_state: SupportState;
+	support_reason: string | null;
 	default_window: WindowPreset | null;
 }
 
@@ -329,12 +346,6 @@ export interface FrameQuery {
 	mode?: WindowMode;
 }
 
-export interface EmbedRoiAnnotations {
-	num_roi: number;
-	roi_coords: [number, number, number, number][];
-	roi_frames: number[][];
-}
-
 export const RAW_FRAME_HEADERS = {
 	rows: "X-Frame-Rows",
 	columns: "X-Frame-Columns",
@@ -355,6 +366,12 @@ export type TagValue =
 	| { type: "binary"; length: number }
 	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
 	| { type: "error"; message: string };
+
+export interface EmbedRoiAnnotations {
+	num_roi: number;
+	roi_coords: [number, number, number, number][];
+	roi_frames: number[][];
+}
 
 export interface RawFrameMetadata {
 	rows: number;

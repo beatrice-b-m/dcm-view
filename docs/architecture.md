@@ -121,6 +121,10 @@ The executable contract is kept consistent by three layers:
   context without changing automation behavior.
 - `/api/health` exposes the package version plus build source revision, target,
   and profile so compatibility evidence can identify the tested viewer build.
+- `/api/files` exposes the memory-only discovery ledger and each file's SOP
+  Class, coarse object kind, and explicit `renderable`, `metadata_only`, or
+  `unsupported` state with a stable reason when applicable. These states
+  describe viewer capability, not DICOM conformance.
   Path, query, and JSON extractor failures pass through the same envelope.
 - Unknown `/api` routes return JSON `404`; unsupported methods return JSON
   `405`.

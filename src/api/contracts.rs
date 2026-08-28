@@ -425,6 +425,10 @@ pub struct FileSummary {
     pub modality: String,
     pub instance_number: String,
     pub sop_instance_uid: String,
+    pub sop_class_uid: String,
+    pub object_kind: String,
+    pub support_state: SupportState,
+    pub support_reason: Option<String>,
     pub has_pixels: bool,
     pub frame_count: u32,
     pub rows: u32,
@@ -436,6 +440,7 @@ pub struct FileSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct FilesResponse {
     pub files: Vec<FileSummary>,
+    pub discovery: Vec<DiscoveryResult>,
     pub tunnelled: bool,
     pub tunnel_host: Option<String>,
     pub server_start_ms: u64,
@@ -452,7 +457,26 @@ pub struct FrameInfo {
     pub columns: u32,
     pub transfer_syntax_uid: String,
     pub has_pixels: bool,
+    pub sop_class_uid: String,
+    pub object_kind: String,
+    pub support_state: SupportState,
+    pub support_reason: Option<String>,
     pub default_window: Option<WindowPreset>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupportState {
+    Renderable,
+    MetadataOnly,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryResult {
+    pub path: String,
+    pub disposition: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Default)]
@@ -753,6 +777,10 @@ mod tests {
             columns: 3,
             transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
             has_pixels: true,
+            sop_class_uid: "1.2.840.10008.5.1.4.1.1.2".to_string(),
+            object_kind: "classic_image".to_string(),
+            support_state: super::SupportState::Renderable,
+            support_reason: None,
             default_window: None,
         })
         .expect("serialize frame info");
