@@ -443,23 +443,87 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "additional-field violation"):
             validate_json_schema({"value": "valid", "extra": True}, schema)
 
-    def test_normalization_removes_timings_and_run_identity(self) -> None:
-        report = {
-            "detail_schema_version": "0.1.0",
-            "worklist": {"content_sha256": "a" * 64},
-            "viewer": {"sha256": "b" * 64},
-            "run": {"selection": "smoke", "started_at": "variable"},
-            "results": [{"case_id": "x", "timings_ms": {"total": 2}, "http": {"info": {"elapsed_ms": 1, "status": 200, "path": "/api/file/17/info"}}}],
-            "summary": {"results": 1},
-        }
-        normalized = normalized_report(report)
+    def test_normalization_removes_timings_run_identity_and_registry_indices(self) -> None:
+        def report(registry_index: int, series_hash: str) -> dict:
+            return {
+                "detail_schema_version": "0.1.0",
+                "worklist": {"content_sha256": "a" * 64},
+                "viewer": {"sha256": "b" * 64},
+                "run": {"selection": "smoke", "started_at": "variable"},
+                "results": [
+                    {
+                        "case_id": "x",
+                        "timings_ms": {"total": 2},
+                        "observations": {
+                            "references": {
+                                "matches": [
+                                    {
+                                        "file_index": registry_index,
+                                        "path": "/corpus/source.dcm",
+                                        "sop_instance_uid": "1.2.3",
+                                    }
+                                ]
+                            }
+                        },
+                        "http": {
+                            "info": {
+                                "elapsed_ms": 1,
+                                "status": 200,
+                                "path": f"/api/file/{registry_index}/info",
+                                "body_sha256": "c" * 64,
+                            },
+                            "series_catalog": {
+                                "elapsed_ms": 2,
+                                "status": 200,
+                                "path": "/api/series",
+                                "body_sha256": series_hash,
+                                "size_bytes": 100 + registry_index,
+                            },
+                            "references": {
+                                "elapsed_ms": 3,
+                                "status": 200,
+                                "path": f"/api/file/{registry_index}/references",
+                                "body_sha256": series_hash,
+                                "size_bytes": 200 + registry_index,
+                            },
+                        },
+                    },
+                ],
+                "summary": {"results": 1},
+            }
+        normalized = normalized_report(report(17, "d" * 64))
         self.assertNotIn("timings_ms", normalized["results"][0])
         self.assertNotIn("elapsed_ms", normalized["results"][0]["http"]["info"])
         self.assertEqual(
             normalized["results"][0]["http"]["info"]["path"],
             "/api/file/{mapped}/info",
         )
+        self.assertNotIn(
+            "file_index",
+            normalized["results"][0]["observations"]["references"]["matches"][0],
+        )
+        self.assertEqual(
+            normalized["results"][0]["observations"]["references"]["matches"][0][
+                "sop_instance_uid"
+            ],
+            "1.2.3",
+        )
+        self.assertNotIn(
+            "body_sha256", normalized["results"][0]["http"]["series_catalog"]
+        )
+        self.assertNotIn(
+            "size_bytes", normalized["results"][0]["http"]["series_catalog"]
+        )
+        self.assertNotIn(
+            "body_sha256", normalized["results"][0]["http"]["references"]
+        )
+        self.assertNotIn("size_bytes", normalized["results"][0]["http"]["references"])
+        self.assertIn("body_sha256", normalized["results"][0]["http"]["info"])
         self.assertNotIn("started_at", normalized)
+        self.assertEqual(
+            normalized,
+            normalized_report(report(104, "e" * 64)),
+        )
 
 
 if __name__ == "__main__":

@@ -1162,26 +1162,33 @@ def validate_json_schema(
 
 
 def normalized_report(report: dict[str, Any]) -> dict[str, Any]:
+    registry_index_fields = {"file_index", "file_indices", "source_file_index"}
+    index_bearing_http_evidence = {"references", "series_catalog"}
+
+    def normalize_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: normalize_value(item)
+                for key, item in value.items()
+                if key not in registry_index_fields
+            }
+        if isinstance(value, list):
+            return [normalize_value(item) for item in value]
+        return value
+
     results = []
     for result in report["results"]:
-        normalized_http = {
-            name: {
-                key: value
-                for key, value in row.items()
-                if key not in {"elapsed_ms"}
-            }
-            for name, row in result["http"].items()
-        }
-        for row in normalized_http.values():
+        normalized_result = normalize_value(result)
+        normalized_result.pop("timings_ms", None)
+        normalized_http = normalized_result["http"]
+        for name, row in normalized_http.items():
+            row.pop("elapsed_ms", None)
             if "path" in row:
                 row["path"] = re.sub(r"^/api/file/\d+", "/api/file/{mapped}", row["path"])
-        results.append(
-            {
-                key: value
-                for key, value in {**result, "http": normalized_http}.items()
-                if key not in {"timings_ms"}
-            }
-        )
+            if name in index_bearing_http_evidence:
+                row.pop("body_sha256", None)
+                row.pop("size_bytes", None)
+        results.append(normalized_result)
     return {
         "detail_schema_version": report["detail_schema_version"],
         "worklist_content_sha256": report["worklist"]["content_sha256"],
