@@ -324,11 +324,11 @@ async fn jpeg2000_display_applies_rescale_before_every_window_mode() {
 fn transfer_syntax_classification_table_covers_every_supported_status() {
     let cases = [
         ("1.2.840.10008.1.2.4.50", TransferSyntaxClass::Jpeg),
-        ("1.2.840.10008.1.2.4.51", TransferSyntaxClass::Jpeg),
+        ("1.2.840.10008.1.2.4.51", TransferSyntaxClass::Unsupported),
         ("1.2.840.10008.1.2.4.57", TransferSyntaxClass::JpegLossless),
         ("1.2.840.10008.1.2.4.70", TransferSyntaxClass::JpegLossless),
         ("1.2.840.10008.1.2.4.90", TransferSyntaxClass::Jpeg2000),
-        ("1.2.840.10008.1.2.4.91", TransferSyntaxClass::Jpeg2000),
+        ("1.2.840.10008.1.2.4.91", TransferSyntaxClass::Unsupported),
         ("1.2.840.10008.1.2.4.110", TransferSyntaxClass::JpegXl),
         ("1.2.840.10008.1.2", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.1", TransferSyntaxClass::Uncompressed),
@@ -353,6 +353,8 @@ fn transfer_syntax_classification_table_covers_every_supported_status() {
 async fn unsupported_syntax_classes_return_422_from_both_frame_endpoints() {
     let dir = tempdir().expect("temporary fixture directory");
     let cases = [
+        ("jpeg-extended-12bit", "1.2.840.10008.1.2.4.51"),
+        ("jpeg-2000-lossy", "1.2.840.10008.1.2.4.91"),
         ("jpeg-ls-near-lossless", "1.2.840.10008.1.2.4.81"),
         ("unknown", "9.9.9"),
     ];

@@ -97,11 +97,12 @@ impl PixelSupport {
 
 pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
     match uid {
-        // Browser-renderable lossy JPEG: Baseline, Extended
-        "1.2.840.10008.1.2.4.50" | "1.2.840.10008.1.2.4.51" => TransferSyntaxClass::Jpeg,
+        // JPEG Baseline is qualified; Extended 12-bit remains controlled unsupported.
+        "1.2.840.10008.1.2.4.50" => TransferSyntaxClass::Jpeg,
         // JPEG Lossless: browsers cannot decode — must be decoded server-side
         "1.2.840.10008.1.2.4.57" | "1.2.840.10008.1.2.4.70" => TransferSyntaxClass::JpegLossless,
-        "1.2.840.10008.1.2.4.90" | "1.2.840.10008.1.2.4.91" => TransferSyntaxClass::Jpeg2000,
+        // Only the lossless JPEG 2000 process is qualified.
+        "1.2.840.10008.1.2.4.90" => TransferSyntaxClass::Jpeg2000,
         "1.2.840.10008.1.2.4.110" => TransferSyntaxClass::JpegXl,
         "1.2.840.10008.1.2"
         | "1.2.840.10008.1.2.1"
@@ -326,6 +327,16 @@ mod tests {
                 "1.2.840.10008.1.2.4.111",
                 PixelSupportReason::JpegXlNotSupported,
                 "transfer_syntax.jpeg_xl_not_supported",
+            ),
+            (
+                "1.2.840.10008.1.2.4.51",
+                PixelSupportReason::TransferSyntaxNotSupported,
+                "transfer_syntax.not_supported",
+            ),
+            (
+                "1.2.840.10008.1.2.4.91",
+                PixelSupportReason::TransferSyntaxNotSupported,
+                "transfer_syntax.not_supported",
             ),
             (
                 "9.9.9",
