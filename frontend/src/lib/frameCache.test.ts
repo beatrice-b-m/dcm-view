@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	ByteBudgetLruCache,
-	createDisplayFrameCache,
+	createDisplayFrameCaches,
 	decodedBitmapBytes,
 	type BitmapResource,
 } from "./frameCache";
@@ -60,44 +60,49 @@ describe("ByteBudgetLruCache", () => {
 });
 
 describe("display frame cache accounting", () => {
-	it("accounts RGBA bitmap memory in addition to retained blob bytes", () => {
+	it("accounts retained PNGs and decoded bitmaps under independent budgets", () => {
 		const decoded = bitmap(4, 3);
 		expect(decodedBitmapBytes(decoded)).toBe(48);
 
-		const cache = createDisplayFrameCache<BitmapResource>(58);
-		expect(cache.set("one", { blob: new Blob([new Uint8Array(10)]), bitmap: decoded })).toBe(true);
-		expect(cache.bytes).toBe(58);
+		const cache = createDisplayFrameCaches<BitmapResource>(10, 48);
+		expect(cache.blobs.set("one", new Blob([new Uint8Array(10)]))).toBe(true);
+		expect(cache.bitmaps.set("one", decoded)).toBe(true);
+		expect(cache.blobs.bytes).toBe(10);
+		expect(cache.bitmaps.bytes).toBe(48);
 	});
 
-	it("closes decoded bitmaps when pressure evicts them", () => {
+	it("retains PNG payloads when bitmap pressure evicts decoded resources", () => {
 		const first = bitmap(4, 2);
 		const second = bitmap(4, 2);
-		const cache = createDisplayFrameCache<BitmapResource>(50);
+		const cache = createDisplayFrameCaches<BitmapResource>(20, 32);
 
-		cache.set("first", { blob: new Blob([new Uint8Array(10)]), bitmap: first });
-		cache.set("second", { blob: new Blob([new Uint8Array(10)]), bitmap: second });
+		cache.blobs.set("first", new Blob([new Uint8Array(10)]));
+		cache.blobs.set("second", new Blob([new Uint8Array(10)]));
+		cache.bitmaps.set("first", first);
+		cache.bitmaps.set("second", second);
 
-		expect(cache.has("first")).toBe(false);
+		expect(cache.blobs.has("first")).toBe(true);
+		expect(cache.blobs.has("second")).toBe(true);
+		expect(cache.bitmaps.has("first")).toBe(false);
 		expect(first.close).toHaveBeenCalledOnce();
-		expect(cache.has("second")).toBe(true);
+		expect(cache.bitmaps.has("second")).toBe(true);
 		expect(second.close).not.toHaveBeenCalled();
 	});
 
 	it("closes every retained bitmap when cleared after a stress fill", () => {
 		const frames = Array.from({ length: 200 }, () => bitmap(2, 2));
-		const cache = createDisplayFrameCache<BitmapResource>(20 * 25);
+		const cache = createDisplayFrameCaches<BitmapResource>(4 * 200, 16 * 25);
 
 		for (let index = 0; index < frames.length; index += 1) {
-			cache.set(String(index), {
-				blob: new Blob([new Uint8Array(4)]),
-				bitmap: frames[index],
-			});
-			expect(cache.bytes).toBeLessThanOrEqual(cache.maxBytes);
+			cache.blobs.set(String(index), new Blob([new Uint8Array(4)]));
+			cache.bitmaps.set(String(index), frames[index]);
+			expect(cache.bitmaps.bytes).toBeLessThanOrEqual(cache.bitmaps.maxBytes);
 		}
-		cache.clear();
+		cache.bitmaps.clear();
 
-		expect(cache.bytes).toBe(0);
-		expect(cache.size).toBe(0);
+		expect(cache.blobs.size).toBe(200);
+		expect(cache.bitmaps.bytes).toBe(0);
+		expect(cache.bitmaps.size).toBe(0);
 		expect(frames.every((frame) => vi.mocked(frame.close).mock.calls.length === 1)).toBe(true);
 	});
 });

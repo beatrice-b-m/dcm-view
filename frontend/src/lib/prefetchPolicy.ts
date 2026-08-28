@@ -6,7 +6,7 @@ export type DisplayPrefetchPlan = {
 	startFrame: number;
 	totalFrames: number;
 	direction: FrameDirection;
-	currentFrameBytes: number;
+	currentPayloadBytes: number;
 	fullStackBudgetBytes: number;
 	nearDistance: number;
 	cineMode?: CineMode | null;
@@ -43,7 +43,7 @@ export function planDisplayPrefetchTargets({
 	startFrame,
 	totalFrames,
 	direction,
-	currentFrameBytes,
+	currentPayloadBytes,
 	fullStackBudgetBytes,
 	nearDistance,
 	cineMode = null,
@@ -52,7 +52,7 @@ export function planDisplayPrefetchTargets({
 	if (totalFrames <= 1) return [];
 	const fullStack = shouldPrefetchWholeDisplayStack(
 		totalFrames,
-		currentFrameBytes,
+		currentPayloadBytes,
 		fullStackBudgetBytes,
 	);
 	if (fullStack) {

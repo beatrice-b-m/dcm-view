@@ -118,27 +118,28 @@ export type BitmapResource = {
 	close: () => void;
 };
 
-export type DisplayFrameCacheEntry<Bitmap extends BitmapResource = ImageBitmap> = {
-	blob: Blob;
-	bitmap: Bitmap | null;
-};
-
 export function decodedBitmapBytes(bitmap: Pick<BitmapResource, "width" | "height">): number {
 	return bitmap.width * bitmap.height * 4;
 }
 
-export function retainedDisplayFrameBytes(
-	entry: DisplayFrameCacheEntry<BitmapResource>,
-): number {
-	return entry.blob.size + (entry.bitmap ? decodedBitmapBytes(entry.bitmap) : 0);
-}
+export type DisplayFrameCaches<Bitmap extends BitmapResource = ImageBitmap> = {
+	blobs: ByteBudgetLruCache<string, Blob>;
+	bitmaps: ByteBudgetLruCache<string, Bitmap>;
+};
 
-export function createDisplayFrameCache<Bitmap extends BitmapResource = ImageBitmap>(
-	maxBytes: number,
-): ByteBudgetLruCache<string, DisplayFrameCacheEntry<Bitmap>> {
-	return new ByteBudgetLruCache<string, DisplayFrameCacheEntry<Bitmap>>({
-		maxBytes,
-		sizeOf: retainedDisplayFrameBytes,
-		dispose: (entry) => entry.bitmap?.close(),
-	});
+export function createDisplayFrameCaches<Bitmap extends BitmapResource = ImageBitmap>(
+	blobMaxBytes: number,
+	bitmapMaxBytes: number,
+): DisplayFrameCaches<Bitmap> {
+	return {
+		blobs: new ByteBudgetLruCache<string, Blob>({
+			maxBytes: blobMaxBytes,
+			sizeOf: (blob) => blob.size,
+		}),
+		bitmaps: new ByteBudgetLruCache<string, Bitmap>({
+			maxBytes: bitmapMaxBytes,
+			sizeOf: decodedBitmapBytes,
+			dispose: (bitmap) => bitmap.close(),
+		}),
+	};
 }

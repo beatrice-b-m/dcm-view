@@ -29,8 +29,7 @@
 	} from "./annotationGeometry";
 	import {
 		ByteBudgetLruCache,
-		createDisplayFrameCache,
-		type DisplayFrameCacheEntry,
+		createDisplayFrameCaches,
 	} from "./frameCache";
 	import { fitImageToViewportHeight, imageDisplayGeometry } from "./imageGeometry";
 	import {
@@ -93,7 +92,8 @@
 	type WlRenderedFrame = Pick<WlRendererSuccess, "width" | "height" | "bitmap">;
 
 	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
-	const DISPLAY_CACHE_BYTE_BUDGET = 320 * 1024 * 1024;
+	const DISPLAY_BLOB_CACHE_BYTE_BUDGET = 320 * 1024 * 1024;
+	const DISPLAY_BITMAP_CACHE_BYTE_BUDGET = 128 * 1024 * 1024;
 
 	let {
 		activeFile,
@@ -194,13 +194,16 @@
 		sizeOf: (frame) => frame.buffer.byteLength,
 	});
 	const rawRequests = new SharedRequestRegistry<string, RawFrame>();
-	const displayFrameCache = createDisplayFrameCache(DISPLAY_CACHE_BYTE_BUDGET);
+	const displayFrameCaches = createDisplayFrameCaches(
+		DISPLAY_BLOB_CACHE_BYTE_BUDGET,
+		DISPLAY_BITMAP_CACHE_BYTE_BUDGET,
+	);
 	const displayDecodePromises = new Map<
 		string,
-		{ entry: DisplayFrameCacheEntry; promise: Promise<ImageBitmap> }
+		{ blob: Blob; promise: Promise<ImageBitmap> }
 	>();
 	const displayNetworkPromises = new Map<string, Promise<Blob>>();
-	const displayFetchPromises = new Map<string, Promise<DisplayFrameCacheEntry>>();
+	const displayFetchPromises = new Map<string, Promise<Blob>>();
 	let lastRenderedDisplayFrame: { fileIndex: number; frameIndex: number } | null = null;
 	const displayRenderWaiters = new Set<{
 		fileIndex: number;
@@ -543,20 +546,20 @@
 	function clearDisplayCache(): void {
 		for (const waiter of displayRenderWaiters) waiter.resolve(false);
 		displayRenderWaiters.clear();
-		displayFrameCache.clear();
+		displayFrameCaches.blobs.clear();
+		displayFrameCaches.bitmaps.clear();
 		displayDecodePromises.clear();
 		displayNetworkPromises.clear();
 		displayFetchPromises.clear();
 		lastRenderedDisplayFrame = null;
 	}
 
-	function getCachedDisplayFrame(key: string): DisplayFrameCacheEntry | undefined {
-		return displayFrameCache.get(key);
+	function getCachedDisplayBlob(key: string): Blob | undefined {
+		return displayFrameCaches.blobs.get(key);
 	}
 
-	function cacheDisplayFrame(key: string, blob: Blob): DisplayFrameCacheEntry | null {
-		const entry: DisplayFrameCacheEntry = { blob, bitmap: null };
-		return displayFrameCache.set(key, entry) ? entry : null;
+	function cacheDisplayBlob(key: string, blob: Blob): Blob | null {
+		return displayFrameCaches.blobs.set(key, blob) ? blob : null;
 	}
 
 	function currentDisplayWindowOptions(): DisplayFrameWindowOptions {
@@ -597,13 +600,13 @@
 		return displayScopeCtrl.signal;
 	}
 
-	async function ensureDisplayFrameEntry(
+	async function ensureDisplayFrameBlob(
 		fileIndex: number,
 		frameIndex: number,
 		windowOptions: DisplayFrameWindowOptions,
-	): Promise<DisplayFrameCacheEntry> {
+	): Promise<Blob> {
 		const key = buildDisplayKey(fileIndex, frameIndex, windowOptions);
-		const cached = getCachedDisplayFrame(key);
+		const cached = getCachedDisplayBlob(key);
 		if (cached) return cached;
 		const existing = displayFetchPromises.get(key);
 		if (existing) return existing;
@@ -624,13 +627,10 @@
 			},
 		);
 		const request = networkRequest
-			.then(async (blob) => {
-				const entry = cacheDisplayFrame(key, blob);
-				if (!entry) throw new Error("Display frame exceeded cache budget");
-				if (typeof createImageBitmap === "function") {
-					await startDisplayDecode(key, entry);
-				}
-				return getCachedDisplayFrame(key) ?? entry;
+			.then((blob) => {
+				const retained = cacheDisplayBlob(key, blob);
+				if (!retained) throw new Error("Display frame exceeded PNG cache budget");
+				return getCachedDisplayBlob(key) ?? retained;
 			})
 			.finally(() => {
 				if (displayFetchPromises.get(key) === request) {
@@ -704,21 +704,17 @@
 		renderRawFrameOnMainThread(canvasEl, frame, wc, ww);
 	}
 
-	function startDisplayDecode(key: string, entry: DisplayFrameCacheEntry): Promise<ImageBitmap> {
-		if (entry.bitmap) return Promise.resolve(entry.bitmap);
+	function startDisplayDecode(key: string, blob: Blob): Promise<ImageBitmap> {
+		const cached = displayFrameCaches.bitmaps.get(key);
+		if (cached) return Promise.resolve(cached);
 		const pending = displayDecodePromises.get(key);
-		if (pending?.entry === entry) return pending.promise;
+		if (pending?.blob === blob) return pending.promise;
 
-		const promise = createImageBitmap(entry.blob)
+		const promise = createImageBitmap(blob)
 			.then((bitmap) => {
-				const current = displayFrameCache.peek(key);
-				if (current === entry && current.bitmap === null) {
-					const decodedEntry: DisplayFrameCacheEntry = {
-						blob: entry.blob,
-						bitmap,
-					};
-					if (displayFrameCache.set(key, decodedEntry)) return bitmap;
-					throw new Error("decoded display frame exceeded cache budget");
+				if (displayFrameCaches.blobs.peek(key) === blob) {
+					if (displayFrameCaches.bitmaps.set(key, bitmap)) return bitmap;
+					throw new Error("Decoded display frame exceeded bitmap cache budget");
 				}
 				bitmap.close();
 				throw new Error("display image decode superseded");
@@ -728,17 +724,17 @@
 					displayDecodePromises.delete(key);
 				}
 			});
-		displayDecodePromises.set(key, { entry, promise });
+		displayDecodePromises.set(key, { blob, promise });
 		return promise;
 	}
 
-	async function drawDisplayEntry(key: string, entry: DisplayFrameCacheEntry, generation: number): Promise<void> {
+	async function drawDisplayBlob(key: string, blob: Blob, generation: number): Promise<void> {
 		if (!canvasEl || !usesDisplayPipeline()) return;
 		const ctx = canvasEl.getContext("2d", { alpha: false });
 		if (!ctx) return;
 
 		if (typeof createImageBitmap === "function") {
-			const bitmap = entry.bitmap ?? await startDisplayDecode(key, entry);
+			const bitmap = await startDisplayDecode(key, blob);
 			if (generation !== requestGeneration || !canvasEl || !usesDisplayPipeline()) return;
 			canvasEl.width = bitmap.width;
 			canvasEl.height = bitmap.height;
@@ -746,7 +742,7 @@
 			return;
 		}
 
-		const fallbackUrl = URL.createObjectURL(entry.blob);
+		const fallbackUrl = URL.createObjectURL(blob);
 		try {
 			const img = new Image();
 			img.decoding = "async";
@@ -828,12 +824,11 @@
 		currentBlobSize: number,
 		playbackMode: CineMode | null = null,
 	): Promise<void> {
-		const decodedBytes = activeFile.rows * activeFile.columns * 4;
 		const targets = planDisplayPrefetchTargets({
 			startFrame: startPosition,
 			totalFrames: frames.length,
 			direction,
-			currentFrameBytes: currentBlobSize + decodedBytes,
+			currentPayloadBytes: currentBlobSize,
 			fullStackBudgetBytes: DISPLAY_FULL_PREFETCH_BUDGET_BYTES,
 			nearDistance: DISPLAY_NEAR_PREFETCH_DISTANCE,
 			cineMode: playbackMode,
@@ -846,9 +841,9 @@
 					const frame = frames[position];
 					if (!frame) return;
 					const key = buildDisplayKey(frame.file_index, frame.frame_index, windowOptions);
-					if (signal.aborted || displayFrameCache.has(key)) return;
+					if (signal.aborted || displayFrameCaches.blobs.has(key)) return;
 					try {
-						await ensureDisplayFrameEntry(frame.file_index, frame.frame_index, windowOptions);
+						await ensureDisplayFrameBlob(frame.file_index, frame.frame_index, windowOptions);
 					} catch {
 						// Ignore network/decode failures during prefetch.
 					}
@@ -1005,17 +1000,17 @@ function startDisplayPrefetch(
 		const windowOptions = currentDisplayWindowOptions();
 		const cacheKey = buildDisplayKey(fileIndex, frameIndex, windowOptions);
 		try {
-			const entryRequest = ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions);
+			const blobRequest = ensureDisplayFrameBlob(fileIndex, frameIndex, windowOptions);
 			trackForegroundRequest(
 				displayNetworkPromises.get(cacheKey),
 				() => generation === requestGeneration,
 				(pending) => { loading = pending; },
 			);
-			const entry = await entryRequest;
+			const blob = await blobRequest;
 			if (generation !== requestGeneration || !usesDisplayPipeline()) return;
 			loading = false;
 			loadError = null;
-			await drawDisplayEntry(cacheKey, entry, generation);
+			await drawDisplayBlob(cacheKey, blob, generation);
 			if (generation !== requestGeneration || !usesDisplayPipeline()) return;
 			markDisplayFrameRendered(fileIndex, frameIndex);
 
@@ -1024,7 +1019,7 @@ function startDisplayPrefetch(
 				navigationPosition,
 				direction,
 				windowOptions,
-				entry.blob.size,
+				blob.size,
 			);
 		} catch (error) {
 			if ((error as Error).name === "AbortError") return;
@@ -1265,7 +1260,10 @@ function startDisplayPrefetch(
 				prepareFrame: (position) => {
 					const frame = navigationFrameAtPosition(frames, position);
 					if (!frame) return Promise.reject(new Error("logical cine frame is unavailable"));
-					return ensureDisplayFrameEntry(frame.file_index, frame.frame_index, windowOptions);
+					return ensureDisplayFrameBlob(frame.file_index, frame.frame_index, windowOptions)
+						.then((blob) => typeof createImageBitmap === "function"
+							? startDisplayDecode(buildDisplayKey(frame.file_index, frame.frame_index, windowOptions), blob)
+							: undefined);
 				},
 				presentFrame: async (step, signal) => {
 					const frame = navigationFrameAtPosition(frames, step.frame);
