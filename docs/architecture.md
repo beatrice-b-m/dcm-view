@@ -187,8 +187,10 @@ color-space transformation, and it does not change decoded RGB samples or raw
 frame responses.
 
 For native monochrome display, Modality LUT or rescale precedes VOI LUT or
-windowing, followed by MONOCHROME1 presentation inversion. A validated
-rectangular shutter then replaces pixels outside its one-based inclusive
+windowing, followed by MONOCHROME1 presentation inversion. Modality and VOI
+LUT sequences accept the standard 8-bit and 16-bit entry depths, including
+byte-packed 8-bit LUT Data. A validated rectangular shutter then replaces
+pixels outside its one-based inclusive
 opening with the encoded P-value, and standalone one-bit overlay planes are
 composited last in DICOM LSB-first order. These presentation operations affect
 PNG display frames only; raw-frame bytes remain the decoded source samples.

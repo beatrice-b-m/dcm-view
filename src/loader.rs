@@ -923,14 +923,28 @@ fn read_lut_sequence(
         usize::try_from(entry_count).ok()?
     };
     let bits_per_entry = u16::try_from(bits_per_entry).ok()?;
-    if bits_per_entry != 16 {
+    if !matches!(bits_per_entry, 8 | 16) {
         return None;
     }
-    let entries = item
-        .element(tags::LUT_DATA)
-        .ok()?
-        .to_multi_int::<u16>()
-        .ok()?;
+    let data = item.element(tags::LUT_DATA).ok()?;
+    let entries = if bits_per_entry == 8 {
+        let bytes = data.to_bytes().ok()?;
+        if bytes.len() >= entry_count && bytes.len() <= entry_count.saturating_add(1) {
+            bytes
+                .iter()
+                .take(entry_count)
+                .map(|value| u16::from(*value))
+                .collect()
+        } else {
+            data.to_multi_int::<u16>()
+                .ok()?
+                .into_iter()
+                .map(|value| value & 0x00FF)
+                .collect()
+        }
+    } else {
+        data.to_multi_int::<u16>().ok()?
+    };
     if entries.len() < entry_count {
         return None;
     }
@@ -1507,6 +1521,57 @@ mod tests {
         assert_eq!(lut.first_mapped_value, 0);
         assert_eq!(lut.bits_per_entry, 16);
         assert_eq!(lut.entries, [0, 21_845, 43_690, 65_535]);
+    }
+
+    #[test]
+    fn extracts_eight_bit_lut_entries_from_byte_storage() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("voi-lut-u8.dcm");
+        let lut_item = InMemDicomObject::from_element_iter([
+            DataElement::new(
+                tags::LUT_DESCRIPTOR,
+                VR::US,
+                PrimitiveValue::U16(vec![4, 0, 8].into()),
+            ),
+            DataElement::new(
+                tags::LUT_DATA,
+                VR::OW,
+                PrimitiveValue::U8(vec![0, 85, 170, 255].into()),
+            ),
+        ]);
+        let mut object = base_object();
+        object.put(DataElement::new(
+            tags::VOILUT_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![lut_item]),
+        ));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PrimitiveValue::U8(vec![0_u8, 1, 2, 3].into()),
+        ));
+        object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::COMPUTED_RADIOGRAPHY_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.301"),
+            )
+            .expect("file meta")
+            .write_to_file(&path)
+            .expect("write fixture");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        let lut = file
+            .series_metadata
+            .native_pixel
+            .voi_lut
+            .as_ref()
+            .expect("8-bit VOI LUT");
+        assert_eq!(lut.bits_per_entry, 8);
+        assert_eq!(lut.entries, [0, 85, 170, 255]);
     }
 
     #[test]

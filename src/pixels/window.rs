@@ -38,15 +38,17 @@ pub(crate) fn apply_voi_lut_if_selected(
     {
         return None;
     }
-    let lut = voi_lut.filter(|lut| !lut.entries.is_empty() && lut.bits_per_entry == 16)?;
+    let lut =
+        voi_lut.filter(|lut| !lut.entries.is_empty() && matches!(lut.bits_per_entry, 8 | 16))?;
     let last = lut.entries.len().saturating_sub(1) as i64;
+    let output_max = (1_u32 << lut.bits_per_entry) - 1;
     Some(
         samples
             .iter()
             .map(|value| {
                 let offset = (*value as i64) - i64::from(lut.first_mapped_value);
                 let output = u32::from(lut.entries[offset.clamp(0, last) as usize]);
-                ((output * 255 + 32_767) / 65_535) as u8
+                ((output * 255 + output_max / 2) / output_max) as u8
             })
             .collect(),
     )
@@ -171,6 +173,26 @@ mod tests {
                 &[0.0, 1.0, 2.0, 3.0, 1024.0],
             ),
             Some(vec![0, 85, 170, 255, 255])
+        );
+    }
+
+    #[test]
+    fn eight_bit_voi_lut_uses_its_declared_output_range() {
+        let lut = DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 8,
+            entries: vec![0, 85, 170, 255],
+        };
+        assert_eq!(
+            apply_voi_lut_if_selected(
+                WindowMode::Default,
+                None,
+                None,
+                None,
+                Some(&lut),
+                &[0.0, 1.0, 2.0, 3.0],
+            ),
+            Some(vec![0, 85, 170, 255])
         );
     }
 
