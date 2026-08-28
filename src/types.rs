@@ -11,6 +11,26 @@ use std::path::PathBuf;
 pub type PatientPosition = [f64; 3];
 pub type PatientOrientation = [f64; 6];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePixelDataKind {
+    Integer,
+    Float32,
+    Float64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NativePixelMetadata {
+    pub planar_configuration: Option<u32>,
+    pub bits_stored: Option<u32>,
+    pub high_bit: Option<u32>,
+    pub pixel_data_kind: Option<NativePixelDataKind>,
+    pub pixel_spacing: Option<[f64; 2]>,
+    pub pixel_aspect_ratio: Option<[u32; 2]>,
+    /// Relative physical row and column extents, normalized so column is 1.0.
+    /// Pixel Spacing is authoritative when valid; Pixel Aspect Ratio is fallback.
+    pub normalized_pixel_aspect: Option<[f64; 2]>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub index: usize,
@@ -45,6 +65,7 @@ pub struct FileEntry {
 
 #[derive(Debug, Clone, Default)]
 pub struct SeriesMetadata {
+    pub native_pixel: NativePixelMetadata,
     pub frame_of_reference_uid: String,
     pub image_position_patient: Option<PatientPosition>,
     pub image_orientation_patient: Option<PatientOrientation>,

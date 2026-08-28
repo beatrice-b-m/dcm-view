@@ -1,5 +1,8 @@
 use crate::api::contracts::WindowPreset;
-use crate::types::{FileEntry, LoadReport, PatientOrientation, PatientPosition, SeriesMetadata};
+use crate::types::{
+    FileEntry, LoadReport, NativePixelDataKind, NativePixelMetadata, PatientOrientation,
+    PatientPosition, SeriesMetadata,
+};
 use anyhow::{anyhow, Context, Result};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::OpenFileOptions;
@@ -634,13 +637,20 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let rows = read_u32(&obj, "Rows").unwrap_or(0);
     let columns = read_u32(&obj, "Columns").unwrap_or(0);
     let bits_allocated = read_u32(&obj, "BitsAllocated").unwrap_or(8);
+    let planar_configuration = read_u32(&obj, "PlanarConfiguration");
+    let bits_stored = read_u32(&obj, "BitsStored");
+    let high_bit = read_u32(&obj, "HighBit");
+    let pixel_spacing = read_positive_f64_pair(&obj, "PixelSpacing");
+    let pixel_aspect_ratio = read_positive_u32_pair(&obj, "PixelAspectRatio");
+    let normalized_pixel_aspect = normalize_pixel_aspect(pixel_spacing, pixel_aspect_ratio);
     let pixel_representation = read_u32(&obj, "PixelRepresentation").unwrap_or(0);
     let samples_per_pixel = read_u32(&obj, "SamplesPerPixel").unwrap_or(1).max(1);
     let photometric_interpretation =
         read_str(&obj, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
     let rescale_slope = read_f64(&obj, "RescaleSlope").unwrap_or(1.0);
     let rescale_intercept = read_f64(&obj, "RescaleIntercept").unwrap_or(0.0);
-    let has_pixels = has_pixel_data_tag(path, &transfer_syntax_uid)?;
+    let pixel_data_kind = find_native_pixel_data_kind(path, &transfer_syntax_uid)?;
+    let has_pixels = pixel_data_kind.is_some();
     let default_window = match (
         read_f64(&obj, "WindowCenter"),
         read_f64(&obj, "WindowWidth"),
@@ -673,6 +683,15 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         sop_instance_uid,
         sop_class_uid,
         series_metadata: Box::new(SeriesMetadata {
+            native_pixel: NativePixelMetadata {
+                planar_configuration,
+                bits_stored,
+                high_bit,
+                pixel_data_kind,
+                pixel_spacing,
+                pixel_aspect_ratio,
+                normalized_pixel_aspect,
+            },
             frame_of_reference_uid,
             image_position_patient,
             image_orientation_patient,
@@ -755,19 +774,39 @@ fn has_dicm_preamble(path: &Path) -> Result<bool> {
     }
 }
 
-fn has_pixel_data_tag(path: &Path, transfer_syntax_uid: &str) -> Result<bool> {
+fn find_native_pixel_data_kind(
+    path: &Path,
+    transfer_syntax_uid: &str,
+) -> Result<Option<NativePixelDataKind>> {
     if transfer_syntax_uid == uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN {
         let obj = OpenFileOptions::new()
             .read_all()
             .open_file(path)
             .with_context(|| format!("failed to inspect deflated DICOM {}", path.display()))?;
-        return Ok(obj.element(tags::PIXEL_DATA).is_ok());
+        return Ok(if obj.element_by_name("PixelData").is_ok() {
+            Some(NativePixelDataKind::Integer)
+        } else if obj.element_by_name("FloatPixelData").is_ok() {
+            Some(NativePixelDataKind::Float32)
+        } else if obj.element_by_name("DoubleFloatPixelData").is_ok() {
+            Some(NativePixelDataKind::Float64)
+        } else {
+            None
+        });
     }
 
-    let needle: &[u8] = if transfer_syntax_uid == "1.2.840.10008.1.2.2" {
-        &[0x7f, 0xe0, 0x00, 0x10]
+    let needles: [(&[u8], NativePixelDataKind); 3] = if transfer_syntax_uid == "1.2.840.10008.1.2.2"
+    {
+        [
+            (&[0x7f, 0xe0, 0x00, 0x10], NativePixelDataKind::Integer),
+            (&[0x7f, 0xe0, 0x00, 0x08], NativePixelDataKind::Float32),
+            (&[0x7f, 0xe0, 0x00, 0x09], NativePixelDataKind::Float64),
+        ]
     } else {
-        &[0xe0, 0x7f, 0x10, 0x00]
+        [
+            (&[0xe0, 0x7f, 0x10, 0x00], NativePixelDataKind::Integer),
+            (&[0xe0, 0x7f, 0x08, 0x00], NativePixelDataKind::Float32),
+            (&[0xe0, 0x7f, 0x09, 0x00], NativePixelDataKind::Float64),
+        ]
     };
     let mut file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
@@ -781,18 +820,27 @@ fn has_pixel_data_tag(path: &Path, transfer_syntax_uid: &str) -> Result<bool> {
             .read(&mut chunk)
             .with_context(|| format!("failed to read {}", path.display()))?;
         if read == 0 {
-            return Ok(false);
+            return Ok(None);
         }
 
         let carry_len = carried.len();
         carried.extend_from_slice(&chunk[..read]);
-        if carried.windows(needle.len()).any(|window| window == needle) {
-            return Ok(true);
+        let earliest = needles
+            .iter()
+            .filter_map(|(needle, kind)| {
+                carried
+                    .windows(needle.len())
+                    .position(|window| window == *needle)
+                    .map(|offset| (offset, *kind))
+            })
+            .min_by_key(|(offset, _)| *offset);
+        if let Some((_, kind)) = earliest {
+            return Ok(Some(kind));
         }
 
-        let keep = needle.len().saturating_sub(1).min(carried.len());
+        let keep = 3.min(carried.len());
         carried.drain(..carried.len().saturating_sub(keep));
-        debug_assert!(carried.len() <= carry_len.max(needle.len().saturating_sub(1)));
+        debug_assert!(carried.len() <= carry_len.max(3));
     }
 }
 
@@ -821,6 +869,30 @@ fn read_u32(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {
 
 fn read_f64(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<f64> {
     read_str(obj, name)?.parse::<f64>().ok()
+}
+
+fn read_positive_f64_pair(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<[f64; 2]> {
+    let values = read_exact_f64s(obj, name)?;
+    values.iter().all(|value| *value > 0.0).then_some(values)
+}
+
+fn read_positive_u32_pair(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<[u32; 2]> {
+    let values = read_strings(obj, name)
+        .into_iter()
+        .map(|value| value.parse::<u32>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let values: [u32; 2] = values.try_into().ok()?;
+    values.iter().all(|value| *value > 0).then_some(values)
+}
+
+fn normalize_pixel_aspect(
+    pixel_spacing: Option<[f64; 2]>,
+    pixel_aspect_ratio: Option<[u32; 2]>,
+) -> Option<[f64; 2]> {
+    let [row, column] = pixel_spacing.or_else(|| {
+        pixel_aspect_ratio.map(|[vertical, horizontal]| [vertical as f64, horizontal as f64])
+    })?;
+    Some([row / column, 1.0])
 }
 
 fn read_exact_f64s<const N: usize>(
@@ -970,10 +1042,12 @@ fn build_label(patient_id: &str, modality: &str, study_date: &str, fallback: &st
 mod tests {
     use super::{build_entry, split_dicom_values, EntryInspection};
     use dicom_core::value::DataSetSequence;
-    use dicom_core::{DataElement, PrimitiveValue, VR};
+    use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
     use dicom_dictionary_std::{tags, uids};
     use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
     use tempfile::tempdir;
+
+    use crate::types::NativePixelDataKind;
 
     #[test]
     fn extracts_classic_enhanced_concatenation_and_wsi_identity() {
@@ -986,6 +1060,19 @@ mod tests {
         };
         let metadata = &file.series_metadata;
 
+        assert_eq!(
+            metadata.native_pixel.pixel_data_kind,
+            Some(NativePixelDataKind::Integer)
+        );
+        assert_eq!(metadata.native_pixel.planar_configuration, Some(0));
+        assert_eq!(metadata.native_pixel.bits_stored, Some(12));
+        assert_eq!(metadata.native_pixel.high_bit, Some(11));
+        assert_eq!(metadata.native_pixel.pixel_spacing, Some([0.6, 0.3]));
+        assert_eq!(metadata.native_pixel.pixel_aspect_ratio, Some([3, 1]));
+        assert_eq!(
+            metadata.native_pixel.normalized_pixel_aspect,
+            Some([2.0, 1.0])
+        );
         assert_eq!(file.study_instance_uid, "2.25.100");
         assert_eq!(file.series_instance_uid, "2.25.200");
         assert_eq!(file.sop_instance_uid, "2.25.300");
@@ -1072,6 +1159,87 @@ mod tests {
             .is_empty());
     }
 
+    #[test]
+    fn falls_back_to_valid_pixel_aspect_ratio() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("pixel-aspect-ratio.dcm");
+        let mut object = base_object();
+        object.put(DataElement::new(tags::PIXEL_SPACING, VR::DS, "0\\0.3"));
+        object.put(DataElement::new(tags::PIXEL_ASPECT_RATIO, VR::IS, "2\\1"));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PrimitiveValue::U8(vec![0_u8; 4].into()),
+        ));
+        let object = object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.300"),
+            )
+            .expect("file meta");
+        object.write_to_file(&path).expect("write fixture");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        let metadata = &file.series_metadata.native_pixel;
+        assert_eq!(metadata.pixel_spacing, None);
+        assert_eq!(metadata.pixel_aspect_ratio, Some([2, 1]));
+        assert_eq!(metadata.normalized_pixel_aspect, Some([2.0, 1.0]));
+    }
+
+    #[test]
+    fn recognizes_float_and_double_float_pixel_elements() {
+        let directory = tempdir().expect("temp directory");
+        let cases = [
+            (
+                "float.dcm",
+                DataElement::new(
+                    Tag(0x7fe0, 0x0008),
+                    VR::OF,
+                    PrimitiveValue::F32(vec![0.0_f32, 1.0].into()),
+                ),
+                NativePixelDataKind::Float32,
+            ),
+            (
+                "double.dcm",
+                DataElement::new(
+                    Tag(0x7fe0, 0x0009),
+                    VR::OD,
+                    PrimitiveValue::F64(vec![0.0_f64, 1.0].into()),
+                ),
+                NativePixelDataKind::Float64,
+            ),
+        ];
+
+        for (name, pixel_element, expected_kind) in cases {
+            let path = directory.path().join(name);
+            let mut object = base_object();
+            object.put(pixel_element);
+            let object = object
+                .with_meta(
+                    FileMetaTableBuilder::new()
+                        .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                        .media_storage_sop_class_uid(uids::PARAMETRIC_MAP_STORAGE)
+                        .media_storage_sop_instance_uid("2.25.300"),
+                )
+                .expect("file meta");
+            object.write_to_file(&path).expect("write fixture");
+
+            let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture")
+            else {
+                panic!("fixture should be selected");
+            };
+            assert!(file.has_pixels);
+            assert_eq!(
+                file.series_metadata.native_pixel.pixel_data_kind,
+                Some(expected_kind)
+            );
+        }
+    }
+
     fn write_series_identity_fixture(path: &std::path::Path) {
         let shared_orientation = nested_sequence_item(
             tags::PLANE_ORIENTATION_SEQUENCE,
@@ -1126,6 +1294,17 @@ mod tests {
 
         let mut object = base_object();
         for element in [
+            DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(16_u16)),
+            DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(12_u16)),
+            DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(11_u16)),
+            DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(3_u16)),
+            DataElement::new(
+                tags::PLANAR_CONFIGURATION,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+            DataElement::new(tags::PIXEL_SPACING, VR::DS, "0.6\\0.3"),
+            DataElement::new(tags::PIXEL_ASPECT_RATIO, VR::IS, "3\\1"),
             DataElement::new(tags::FRAME_OF_REFERENCE_UID, VR::UI, "2.25.400"),
             DataElement::new(tags::IMAGE_POSITION_PATIENT, VR::DS, "10\\20\\30"),
             DataElement::new(tags::IMAGE_ORIENTATION_PATIENT, VR::DS, "1\\0\\0\\0\\1\\0"),
