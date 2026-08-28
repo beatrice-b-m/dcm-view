@@ -1,6 +1,15 @@
 <script lang="ts">
 	import { onMount, tick } from "svelte";
-	import { annotationsExportUrl, fetchFiles, type FilesResponse, type WindowMode, type WindowPreset } from "./api";
+	import {
+		annotationsExportUrl,
+		fetchFiles,
+		fetchSeries,
+		type FilesResponse,
+		type SeriesCatalogResponse,
+		type SeriesStackSummary,
+		type WindowMode,
+		type WindowPreset,
+	} from "./api";
 	import FileNavigator from "./lib/FileNavigator.svelte";
 	import FrameSlider from "./lib/FrameSlider.svelte";
 	import ImageViewport from "./lib/ImageViewport.svelte";
@@ -8,9 +17,15 @@
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
-	import type { CineDirection, CineMode } from "./lib/cinePlayback";
+	import { cineFrameIntervalMs, nextCineStep, type CineDirection, type CineMode } from "./lib/cinePlayback";
 	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
 	import { focusTrapTarget } from "./lib/focusTrap";
+	import {
+		findSeriesStackForFile,
+		frameAtPosition,
+		framePosition,
+		navigationTabId,
+	} from "./lib/seriesNavigation";
 	import { DEFAULT_ORIENTATION, WL_PRESETS, type ActiveTool, type ImageOrientation } from "./lib/viewerTools";
 
 	const TAG_PANEL_DEFAULT_WIDTH_PX = 360;
@@ -35,8 +50,10 @@
 	};
 
 	type OpenTabState = {
+		id: string;
 		fileIndex: number;
 		currentFrame: number;
+		stackPosition: number;
 	};
 
 	type ManualWindowAdjustment = {
@@ -47,16 +64,19 @@
 	type CompactDrawer = "explorer" | "tags";
 
 	let filesResponse = $state<FilesResponse | null>(null);
+	let seriesResponse = $state<SeriesCatalogResponse | null>(null);
 	let loadError = $state<string | null>(null);
 
 	let openTabs = $state<OpenTabState[]>([]);
+	let activeTabId = $state<string | null>(null);
 	let activeFileIndex = $state<number | null>(null);
 	let currentFrame = $state(0);
+	let stackPosition = $state(0);
 	let cinePlaying = $state(false);
 	let cineFps = $state(10);
 	let cineMode = $state<CineMode>("loop");
 	let cineDirection = $state<CineDirection>(1);
-	let lastCineFileIndex = $state<number | null>(null);
+	let lastCineStackId = $state<string | null>(null);
 	let windowCenter = $state<number | null>(null);
 	let windowWidth = $state<number | null>(null);
 	let activeTool = $state<ActiveTool>('pan');
@@ -81,8 +101,21 @@
 	const activeFile = $derived(
 		activeFileIndex === null ? null : filesById.get(activeFileIndex) ?? null,
 	);
+	const activeLocatedStack = $derived(
+		activeFileIndex === null
+			? null
+			: findSeriesStackForFile(seriesResponse?.series ?? [], activeFileIndex),
+	);
+	const activeStack = $derived(activeLocatedStack?.stack ?? null);
+	const navigationFrameCount = $derived(activeStack?.frames.length ?? activeFile?.frame_count ?? 0);
 	const activeOrientation = $derived(activeFileIndex === null ? DEFAULT_ORIENTATION : orientationByFile[activeFileIndex] ?? DEFAULT_ORIENTATION);
 	const openTabFiles = $derived(resolveFilesById(filesById, openTabs.map((tab) => tab.fileIndex)));
+	const openTabFrameCounts = $derived(new Map(
+		openTabs.map((tab) => [
+			tab.fileIndex,
+			stackById(tab.id)?.frames.length ?? filesById.get(tab.fileIndex)?.frame_count ?? 0,
+		]),
+	));
 	const fileNavigatorWidthPx = $derived(fileNavigatorCollapsed ? FILE_NAV_COLLAPSED_WIDTH_PX : FILE_NAV_WIDTH_PX);
 	const tagPanelWidth = $derived(tagPanelCollapsed ? TAG_PANEL_COLLAPSED_WIDTH_PX : tagPanelWidthPx);
 
@@ -91,46 +124,92 @@
 	}
 
 	function defaultTabState(fileIndex: number): OpenTabState {
+		const located = findSeriesStackForFile(seriesResponse?.series ?? [], fileIndex);
+		const position = located ? framePosition(located.stack, fileIndex, 0) ?? 0 : 0;
+		const frame = located ? frameAtPosition(located.stack, position) : null;
 		return {
-			fileIndex,
-			currentFrame: 0,
+			id: navigationTabId(seriesResponse?.series ?? [], fileIndex),
+			fileIndex: frame?.file_index ?? fileIndex,
+			currentFrame: frame?.frame_index ?? 0,
+			stackPosition: position,
 		};
 	}
 
 	function saveActiveTabState() {
-		if (activeFileIndex === null) return;
-		openTabs = openTabs.map((tab) => tab.fileIndex === activeFileIndex
+		if (activeTabId === null || activeFileIndex === null) return;
+		const tabId = activeTabId;
+		const fileIndex = activeFileIndex;
+		openTabs = openTabs.map((tab) => tab.id === tabId
 			? {
 				...tab,
+				fileIndex,
 				currentFrame,
+				stackPosition,
 			}
 			: tab);
 	}
 
 	function loadTabState(tab: OpenTabState | null) {
 		if (!tab) {
+			activeTabId = null;
 			activeFileIndex = null;
 			currentFrame = 0;
+			stackPosition = 0;
 			return;
 		}
 
+		activeTabId = tab.id;
 		activeFileIndex = tab.fileIndex;
 		currentFrame = tab.currentFrame;
+		stackPosition = tab.stackPosition;
 	}
 
 	function activateOpenTab(fileIndex: number) {
 		const target = openTabs.find((tab) => tab.fileIndex === fileIndex);
 		if (!target) return;
-		if (activeFileIndex !== fileIndex) {
+		if (activeTabId !== target.id) {
 			saveActiveTabState();
 		}
 		loadTabState(target);
 	}
 
+	function stackById(id: string | null): SeriesStackSummary | null {
+		if (id === null) return null;
+		for (const series of seriesResponse?.series ?? []) {
+			const stack = series.stacks.find((candidate) => candidate.id === id);
+			if (stack) return stack;
+		}
+		return null;
+	}
+
+	function setStackPosition(position: number) {
+		const stack = stackById(activeTabId) ?? activeStack;
+		const frame = frameAtPosition(stack, position);
+		if (!frame) return;
+		stackPosition = frame.virtual_index;
+		activeFileIndex = frame.file_index;
+		currentFrame = frame.frame_index;
+		if (activeTabId !== null) {
+			openTabs = openTabs.map((tab) => tab.id === activeTabId
+				? {
+					...tab,
+					fileIndex: frame.file_index,
+					currentFrame: frame.frame_index,
+					stackPosition: frame.virtual_index,
+				}
+				: tab);
+		}
+	}
+
 	function openOrActivateFile(fileIndex: number) {
-		const existing = openTabs.find((tab) => tab.fileIndex === fileIndex);
+		const id = navigationTabId(seriesResponse?.series ?? [], fileIndex);
+		const existing = openTabs.find((tab) => tab.id === id);
 		if (existing) {
-			activateOpenTab(fileIndex);
+			if (activeTabId !== existing.id) saveActiveTabState();
+			loadTabState(existing);
+			const stack = stackById(id);
+			const position = stack ? framePosition(stack, fileIndex, 0) : null;
+			if (position !== null) setStackPosition(position);
 			return;
 		}
 
@@ -201,9 +280,10 @@
 	function closeOpenTab(fileIndex: number) {
 		const closingIndex = openTabs.findIndex((tab) => tab.fileIndex === fileIndex);
 		if (closingIndex === -1) return;
+		const closingId = openTabs[closingIndex]?.id;
 
-		const wasActive = activeFileIndex === fileIndex;
-		const remaining = openTabs.filter((tab) => tab.fileIndex !== fileIndex);
+		const wasActive = activeTabId === closingId;
+		const remaining = openTabs.filter((tab) => tab.id !== closingId);
 		openTabs = remaining;
 
 		if (!wasActive) return;
@@ -311,10 +391,31 @@
 		return filesById.get(fileIndex) ?? null;
 	}
 
-	function applyFilesResponse(response: FilesResponse) {
-		filesResponse = response;
-		if (activeFileIndex === null && openTabs.length === 0 && response.files.length > 0) {
-			openOrActivateFile(response.files[0].index);
+	function applyCatalogResponses(files: FilesResponse, series: SeriesCatalogResponse) {
+		seriesResponse = series;
+		filesResponse = files;
+		if (activeFileIndex === null && openTabs.length === 0 && files.files.length > 0) {
+			openOrActivateFile(files.files[0].index);
+			return;
+		}
+		if (activeFileIndex !== null && activeTabId !== null) {
+			const located = findSeriesStackForFile(series.series, activeFileIndex);
+			if (located && activeTabId !== located.stack.id) {
+				const previousId = activeTabId;
+				activeTabId = located.stack.id;
+				openTabs = openTabs.map((tab) => tab.id === previousId
+					? { ...tab, id: located.stack.id }
+					: tab);
+			}
+			const position = located
+				? framePosition(located.stack, activeFileIndex, currentFrame)
+				: null;
+			if (position !== null) {
+				stackPosition = position;
+				openTabs = openTabs.map((tab) => tab.id === activeTabId
+					? { ...tab, stackPosition: position }
+					: tab);
+			}
 		}
 	}
 
@@ -389,11 +490,31 @@
 	});
 
 	$effect(() => {
-		const fileIndex = activeFileIndex;
-		if (fileIndex === lastCineFileIndex) return;
-		lastCineFileIndex = fileIndex;
+		const stackId = activeTabId;
+		if (stackId === lastCineStackId) return;
+		lastCineStackId = stackId;
 		cinePlaying = false;
 		cineDirection = 1;
+	});
+
+	$effect(() => {
+		const playing = cinePlaying;
+		const totalFrames = navigationFrameCount;
+		const position = stackPosition;
+		const fps = cineFps;
+		const mode = cineMode;
+		const direction = cineDirection;
+		if (playing && totalFrames <= 1) {
+			cinePlaying = false;
+			return;
+		}
+		if (!playing || totalFrames <= 1) return;
+		const timer = window.setTimeout(() => {
+			const step = nextCineStep(position, totalFrames, mode, direction);
+			cineDirection = step.direction;
+			setStackPosition(step.frame);
+		}, cineFrameIntervalMs(fps));
+		return () => window.clearTimeout(timer);
 	});
 
 	$effect(() => {
@@ -434,13 +555,13 @@
 		let cancelled = false;
 		let pollTimer: number | null = null;
 
-		const pollFiles = async () => {
+		const pollCatalog = async () => {
 			try {
-				const response = await fetchFiles();
+				const [files, series] = await Promise.all([fetchFiles(), fetchSeries()]);
 				if (cancelled) return;
-				applyFilesResponse(response);
-				if (!response.scan_complete) {
-					pollTimer = window.setTimeout(pollFiles, 500);
+				applyCatalogResponses(files, series);
+				if (!files.scan_complete || !series.scan_complete) {
+					pollTimer = window.setTimeout(pollCatalog, 500);
 				}
 			} catch (error) {
 				if (cancelled) return;
@@ -448,11 +569,11 @@
 					loadError = error instanceof Error ? error.message : String(error);
 					return;
 				}
-				pollTimer = window.setTimeout(pollFiles, 1000);
+				pollTimer = window.setTimeout(pollCatalog, 1000);
 			}
 		};
 
-		pollFiles();
+		pollCatalog();
 		return () => {
 			cancelled = true;
 			if (pollTimer !== null) {
@@ -490,6 +611,7 @@
 			</button>
 			<OpenImageTabs
 				openFiles={openTabFiles}
+				frameCounts={openTabFrameCounts}
 				activeFileIndex={activeFileIndex}
 				onactivate={activateOpenTab}
 				onclose={closeOpenTab}
@@ -562,12 +684,17 @@
 						{cineFps}
 						{cineMode}
 						bind:cineDirection
+						navigationFrameCount={navigationFrameCount}
+						navigationPosition={stackPosition}
+						onnavigationchange={setStackPosition}
+						externalCineNavigation={true}
 						onreset={resetViewport}
 						onmanualwindowlevel={recordManualWindowLevel}
 					/>
 					<FrameSlider
-						{activeFile}
-						bind:currentFrame
+						totalFrames={navigationFrameCount}
+						currentPosition={stackPosition}
+						onpositionchange={setStackPosition}
 						bind:cinePlaying
 						bind:cineFps
 						bind:cineMode

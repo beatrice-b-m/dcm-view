@@ -3,11 +3,13 @@
 
 	let {
 		openFiles,
+		frameCounts,
 		activeFileIndex,
 		onactivate,
 		onclose,
 	}: {
 		openFiles: FileSummary[];
+		frameCounts: ReadonlyMap<number, number>;
 		activeFileIndex: number | null;
 		onactivate: (index: number) => void;
 		onclose: (index: number) => void;
@@ -45,7 +47,7 @@
 					onclick={() => onactivate(file.index)}
 				>
 					<span class="tab-label">{tabLabel(file)}</span>
-					<span class="tab-detail">{file.has_pixels ? `${file.frame_count}f` : "tags"}</span>
+					<span class="tab-detail">{file.has_pixels ? `${frameCounts.get(file.index) ?? file.frame_count}i` : "tags"}</span>
 				</button>
 				<button
 					type="button"

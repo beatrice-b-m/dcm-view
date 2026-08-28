@@ -107,6 +107,10 @@
 		cineFps,
 		cineMode,
 		cineDirection = $bindable(),
+		navigationFrameCount,
+		navigationPosition,
+		onnavigationchange,
+		externalCineNavigation = false,
 	}: {
 		activeFile: FileSummary;
 		currentFrame: number;
@@ -123,6 +127,10 @@
 		cineFps: number;
 		cineMode: CineMode;
 		cineDirection: CineDirection;
+		navigationFrameCount: number;
+		navigationPosition: number;
+		onnavigationchange: (position: number) => void;
+		externalCineNavigation?: boolean;
 	} = $props();
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
@@ -1173,10 +1181,12 @@ function startDisplayPrefetch(
 	$effect(() => {
 		const file = activeFile;
 		const playing = cinePlaying;
+		const externallyManaged = externalCineNavigation;
 		const fps = cineFps;
 		const playbackMode = cineMode;
 		const mode = pipelineMode;
 		const windowOptions = currentDisplayWindowOptions();
+		if (externallyManaged) return;
 		const canPlay = canRunCinePlayback(mode, file.has_pixels, file.frame_count);
 		if (playing && !canPlay) {
 			cinePlaying = false;
@@ -1383,6 +1393,11 @@ function startDisplayPrefetch(
 		event.preventDefault();
 
 		const { dx, dy } = wheelDeltaPixels(event);
+		if (activeTool === "scroll" && navigationFrameCount > 1 && dy !== 0) {
+			cinePlaying = false;
+			onnavigationchange(navigationPosition + (dy > 0 ? 1 : -1));
+			return;
+		}
 		if (event.ctrlKey || event.metaKey) {
 			zoomByWheelDelta(dy, event.clientX, event.clientY, PINCH_ZOOM_SENSITIVITY);
 			return;
@@ -1461,11 +1476,11 @@ function startDisplayPrefetch(
 					nextDragState = startZoomDrag(event);
 					break;
 				case "scroll":
-					if (activeFile.frame_count > 1) {
+					if (navigationFrameCount > 1) {
 						nextDragState = {
 							mode: "scroll_drag",
 							startY: event.clientY,
-							baseFrame: currentFrame,
+							baseFrame: navigationPosition,
 						};
 					}
 					break;
@@ -1525,11 +1540,13 @@ function startDisplayPrefetch(
 			return;
 		}
 
-		if (dragState.mode === "scroll_drag" && activeFile.frame_count > 1) {
+		if (dragState.mode === "scroll_drag" && navigationFrameCount > 1) {
 			const dy = event.clientY - dragState.startY;
 			const frameDelta = Math.round(dy / DRAG_PIXELS_PER_FRAME);
 			cinePlaying = false;
-			currentFrame = Math.max(0, Math.min(activeFile.frame_count - 1, dragState.baseFrame + frameDelta));
+			onnavigationchange(
+				Math.max(0, Math.min(navigationFrameCount - 1, dragState.baseFrame + frameDelta)),
+			);
 			return;
 		}
 
@@ -1701,7 +1718,8 @@ function startDisplayPrefetch(
 			{/if}
 		</div>
 		<div class="overlay">
-			<span>frame {currentFrame + 1} / {activeFile.frame_count}</span>
+			<span>image {navigationPosition + 1} / {navigationFrameCount}</span>
+			<span>source frame {currentFrame + 1} / {activeFile.frame_count}</span>
 			<span>W: {Math.round(displayWindow.ww)} · C: {Math.round(displayWindow.wc)}</span>
 		</div>
 		<div class="roi-list">
