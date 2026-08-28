@@ -4,6 +4,7 @@ mod error;
 mod jpeg;
 mod jpeg2000;
 mod native;
+mod native_layout;
 mod render;
 mod rle;
 mod service;
