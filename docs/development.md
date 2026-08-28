@@ -179,5 +179,7 @@ The [architecture and test model](architecture.md) is normative. In brief:
 
 Backend frame cache budgets are currently 256 MiB for display PNGs and 384 MiB
 for raw sample frames. The frontend also keeps active frame blobs, raw buffers,
-and rendered bitmaps in memory for responsiveness, so cache budget changes
-should consider total browser plus server memory pressure.
+and rendered bitmaps in memory for responsiveness. Frontend retention follows
+the selected logical stack rather than an individual source file, and releases
+entries through byte-budgeted LRU eviction or stack disposal. Cache budget
+changes should therefore consider total browser plus server memory pressure.

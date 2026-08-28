@@ -96,6 +96,16 @@ Up/Down shortcuts use that order (including the active filter), so file
 selection follows the explorer presentation rather than registry insertion
 order.
 
+`App.svelte` gives `ImageViewport` one ordered logical-frame sequence for the
+active tab. A sequence may describe frames from one multiframe object, many
+single-frame CT/MR objects, or a mixture of both. Viewport display and raw
+resources are keyed by source file/frame identity but retained for the logical
+tab lifetime, so crossing a source-file boundary does not clear already loaded
+frames. Byte-budgeted LRU eviction is the only active-stack discard policy;
+near-frame prefetch does not prune previously visited frames. Cine resolves
+logical positions to source frames and uses the same prepare-then-render cache
+path as manual navigation.
+
 ## Executable HTTP Contract
 
 ```mermaid
