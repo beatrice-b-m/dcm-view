@@ -14,6 +14,7 @@
 	import FrameSlider from "./lib/FrameSlider.svelte";
 	import ImageViewport from "./lib/ImageViewport.svelte";
 	import OpenImageTabs from "./lib/OpenImageTabs.svelte";
+	import ReferenceNavigator from "./lib/ReferenceNavigator.svelte";
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
@@ -223,6 +224,33 @@
 		openOrActivateFile(fileIndex);
 		if (window.matchMedia("(max-width: 519px)").matches) {
 			closeCompactDrawer();
+		}
+	}
+
+	function openReferenceTarget(fileIndex: number, frameIndex: number) {
+		const file = filesById.get(fileIndex);
+		if (
+			!file
+			|| !Number.isInteger(frameIndex)
+			|| frameIndex < 0
+			|| frameIndex >= file.frame_count
+		) return;
+
+		openOrActivateFile(fileIndex);
+		const stack = stackById(activeTabId);
+		const position = stack ? framePosition(stack, fileIndex, frameIndex) : null;
+		if (position !== null) {
+			setStackPosition(position);
+			return;
+		}
+
+		activeFileIndex = fileIndex;
+		currentFrame = frameIndex;
+		stackPosition = frameIndex;
+		if (activeTabId !== null) {
+			openTabs = openTabs.map((tab) => tab.id === activeTabId
+				? { ...tab, fileIndex, currentFrame: frameIndex, stackPosition: frameIndex }
+				: tab);
 		}
 	}
 
@@ -670,6 +698,11 @@
 				{#if activeFile === null}
 					<div class="empty-viewer">Open a file from the sidebar</div>
 				{:else}
+					<ReferenceNavigator
+						fileIndex={activeFile.index}
+						files={filesResponse.files}
+						onopenreference={openReferenceTarget}
+					/>
 					<ImageViewport
 						{activeFile}
 						bind:currentFrame
@@ -887,7 +920,7 @@
 
 	.viewer-column {
 		display: grid;
-		grid-template-rows: minmax(0, 1fr) auto;
+		grid-template-rows: auto minmax(0, 1fr) auto;
 		min-width: 0;
 		min-height: 0;
 		background: var(--surface-viewport);
