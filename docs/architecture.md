@@ -82,8 +82,12 @@ truth.
 
 The frontend root is `App.svelte`. It composes `FileNavigator`,
 `OpenImageTabs`, `ViewerToolbar`, `ImageViewport`, `FrameSlider`, `TagPanel`,
-and `StatusBar`. Components use `frontend/src/api.ts`; new endpoint fetches
-should not be introduced directly inside components.
+`ReferenceNavigator`, and `StatusBar`. `ReferenceNavigator` retains declared
+identity when a target is absent and routes validated local file/frame matches
+through the same tab and stack state as ordinary navigation; it does not imply
+semantic rendering of the referencing object. Components use
+`frontend/src/api.ts`; new endpoint fetches should not be introduced directly
+inside components.
 
 ## Executable HTTP Contract
 
