@@ -49,6 +49,7 @@
 		RevisionedPersistenceController,
 		type PersistenceSnapshot,
 	} from "./revisionedPersistence";
+	import { trackForegroundRequest } from "./requestIndicator";
 	import {
 		renderRawFrameToRgba,
 		resolveDisplayWindow,
@@ -197,6 +198,7 @@
 		string,
 		{ entry: DisplayFrameCacheEntry; promise: Promise<ImageBitmap> }
 	>();
+	const displayNetworkPromises = new Map<string, Promise<Blob>>();
 	const displayFetchPromises = new Map<string, Promise<DisplayFrameCacheEntry>>();
 	let lastRenderedDisplayFrame: { fileIndex: number; frameIndex: number } | null = null;
 	const displayRenderWaiters = new Set<{
@@ -534,6 +536,7 @@
 		displayRenderWaiters.clear();
 		displayFrameCache.clear();
 		displayDecodePromises.clear();
+		displayNetworkPromises.clear();
 		displayFetchPromises.clear();
 		lastRenderedDisplayFrame = null;
 	}
@@ -579,6 +582,7 @@
 		displayRenderWaiters.clear();
 		displayScopeCtrl = new AbortController();
 		displayFetchScopeKey = scopeKey;
+		displayNetworkPromises.clear();
 		displayFetchPromises.clear();
 		lastRenderedDisplayFrame = null;
 		return displayScopeCtrl.signal;
@@ -596,7 +600,21 @@
 		if (existing) return existing;
 
 		const signal = ensureDisplayFetchScope(windowOptions);
-		const request = fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal)
+		const networkRequest = fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal);
+		displayNetworkPromises.set(key, networkRequest);
+		void networkRequest.then(
+			() => {
+				if (displayNetworkPromises.get(key) === networkRequest) {
+					displayNetworkPromises.delete(key);
+				}
+			},
+			() => {
+				if (displayNetworkPromises.get(key) === networkRequest) {
+					displayNetworkPromises.delete(key);
+				}
+			},
+		);
+		const request = networkRequest
 			.then(async (blob) => {
 				const entry = cacheDisplayFrame(key, blob);
 				if (!entry) throw new Error("Display frame exceeded cache budget");
@@ -924,8 +942,15 @@ function startDisplayPrefetch(
 		const ctrl = rawRequestCtrl;
 
 		try {
-			const rawFrame = await fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
+			const rawFrameRequest = fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
+			trackForegroundRequest(
+				rawFrameRequest,
+				() => generation === requestGeneration,
+				(pending) => { loading = pending; },
+			);
+			const rawFrame = await rawFrameRequest;
 			if (ctrl.signal.aborted || generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
+			loading = false;
 			const validationError = validateRenderableRawFrame(rawFrame);
 			if (validationError) {
 				currentRawFrame = null;
@@ -950,8 +975,12 @@ function startDisplayPrefetch(
 				void runRawPrefetch(frames, position, direction, rawPrefetchCtrl.signal);
 			});
 		} catch (error) {
-			if ((error as Error).name === "AbortError") return;
+			if ((error as Error).name === "AbortError") {
+				if (generation === requestGeneration) loading = false;
+				return;
+			}
 			if (generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
+			loading = false;
 			currentRawFrame = null;
 			rawWindowLevelFallbackByFile = {
 				...rawWindowLevelFallbackByFile,
@@ -971,7 +1000,13 @@ function startDisplayPrefetch(
 		const windowOptions = currentDisplayWindowOptions();
 		const cacheKey = buildDisplayKey(fileIndex, frameIndex, windowOptions);
 		try {
-			const entry = await ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions);
+			const entryRequest = ensureDisplayFrameEntry(fileIndex, frameIndex, windowOptions);
+			trackForegroundRequest(
+				displayNetworkPromises.get(cacheKey),
+				() => generation === requestGeneration,
+				(pending) => { loading = pending; },
+			);
+			const entry = await entryRequest;
 			if (generation !== requestGeneration || !usesDisplayPipeline()) return;
 			loading = false;
 			loadError = null;
@@ -1272,7 +1307,6 @@ function startDisplayPrefetch(
 		void modePreset;
 		void modeWindowMode;
 
-		loading = true;
 		loadError = null;
 		if (mode === "diagnostic_wl") {
 			void loadRawFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
@@ -1689,7 +1723,10 @@ function startDisplayPrefetch(
 		<div class="placeholder">{loadError}</div>
 	{:else}
 		{#if loading}
-			<div class="loading">Loading frame…</div>
+			<div class="frame-request-indicator" role="status">
+				<span class="loading-wheel" aria-hidden="true"></span>
+				<span class="visually-hidden">Loading frame</span>
+			</div>
 		{/if}
 		<div
 			class="image-layer"
@@ -1868,21 +1905,50 @@ function startDisplayPrefetch(
 		stroke-width: 1;
 		vector-effect: non-scaling-stroke;
 	}
-	.placeholder,
-	.loading {
+	.placeholder {
 		color: var(--text-muted);
 	}
-	.loading {
+	.frame-request-indicator {
 		position: absolute;
 		top: 0.75rem;
 		left: 0.75rem;
-		font-size: 0.85rem;
 		z-index: 2;
-		padding: 0.3rem 0.5rem;
+		display: grid;
+		place-items: center;
+		width: 1.8rem;
+		height: 1.8rem;
 		background: rgba(28, 28, 30, 0.72);
 		border: 1px solid var(--border-subtle);
 		border-radius: var(--radius-control);
 		backdrop-filter: blur(14px);
+	}
+	.loading-wheel {
+		width: 0.9rem;
+		height: 0.9rem;
+		box-sizing: border-box;
+		border: 2px solid rgba(142, 142, 147, 0.24);
+		border-top-color: var(--accent);
+		border-radius: 50%;
+		animation: frame-request-spin 0.78s linear infinite;
+	}
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	@keyframes frame-request-spin {
+		to { transform: rotate(360deg); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.loading-wheel {
+			animation-duration: 1.8s;
+		}
 	}
 	.overlay {
 		position: absolute;
