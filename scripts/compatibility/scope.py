@@ -21,12 +21,9 @@ EXPECTED_FILE_COUNT = 165
 EXPECTED_GENERATED_CASE_COUNT = 146
 EXPECTED_IMPLEMENTED_UNPREPARED_COUNT = 4
 
-CONTRACT_FIELDS = (
+CONTRACT_IDENTITY_FIELDS = (
     "case_id",
     "dicom",
-    "expected_capabilities",
-    "expected_semantics",
-    "expected_visual_checks",
     "image",
     "known_stressors",
     "pixel_data",
@@ -53,7 +50,9 @@ def canonical_json(value: Any) -> bytes:
 
 
 def expected_contract(file_entry: dict[str, Any]) -> dict[str, Any]:
-    return {field: file_entry.get(field) for field in CONTRACT_FIELDS}
+    fields = set(CONTRACT_IDENTITY_FIELDS)
+    fields.update(key for key in file_entry if key.startswith("expected_"))
+    return {field: file_entry.get(field) for field in sorted(fields)}
 
 
 def contract_sha256(file_entry: dict[str, Any]) -> str:

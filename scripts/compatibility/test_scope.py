@@ -84,6 +84,18 @@ class ScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ScopeError, "file hash mismatch"):
             build_worklist(suite, corpus, enforce_prepared_baseline=False)
 
+    def test_typed_expected_fields_participate_in_contract_identity(self) -> None:
+        suite, corpus = self.make_suite()
+        extended_manifest = corpus / "extended" / "manifest.json"
+        manifest = json.loads(extended_manifest.read_text(encoding="utf-8"))
+        manifest["files"][0]["expected_geometry"] = {"slice_position_mm": 4.0}
+        write_json(extended_manifest, manifest)
+        result = build_worklist(suite, corpus, enforce_prepared_baseline=False)
+        self.assertEqual(result["summary"]["canonical_files"], 2)
+        self.assertEqual(
+            {len(row["occurrences"]) for row in result["canonical_files"]}, {1}
+        )
+
     def test_frozen_worklist_cannot_be_replaced(self) -> None:
         suite, _ = self.make_suite()
         output = suite / "artifacts" / "worklist.json"
