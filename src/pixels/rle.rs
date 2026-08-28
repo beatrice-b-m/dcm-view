@@ -11,6 +11,7 @@ use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
 use super::icc::select_icc_profile;
 use super::render::encode_windowed_luminance_png;
+use super::stored_bits::canonicalize_integer_samples;
 
 const RLE_HEADER_LEN: usize = 64;
 const RLE_MAX_SEGMENTS: usize = 15;
@@ -137,14 +138,23 @@ pub(crate) async fn decode_raw_rle(
 
 fn read_and_decode_frame(file: &FileEntry, frame: u32) -> Result<Vec<u8>> {
     let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
-    decode_rle_frame(
+    let mut decoded = decode_rle_frame(
         fragment.as_ref(),
         file.rows,
         file.columns,
         file.samples_per_pixel,
         file.bits_allocated,
     )
-    .map_err(anyhow::Error::from)
+    .map_err(anyhow::Error::from)?;
+    canonicalize_integer_samples(
+        &mut decoded,
+        file.bits_allocated,
+        file.series_metadata.native_pixel.bits_stored,
+        file.series_metadata.native_pixel.high_bit,
+        file.pixel_representation == 1,
+    )
+    .context("RLE stored-bit normalization failed")?;
+    Ok(decoded)
 }
 
 fn decode_rle_frame(

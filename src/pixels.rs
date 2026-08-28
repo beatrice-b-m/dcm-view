@@ -16,6 +16,7 @@ mod render;
 mod rle;
 mod service;
 mod shutter;
+mod stored_bits;
 mod syntax;
 mod window;
 

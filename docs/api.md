@@ -335,7 +335,7 @@ Supported raw paths:
 
 | Transfer syntax | Raw behavior |
 |---|---|
-| Uncompressed | Native samples normalized to little endian. Stored planar ordering is retained; one-bit samples are expanded to one byte each. Integer samples through 32 bits plus Float Pixel Data and Double Float Pixel Data are supported. |
+| Uncompressed | Native samples normalized to little endian. Stored planar ordering is retained; integer padding bits are masked and signed values extended from High Bit; one-bit samples are expanded to one byte each. Integer samples through 32 bits plus Float Pixel Data and Double Float Pixel Data are supported. |
 | JPEG Baseline / Extended | Decoded to 8-bit grayscale samples. |
 | JPEG Lossless | Decoded to 8-bit or 16-bit grayscale samples when supported by the codec stack. |
 | Grayscale JPEG 2000 | Decoded to 8-bit or 16-bit samples. |

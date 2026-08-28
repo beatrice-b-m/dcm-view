@@ -170,8 +170,10 @@ Native display decoding supports monochrome integer samples at 1, 8, 16, and
 32 bits, Float Pixel Data, Double Float Pixel Data, 8-bit RGB in either planar
 configuration, YBR_FULL, YBR_FULL_422, and palette color. Native raw responses
 retain stored sample ordering (including planar configuration) while
-normalizing multi-byte values to little endian; one-bit pixels are expanded to
-one byte per sample. Float and double-float objects are pixel-renderable, but
+normalizing multi-byte values to little endian. Integer sample fields are
+masked to Bits Stored and signed values are extended from High Bit so unused
+allocated bits never affect display or raw consumers; one-bit pixels are
+expanded to one byte per sample. Float and double-float objects are pixel-renderable, but
 real-world-value mapping remains a separate semantic capability rather than an
 implicit part of the display pipeline.
 

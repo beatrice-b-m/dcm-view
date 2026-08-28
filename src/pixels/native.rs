@@ -14,6 +14,7 @@ use super::overlay::apply_overlay_planes;
 use super::palette::palette_indices_to_rgb8;
 use super::render::apply_monochrome1_inversion;
 use super::shutter::apply_rectangular_shutter;
+use super::stored_bits::canonicalize_integer_samples;
 use super::window::{
     apply_modality_transform, apply_voi_lut_if_selected, apply_window, resolve_window_with_mode,
 };
@@ -52,9 +53,19 @@ fn decode_uncompressed_to_png_blocking(
     let bits_allocated = file.bits_allocated;
     let layout = native_frame_layout(file);
     let pixel_bytes = read_native_pixel_bytes(&object, file)?;
-    let frame_bytes = layout
+    let mut frame_bytes = layout
         .extract_display_frame(&pixel_bytes, frame)
         .context("frame decode failed: invalid native frame layout")?;
+    if native_pixel_data_kind(file) == NativePixelDataKind::Integer && bits_allocated > 1 {
+        canonicalize_integer_samples(
+            &mut frame_bytes,
+            bits_allocated,
+            file.series_metadata.native_pixel.bits_stored,
+            file.series_metadata.native_pixel.high_bit,
+            file.pixel_representation == 1,
+        )
+        .context("frame decode failed: invalid native stored-bit layout")?;
+    }
     let pixel_count = usize::try_from(rows)
         .ok()
         .and_then(|rows| {
@@ -318,9 +329,19 @@ fn read_raw_uncompressed_blocking(
     let samples_per_pixel = file.samples_per_pixel.max(1);
     let bits_allocated = file.bits_allocated;
     let pixel_bytes = read_native_pixel_bytes(&object, file)?;
-    let frame_bytes = native_frame_layout(file)
+    let mut frame_bytes = native_frame_layout(file)
         .extract_raw_frame(&pixel_bytes, frame)
         .context("frame decode failed: invalid native frame layout")?;
+    if native_pixel_data_kind(file) == NativePixelDataKind::Integer && bits_allocated > 1 {
+        canonicalize_integer_samples(
+            &mut frame_bytes,
+            bits_allocated,
+            file.series_metadata.native_pixel.bits_stored,
+            file.series_metadata.native_pixel.high_bit,
+            file.pixel_representation == 1,
+        )
+        .context("frame decode failed: invalid native stored-bit layout")?;
+    }
 
     let metadata = file.raw_metadata(rows, columns, bits_allocated, samples_per_pixel);
     Ok((Bytes::from(frame_bytes), metadata))
