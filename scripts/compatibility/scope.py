@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify prepared manifests and freeze a canonical compatibility worklist."""
+"""Freeze immutable, profile-isolated compatibility campaign worklists."""
 
 from __future__ import annotations
 
@@ -9,338 +9,139 @@ import json
 import os
 import sys
 import tempfile
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+try:
+    from scripts.compatibility.corpus import DEFAULT_LOCK, CorpusError, load_json, sha256_file, verify_manifest, verify_suite
+    from scripts.compatibility.policy import DEFAULT_POLICY, load_policy, policy_sha256, resolve
+except ModuleNotFoundError:
+    from corpus import DEFAULT_LOCK, CorpusError, load_json, sha256_file, verify_manifest, verify_suite  # type: ignore[no-redef]
+    from policy import DEFAULT_POLICY, load_policy, policy_sha256, resolve  # type: ignore[no-redef]
 
-WORKLIST_SCHEMA_VERSION = "0.1.0"
-DEFAULT_CORPUS_NAME = "viewer-baseline-b4ea0a4"
-DEFAULT_SOURCE_COMMIT = "b4ea0a450b63408f9f62709691b50dd50cb64594"
-EXPECTED_FILE_COUNT = 165
-EXPECTED_GENERATED_CASE_COUNT = 146
-EXPECTED_IMPLEMENTED_UNPREPARED_COUNT = 4
-
-CONTRACT_IDENTITY_FIELDS = (
-    "case_id",
-    "dicom",
-    "image",
-    "known_stressors",
-    "pixel_data",
-    "recipe",
-    "references",
-    "uids",
-)
-
+WORKLIST_SCHEMA_VERSION = "0.2.0"
+VALID_PROFILES = ("all", "legacy", "negative", "stress", "fuzz")
+CONTRACT_EXCLUDED_FIELDS = {"sha256", "size_bytes"}
 
 class ScopeError(RuntimeError):
-    """Raised when the prepared corpus cannot be identity-proven."""
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
+    pass
 
 def canonical_json(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
-
 def expected_contract(file_entry: dict[str, Any]) -> dict[str, Any]:
-    fields = set(CONTRACT_IDENTITY_FIELDS)
-    fields.update(key for key in file_entry if key.startswith("expected_"))
-    return {field: file_entry.get(field) for field in sorted(fields)}
-
+    return {key: value for key, value in sorted(file_entry.items()) if key not in CONTRACT_EXCLUDED_FIELDS}
 
 def contract_sha256(file_entry: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(expected_contract(file_entry))).hexdigest()
 
-
-def _load_object(path: Path) -> dict[str, Any]:
+def _file_row(profile: str, root: Path, manifest_sha256: str, entry: dict[str, Any]) -> dict[str, Any]:
+    relative, case_id, declared_hash = entry.get("path"), entry.get("case_id"), entry.get("sha256")
+    if not all(isinstance(value, str) and value for value in (relative, case_id, declared_hash)):
+        raise ScopeError(f"manifest entry lacks path/case/hash identity in {profile}")
+    selected = (root / relative).resolve()
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ScopeError(f"cannot read JSON object {path}: {error}") from error
-    if not isinstance(value, dict):
-        raise ScopeError(f"expected a JSON object in {path}")
-    return value
-
-
-def _resolve_manifest_path(root: Path, relative: str) -> Path:
-    candidate = (root / relative).resolve()
-    try:
-        candidate.relative_to(root.resolve())
+        selected.relative_to(root.resolve())
     except ValueError as error:
-        raise ScopeError(f"manifest path escapes corpus root: {relative}") from error
-    return candidate
+        raise ScopeError(f"manifest path escapes {profile} root: {relative}") from error
+    if not selected.is_file() or sha256_file(selected) != declared_hash:
+        raise ScopeError(f"manifest file hash mismatch: {selected}")
+    uids = entry.get("uids") or {}
+    sop_uid = uids.get("sop_instance_uid") if isinstance(uids, dict) else None
+    if profile not in {"negative", "fuzz"} and (not isinstance(sop_uid, str) or not sop_uid):
+        raise ScopeError(f"valid manifest entry lacks SOP Instance UID: {profile}:{relative}")
+    identity = {"profile": profile, "manifest_sha256": manifest_sha256, "case_id": case_id, "path": relative}
+    return {"kind": {"all": "valid", "legacy": "legacy", "negative": "negative", "stress": "stress"}[profile],
+            "manifest_identity": identity, "manifest_identity_sha256": hashlib.sha256(canonical_json(identity)).hexdigest(),
+            "case_id": case_id, "path": relative, "normalized_path": str(selected), "sha256": declared_hash,
+            "contract_sha256": contract_sha256(entry), "sop_instance_uid": sop_uid, "expected_contract": expected_contract(entry)}
 
-
-def _unavailable_inventory(
-    suite_root: Path,
-    generated_cases: set[str],
-    skipped_by_case: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    registry_path = suite_root / "cases" / "registry.json"
-    registry = _load_object(registry_path)
-    cases = registry.get("cases")
-    if not isinstance(cases, list):
-        raise ScopeError(f"registry cases must be an array: {registry_path}")
-
-    unavailable: list[dict[str, Any]] = []
-    for case in cases:
-        if not isinstance(case, dict) or not isinstance(case.get("case_id"), str):
-            raise ScopeError(f"registry contains an invalid case entry: {registry_path}")
-        case_id = case["case_id"]
-        if case_id in generated_cases:
+def build_worklist(suite_root: Path, profile_roots: dict[str, Path], *, lock_path: Path = DEFAULT_LOCK, policy_path: Path = DEFAULT_POLICY) -> dict[str, Any]:
+    if not profile_roots:
+        raise ScopeError("at least one explicit profile root is required")
+    unknown = set(profile_roots) - set(VALID_PROFILES)
+    if unknown:
+        raise ScopeError(f"unknown profiles: {sorted(unknown)}")
+    try:
+        lock = load_json(lock_path); verify_suite(suite_root, lock); policy = load_policy(policy_path)
+    except Exception as error:
+        raise ScopeError(str(error)) from error
+    manifests: list[dict[str, Any]] = []; files: list[dict[str, Any]] = []; qualifications: list[dict[str, Any]] = []; unavailable: list[dict[str, Any]] = []
+    seen: dict[str, str] = {}
+    for profile in VALID_PROFILES:
+        if profile not in profile_roots:
             continue
-        status = case.get("status")
-        if status not in {"implemented", "planned"}:
-            continue
-        manifest_rows = skipped_by_case.get(case_id, [])
-        reason_codes = sorted(
-            {row.get("reason_code", "not_selected") for row in manifest_rows}
-        )
-        unavailable.append(
-            {
-                "case_id": case_id,
-                "availability": "unavailable",
-                "registry_status": status,
-                "reason_codes": reason_codes or ["not_selected"],
-                "profiles": sorted(case.get("profiles", [])),
-                "requirements": case.get("requirements", {}),
-            }
-        )
-    return sorted(unavailable, key=lambda row: row["case_id"])
-
-
-def build_worklist(
-    suite_root: Path,
-    corpus_root: Path,
-    *,
-    source_commit: str = DEFAULT_SOURCE_COMMIT,
-    enforce_prepared_baseline: bool = True,
-) -> dict[str, Any]:
-    suite_root = suite_root.resolve()
-    corpus_root = corpus_root.resolve()
-    manifest_paths = sorted(corpus_root.glob("*/manifest.json"))
-    if not manifest_paths:
-        raise ScopeError(f"no prepared manifests found below {corpus_root}")
-
-    manifest_inventory: list[dict[str, Any]] = []
-    identities: dict[tuple[str, str], dict[str, Any]] = {}
-    occurrences: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    generated_cases: set[str] = set()
-    skipped_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
-
-    for manifest_path in manifest_paths:
-        root_name = manifest_path.parent.name
-        manifest = _load_object(manifest_path)
-        files = manifest.get("files")
-        skipped = manifest.get("skipped_cases")
-        if not isinstance(files, list) or not isinstance(skipped, list):
-            raise ScopeError(f"manifest arrays are missing in {manifest_path}")
-        manifest_inventory.append(
-            {
-                "root": root_name,
-                "path": str(manifest_path.relative_to(suite_root)),
-                "sha256": sha256_file(manifest_path),
-                "file_count": len(files),
-                "skipped_count": len(skipped),
-            }
-        )
-        for skipped_row in skipped:
-            if isinstance(skipped_row, dict) and isinstance(skipped_row.get("case_id"), str):
-                skipped_by_case[skipped_row["case_id"]].append(skipped_row)
-
-        for entry in files:
-            if not isinstance(entry, dict):
-                raise ScopeError(f"manifest file entry is not an object: {manifest_path}")
-            required = ("case_id", "path", "sha256", "uids")
-            if any(key not in entry for key in required):
-                raise ScopeError(f"manifest file entry lacks identity fields: {manifest_path}")
-            sop_instance_uid = entry["uids"].get("sop_instance_uid")
-            if not isinstance(sop_instance_uid, str) or not sop_instance_uid:
-                raise ScopeError(f"manifest file entry lacks SOP Instance UID: {manifest_path}")
-            file_path = _resolve_manifest_path(manifest_path.parent, entry["path"])
-            if not file_path.is_file():
-                raise ScopeError(f"manifest file is missing: {file_path}")
-            actual_sha256 = sha256_file(file_path)
-            if actual_sha256 != entry["sha256"]:
-                raise ScopeError(
-                    f"file hash mismatch for {file_path}: expected {entry['sha256']}, "
-                    f"observed {actual_sha256}"
-                )
-            identity = (actual_sha256, contract_sha256(entry))
-            existing = identities.get(identity)
-            if existing is None:
-                identities[identity] = {
-                    "case_id": entry["case_id"],
-                    "sha256": actual_sha256,
-                    "contract_sha256": identity[1],
-                    "sop_instance_uid": sop_instance_uid,
-                    "expected_contract": expected_contract(entry),
-                }
-            elif (
-                existing["case_id"] != entry["case_id"]
-                or existing["sop_instance_uid"] != sop_instance_uid
-            ):
-                raise ScopeError(
-                    "evidence reuse identity collision for "
-                    f"{root_name}/{entry['path']}"
-                )
-            occurrences[identity].append(
-                {
-                    "root": root_name,
-                    "case_id": entry["case_id"],
-                    "path": entry["path"],
-                    "normalized_path": str(file_path),
-                    "sop_instance_uid": sop_instance_uid,
-                }
-            )
-            generated_cases.add(entry["case_id"])
-
-    canonical_files: list[dict[str, Any]] = []
-    for identity in sorted(
-        identities,
-        key=lambda key: (
-            identities[key]["case_id"],
-            identities[key]["sop_instance_uid"],
-            key,
-        ),
-    ):
-        evidence_rows = sorted(
-            occurrences[identity], key=lambda row: (row["root"], row["path"])
-        )
-        canonical_files.append(
-            {
-                **identities[identity],
-                "selected": evidence_rows[0],
-                "occurrences": evidence_rows,
-            }
-        )
-
-    unavailable = _unavailable_inventory(
-        suite_root, generated_cases, skipped_by_case
-    )
-    implemented_unprepared = [
-        row for row in unavailable if row["registry_status"] == "implemented"
-    ]
-    planned = [row for row in unavailable if row["registry_status"] == "planned"]
-
-    if enforce_prepared_baseline:
-        observed = (
-            len(canonical_files),
-            len(generated_cases),
-            len(implemented_unprepared),
-        )
-        expected = (
-            EXPECTED_FILE_COUNT,
-            EXPECTED_GENERATED_CASE_COUNT,
-            EXPECTED_IMPLEMENTED_UNPREPARED_COUNT,
-        )
-        if observed != expected:
-            raise ScopeError(
-                "prepared baseline inventory changed: "
-                f"expected files/cases/implemented-unprepared {expected}, observed {observed}"
-            )
-
+        root = profile_roots[profile].resolve()
+        try:
+            verified = verify_manifest(profile, root, lock); manifest = load_json(root / "manifest.json")
+        except CorpusError as error:
+            raise ScopeError(str(error)) from error
+        manifests.append({**verified, "root": str(root)})
+        for entry in manifest.get("files", []):
+            row = _file_row(profile, root, verified["sha256"], entry); key = row["manifest_identity_sha256"]
+            content = row["contract_sha256"]
+            if key in seen:
+                if seen[key] != content:
+                    raise ScopeError(f"duplicate manifest identity has conflicting contract: {profile}:{row['path']}")
+                continue
+            seen[key] = content; rule = resolve(policy, entry, profile)
+            row["policy"] = {"rule_id": rule["id"], "classification": rule["classification"], "required_assertions": rule["required_assertions"],
+                             "semantic_context_assertions": rule["semantic_context_assertions"], "expected_unsupported": rule["expected_unsupported"]}
+            files.append(row)
+        for entry in manifest.get("qualifications", []):
+            rule = resolve(policy, entry, profile)
+            qualifications.append({"profile": profile, "case_id": entry["case_id"], "contract": entry,
+                                   "contract_sha256": hashlib.sha256(canonical_json(entry)).hexdigest(),
+                                   "policy": {"rule_id": rule["id"], "classification": rule["classification"], "required_assertions": rule["required_assertions"]}})
+        unavailable.extend({"profile": profile, **entry} for entry in manifest.get("skipped_cases", []))
+    files.sort(key=lambda row: (row["manifest_identity"]["profile"], row["case_id"], row["path"]))
     worklist: dict[str, Any] = {
         "worklist_schema_version": WORKLIST_SCHEMA_VERSION,
-        "corpus": {
-            "suite_root": str(suite_root),
-            "corpus_root": str(corpus_root),
-            "source_commit": source_commit,
-            "manifest_count": len(manifest_inventory),
-            "manifests": manifest_inventory,
-        },
-        "evidence_policy": {
-            "compatibility_scope": "viewer_behavior_not_dicom_conformance",
-            "deduplication": "file_sha256_and_expected_contract_sha256",
-            "execution_safety_outcomes": ["safe", "timeout", "crash", "flaky"],
-            "compatibility_outcomes": [
-                "full_support",
-                "metadata_only",
-                "known_gap",
-                "failure",
-                "unavailable",
-            ],
-        },
-        "summary": {
-            "canonical_files": len(canonical_files),
-            "generated_logical_cases": len(generated_cases),
-            "manifest_occurrences": sum(len(rows) for rows in occurrences.values()),
-            "implemented_unprepared": len(implemented_unprepared),
-            "planned_unavailable": len(planned),
-        },
-        "canonical_files": canonical_files,
-        "unavailable": unavailable,
-    }
-    worklist["worklist_sha256"] = hashlib.sha256(canonical_json(worklist)).hexdigest()
-    return worklist
+        "suite": {"root": str(suite_root.resolve()), "commit": lock["suite"]["commit"]},
+        "inputs": {"lock": str(lock_path.resolve()), "lock_sha256": sha256_file(lock_path), "policy": str(policy_path.resolve()),
+                   "policy_sha256": policy_sha256(policy), "profiles": [p for p in VALID_PROFILES if p in profile_roots], "manifests": manifests},
+        "models": {"valid_files": [r for r in files if r["kind"] == "valid"], "legacy_files": [r for r in files if r["kind"] == "legacy"],
+                   "negative_inputs": [r for r in files if r["kind"] == "negative"], "stress_files": [r for r in files if r["kind"] == "stress"],
+                   "stress_scenarios": [r for r in qualifications if r["profile"] == "stress"], "fuzz_qualifications": [r for r in qualifications if r["profile"] == "fuzz"]},
+        "files": files, "unavailable": unavailable,
+        "summary": {"files": len(files), "logical_cases": len({(r['manifest_identity']['profile'], r['case_id']) for r in files}),
+                    "qualifications": len(qualifications), "unavailable_selected_profiles": len(unavailable)}}
+    worklist["worklist_sha256"] = hashlib.sha256(canonical_json(worklist)).hexdigest(); return worklist
 
+def load_worklist(path: Path) -> dict[str, Any]:
+    worklist = load_json(path); version = worklist.get("worklist_schema_version")
+    if version != WORKLIST_SCHEMA_VERSION:
+        raise ScopeError(f"incompatible worklist schema {version!r}; regenerate with scope.py (expected {WORKLIST_SCHEMA_VERSION})")
+    declared = worklist.get("worklist_sha256"); unhashed = {k: v for k, v in worklist.items() if k != "worklist_sha256"}
+    observed = hashlib.sha256(canonical_json(unhashed)).hexdigest()
+    if declared != observed:
+        raise ScopeError(f"worklist content hash mismatch: expected {declared}, observed {observed}")
+    return worklist
 
 def write_immutable_json(path: Path, value: dict[str, Any]) -> None:
     encoded = json.dumps(value, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     if path.exists():
-        if path.read_bytes() == encoded:
-            return
+        if path.read_bytes() == encoded: return
         raise ScopeError(f"refusing to replace non-identical frozen worklist: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    path.parent.mkdir(parents=True, exist_ok=True); descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o444)
-    finally:
-        try:
-            Path(temporary).unlink()
-        except FileNotFoundError:
-            pass
+        with os.fdopen(descriptor, "wb") as stream: stream.write(encoded); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path); path.chmod(0o444)
+    finally: Path(temporary).unlink(missing_ok=True)
 
+def _profile_root(value: str) -> tuple[str, Path]:
+    profile, separator, root = value.partition("=")
+    if not separator or profile not in VALID_PROFILES or not root: raise argparse.ArgumentTypeError("expected PROFILE=ROOT")
+    return profile, Path(root)
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--suite-root",
-        type=Path,
-        default=os.environ.get("DCMVIEW_COMPAT_SUITE_ROOT"),
-        required="DCMVIEW_COMPAT_SUITE_ROOT" not in os.environ,
-    )
-    parser.add_argument("--corpus-root", type=Path)
-    parser.add_argument("--source-commit", default=DEFAULT_SOURCE_COMMIT)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--allow-other-inventory", action="store_true")
-    return parser.parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--suite-root", type=Path, required=True)
+    parser.add_argument("--profile-root", action="append", type=_profile_root, required=True); parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK)
+    parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY); parser.add_argument("--output", type=Path, required=True); args = parser.parse_args(argv)
+    roots = dict(args.profile_root)
+    if len(roots) != len(args.profile_root): print("compatibility scope error: duplicate profile root", file=sys.stderr); return 2
+    try: worklist = build_worklist(args.suite_root, roots, lock_path=args.lock, policy_path=args.policy); write_immutable_json(args.output.resolve(), worklist)
+    except ScopeError as error: print(f"compatibility scope error: {error}", file=sys.stderr); return 2
+    print(json.dumps({"output": str(args.output.resolve()), **worklist["summary"]}, sort_keys=True)); return 0
 
-
-def main(argv: Optional[list[str]] = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
-    suite_root = args.suite_root.resolve()
-    corpus_root = (
-        args.corpus_root.resolve()
-        if args.corpus_root
-        else suite_root / "generated" / DEFAULT_CORPUS_NAME
-    )
-    try:
-        worklist = build_worklist(
-            suite_root,
-            corpus_root,
-            source_commit=args.source_commit,
-            enforce_prepared_baseline=not args.allow_other_inventory,
-        )
-        write_immutable_json(args.output.resolve(), worklist)
-    except ScopeError as error:
-        print(f"compatibility scope error: {error}", file=sys.stderr)
-        return 2
-    print(json.dumps({"output": str(args.output.resolve()), **worklist["summary"]}))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__": raise SystemExit(main())
