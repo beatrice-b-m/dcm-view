@@ -10,4 +10,11 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(evidence["results"][0]["status"], "expected_unsupported")
         self.assertEqual(build_viewer_report(evidence)["summary"]["passed"], 1)
 
+    def test_required_assertions_may_be_not_applicable_for_a_case(self) -> None:
+        worklist = {"suite": {"commit": "a"*40}, "inputs": {"policy_sha256": "b"*64, "manifests": [{"profile": "all", "sha256": "c"*64}]}, "files": [{"manifest_identity": {"profile": "all"}, "case_id": "classic/sc/x", "path": "x.dcm", "expected_contract": {"dicom": {}}, "policy": {"classification": "pixel_faithful_interactive", "required_assertions": ["reference_closure"], "semantic_context_assertions": [], "expected_unsupported": None, "rule_id": "image"}}]}
+        base = {"generated_at": "now", "viewer": {"version": "dcmview 1", "sha256": "d"*64, "binary": "/bin/dcmview"}, "run": {"started_at": "a", "completed_at": "b", "command": ["dcmview"], "timeouts_seconds": {"shard": 1}}, "artifacts": [], "results": [{"root": "all", "case_id": "classic/sc/x", "path": "x.dcm", "execution_safety": "safe", "observations": {}, "http": {}, "timings_ms": {"total": 1}, "errors": []}]}
+        evidence = build_evidence_report(base, worklist, "e"*40, [])
+        self.assertEqual(evidence["results"][0]["assertions"][0]["status"], "not_applicable")
+        self.assertEqual(evidence["results"][0]["status"], "passed")
+
 if __name__ == "__main__": unittest.main()

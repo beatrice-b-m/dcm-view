@@ -38,7 +38,7 @@ def _status(result: dict[str, Any], policy: dict[str, Any], assertions: list[dic
     if policy["classification"] == "controlled_unsupported":
         expected = set((policy.get("expected_unsupported") or {}).get("statuses", []))
         return "expected_unsupported" if any(status in expected for status in statuses) else "unexpected_unsupported"
-    if any(row["status"] != "passed" for row in assertions): return "failed"
+    if any(row["status"] == "failed" for row in assertions): return "failed"
     return "passed"
 
 def build_evidence_report(base: dict[str, Any], worklist: dict[str, Any], viewer_commit: str, build_features: list[str]) -> dict[str, Any]:
