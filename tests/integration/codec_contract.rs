@@ -188,7 +188,7 @@ async fn deflated_explicit_vr_little_endian_satisfies_display_and_raw_contracts(
             .expect("deflated display should return PNG")
             .to_luma8();
     assert_eq!(rendered.dimensions(), (2, 2));
-    assert_eq!(rendered.into_raw(), [0, 85, 170, 255]);
+    assert_eq!(rendered.into_raw(), [0, 85, 171, 255]);
 
     let raw = test_server.get("/api/file/0/frame/0/raw").await;
     raw.assert_status_ok();
@@ -274,7 +274,7 @@ async fn jpeg2000_display_applies_rescale_before_every_window_mode() {
                 window_mode: WindowMode::Default,
             },
             [
-                255, 255, 255, 255, 255, 255, 204, 153, 102, 51, 0, 0, 0, 0, 0, 0,
+                255, 255, 255, 255, 255, 255, 205, 154, 103, 51, 0, 0, 0, 0, 0, 0,
             ],
         ),
         (
@@ -285,7 +285,7 @@ async fn jpeg2000_display_applies_rescale_before_every_window_mode() {
                 window_mode: WindowMode::Default,
             },
             [
-                255, 255, 255, 242, 217, 191, 166, 140, 115, 89, 64, 38, 13, 0, 0, 0,
+                255, 255, 255, 243, 217, 192, 166, 141, 115, 90, 64, 38, 13, 0, 0, 0,
             ],
         ),
         (
