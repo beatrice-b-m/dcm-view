@@ -627,6 +627,7 @@ pub struct ParametricMapContext {
 #[derive(Debug, Clone, Serialize)]
 pub struct RealWorldValueMappingSummary {
     pub source: String,
+    pub source_sop_instance_uid: Option<String>,
     pub label: Option<String>,
     pub first_value_mapped: Option<f64>,
     pub last_value_mapped: Option<f64>,

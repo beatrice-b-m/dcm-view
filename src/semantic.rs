@@ -224,7 +224,7 @@ fn parametric_map_context(
     resolved: &[ResolvedReferenceEdge],
 ) -> ParametricMapContext {
     let mut mappings = Vec::new();
-    collect_rwvm_mappings(object, "embedded", &mut mappings);
+    collect_rwvm_mappings(object, "embedded", None, &mut mappings);
     let mut warnings = Vec::new();
     for reference in referenced_rwvm_instances(object) {
         let matches = files
@@ -238,7 +238,12 @@ fn parametric_map_context(
             {
                 Ok(mapping_object) => {
                     let before = mappings.len();
-                    collect_rwvm_mappings(&mapping_object, "referenced", &mut mappings);
+                    collect_rwvm_mappings(
+                        &mapping_object,
+                        "referenced",
+                        Some(reference.as_str()),
+                        &mut mappings,
+                    );
                     if mappings.len() == before {
                         warnings.push(format!(
                             "referenced RWVM {reference} contains no usable mapping"
@@ -377,6 +382,7 @@ fn near_array<const N: usize>(left: Option<[f64; N]>, right: Option<[f64; N]>) -
 fn collect_rwvm_mappings(
     object: &InMemDicomObject<StandardDataDictionary>,
     source: &str,
+    source_sop_instance_uid: Option<&str>,
     output: &mut Vec<RealWorldValueMappingSummary>,
 ) {
     for element in object.iter() {
@@ -388,11 +394,11 @@ fn collect_rwvm_mappings(
                 items
                     .iter()
                     .take(MAX_SEQUENCE_ITEMS)
-                    .map(|item| rwvm_mapping(item, source)),
+                    .map(|item| rwvm_mapping(item, source, source_sop_instance_uid)),
             );
         } else {
             for item in items.iter().take(MAX_SEQUENCE_ITEMS) {
-                collect_rwvm_mappings(item, source, output);
+                collect_rwvm_mappings(item, source, source_sop_instance_uid, output);
             }
         }
     }
@@ -401,12 +407,14 @@ fn collect_rwvm_mappings(
 fn rwvm_mapping(
     item: &InMemDicomObject<StandardDataDictionary>,
     source: &str,
+    source_sop_instance_uid: Option<&str>,
 ) -> RealWorldValueMappingSummary {
     let mut lut_data = read_numbers(item, tags::REAL_WORLD_VALUE_LUT_DATA);
     let lut_data_truncated = lut_data.len() > MAX_LUT_VALUES;
     lut_data.truncate(MAX_LUT_VALUES);
     RealWorldValueMappingSummary {
         source: source.to_string(),
+        source_sop_instance_uid: source_sop_instance_uid.map(str::to_string),
         label: read_string(item, tags::LUT_LABEL),
         first_value_mapped: read_number(item, tags::REAL_WORLD_VALUE_FIRST_VALUE_MAPPED),
         last_value_mapped: read_number(item, tags::REAL_WORLD_VALUE_LAST_VALUE_MAPPED),
@@ -415,9 +423,19 @@ fn rwvm_mapping(
         lut_data,
         lut_data_truncated,
         units: read_code(item, tags::MEASUREMENT_UNITS_CODE_SEQUENCE),
-        quantity: read_code(item, tags::QUANTITY_DEFINITION_SEQUENCE),
+        quantity: read_quantity_code(item),
         derivation: read_code(item, tags::DERIVATION_CODE_SEQUENCE),
     }
+}
+
+fn read_quantity_code(
+    object: &InMemDicomObject<StandardDataDictionary>,
+) -> Option<CodedConceptSummary> {
+    sequence_items(object, tags::QUANTITY_DEFINITION_SEQUENCE)
+        .into_iter()
+        .find_map(|item| {
+            read_code(item, tags::CONCEPT_CODE_SEQUENCE).or_else(|| read_direct_code(item))
+        })
 }
 
 fn valid_mapping(mapping: &RealWorldValueMappingSummary) -> bool {
@@ -490,6 +508,12 @@ fn read_code(
     tag: Tag,
 ) -> Option<CodedConceptSummary> {
     let item = sequence_items(object, tag).into_iter().next()?;
+    read_direct_code(item)
+}
+
+fn read_direct_code(
+    item: &InMemDicomObject<StandardDataDictionary>,
+) -> Option<CodedConceptSummary> {
     let value = read_string(item, tags::CODE_VALUE)
         .or_else(|| read_string(item, tags::LONG_CODE_VALUE))
         .or_else(|| read_string(item, tags::URN_CODE_VALUE))?;

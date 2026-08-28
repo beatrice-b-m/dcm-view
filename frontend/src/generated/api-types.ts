@@ -542,6 +542,7 @@ export interface ParametricMapContext {
 
 export interface RealWorldValueMappingSummary {
 	source: string;
+	source_sop_instance_uid: string | null;
 	label: string | null;
 	first_value_mapped: number | null;
 	last_value_mapped: number | null;

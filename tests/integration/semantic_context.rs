@@ -139,7 +139,10 @@ async fn parametric_map_context_exposes_explicit_mapping_without_applying_it() {
         ),
         sequence(
             tags::QUANTITY_DEFINITION_SEQUENCE,
-            vec![code("126400", "DCM", "Standardized Uptake Value")],
+            vec![InMemDicomObject::from_element_iter([sequence(
+                tags::CONCEPT_CODE_SEQUENCE,
+                vec![code("126400", "DCM", "Standardized Uptake Value")],
+            )])],
         ),
     ]);
     let object = InMemDicomObject::from_element_iter([
@@ -168,6 +171,8 @@ async fn parametric_map_context_exposes_explicit_mapping_without_applying_it() {
     assert_eq!(context["mappings"][0]["slope"], 0.5);
     assert_eq!(context["mappings"][0]["intercept"], -1.0);
     assert_eq!(context["mappings"][0]["units"]["scheme"], "UCUM");
+    assert_eq!(context["mappings"][0]["quantity"]["value"], "126400");
+    assert!(context["mappings"][0]["source_sop_instance_uid"].is_null());
 }
 
 #[tokio::test]
