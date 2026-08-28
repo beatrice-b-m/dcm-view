@@ -23,9 +23,11 @@ from pathlib import Path
 from typing import Any, BinaryIO, Optional
 
 try:
-    from scripts.compatibility.scope import ScopeError, sha256_file
+    from scripts.compatibility.scope import ScopeError, load_worklist, sha256_file
+    from scripts.compatibility.reports import build_evidence_report, build_viewer_report
 except ModuleNotFoundError:
-    from scope import ScopeError, sha256_file
+    from scope import ScopeError, load_worklist, sha256_file
+    from reports import build_evidence_report, build_viewer_report
 
 
 DETAIL_SCHEMA_VERSION = "0.1.0"
@@ -582,6 +584,15 @@ def _normalized_path(value: str) -> str:
 
 
 def select_entries(worklist: dict[str, Any], root: Optional[str]) -> list[dict[str, Any]]:
+    if worklist.get("worklist_schema_version") == "0.2.0":
+        selected = []
+        for entry in worklist["files"]:
+            profile = entry["manifest_identity"]["profile"]
+            if root is not None and profile != root:
+                continue
+            occurrence = {"root": profile, "case_id": entry["case_id"], "path": entry["path"], "normalized_path": entry["normalized_path"], "sop_instance_uid": entry.get("sop_instance_uid")}
+            selected.append({**entry, "campaign_occurrence": occurrence})
+        return sorted(selected, key=lambda row: (row["campaign_occurrence"]["root"], row["case_id"], row["path"]))
     selected: list[dict[str, Any]] = []
     for entry in worklist["canonical_files"]:
         occurrence = None
@@ -1123,6 +1134,19 @@ def validate_json_schema(
         return
     if "const" in schema and instance != schema["const"]:
         raise CampaignError(f"schema const violation at {path}")
+    if "enum" in schema and instance not in schema["enum"]:
+        raise CampaignError(f"schema enum violation at {path}")
+    if "anyOf" in schema:
+        failures = []
+        for option in schema["anyOf"]:
+            try:
+                validate_json_schema(instance, option, root, path)
+                break
+            except CampaignError as error:
+                failures.append(str(error))
+        else:
+            raise CampaignError(f"schema anyOf violation at {path}: {failures}")
+        return
     expected_type = schema.get("type")
     if expected_type is not None:
         accepted = expected_type if isinstance(expected_type, list) else [expected_type]
@@ -1201,7 +1225,7 @@ def normalized_report(report: dict[str, Any]) -> dict[str, Any]:
 
 def _ensure_external_output(output: Path, suite_root: Path, viewer_root: Path) -> None:
     resolved = output.resolve()
-    for repository in (suite_root.resolve(), viewer_root.resolve()):
+    for repository in (suite_root.resolve(),):
         try:
             resolved.relative_to(repository)
         except ValueError:
@@ -1218,7 +1242,7 @@ def run_campaign(args: argparse.Namespace) -> dict[str, Any]:
     output = args.output.resolve()
     _ensure_external_output(output, suite_root, viewer_root)
     worklist_path = args.worklist.resolve()
-    worklist = json.loads(worklist_path.read_text(encoding="utf-8"))
+    worklist = load_worklist(worklist_path)
     entries = select_entries(worklist, args.root)
     if not entries:
         raise CampaignError(f"selection contains no cases: {args.root or 'canonical'}")
@@ -1358,12 +1382,28 @@ def run_campaign(args: argparse.Namespace) -> dict[str, Any]:
     normalized_path.write_text(
         json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    viewer_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=viewer_root, check=True,
+        capture_output=True, text=True, timeout=5,
+    ).stdout.strip()
+    evidence_report = build_evidence_report(report, worklist, viewer_commit, ["default"])
+    evidence_schema_path = Path(__file__).with_name("evidence-schema.json")
+    validate_json_schema(evidence_report, json.loads(evidence_schema_path.read_text(encoding="utf-8")))
+    evidence_path = output / "evidence-report.json"
+    evidence_path.write_text(json.dumps(evidence_report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    viewer_report = build_viewer_report(evidence_report)
+    viewer_schema_path = suite_root / "schemas/viewer-report.schema.json"
+    validate_json_schema(viewer_report, json.loads(viewer_schema_path.read_text(encoding="utf-8")))
+    viewer_report_path = output / "viewer-report.json"
+    viewer_report_path.write_text(json.dumps(viewer_report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     index = {
         "artifacts": [
             artifact(path, kind)
             for path, kind in (
                 (report_path, "report"),
                 (normalized_path, "normalized_report"),
+                (evidence_path, "evidence_report"),
+                (viewer_report_path, "suite_viewer_report"),
                 (output / "stdout.log", "stdout"),
                 (output / "stderr.log", "stderr"),
             )
