@@ -10,6 +10,7 @@ import type {
 	JsonApiEndpointId,
 	RawFrameMetadata,
 	ReferenceCatalogResponse,
+	SemanticContextResponse,
 	SeriesCatalogResponse,
 	TagNode,
 	TagQuery,
@@ -45,6 +46,11 @@ export type {
 	ReferenceMatchSummary,
 	ReferenceSummary,
 	ReferenceTargetSummary,
+	SemanticContext,
+	SemanticContextResponse,
+	SegmentationContext,
+	ParametricMapContext,
+	RtDoseContext,
 	SeriesCatalogResponse,
 	SeriesSummary,
 	SeriesStackSummary,
@@ -110,6 +116,10 @@ export function fetchSeries(): Promise<SeriesCatalogResponse> {
 
 export function fetchReferences(fileIndex: number): Promise<ReferenceCatalogResponse> {
 	return requestJsonEndpoint("fileReferences", { index: fileIndex });
+}
+
+export function fetchSemanticContext(fileIndex: number): Promise<SemanticContextResponse> {
+	return requestJsonEndpoint("fileSemanticContext", { index: fileIndex });
 }
 
 export function fetchFrameInfo(fileIndex: number): Promise<FrameInfo> {

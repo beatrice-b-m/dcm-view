@@ -15,6 +15,7 @@
 	import ImageViewport from "./lib/ImageViewport.svelte";
 	import OpenImageTabs from "./lib/OpenImageTabs.svelte";
 	import ReferenceNavigator from "./lib/ReferenceNavigator.svelte";
+	import SemanticContextPanel from "./lib/SemanticContextPanel.svelte";
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
@@ -724,6 +725,7 @@
 						files={filesResponse.files}
 						onopenreference={openReferenceTarget}
 					/>
+					<SemanticContextPanel fileIndex={activeFile.index} {currentFrame} />
 					<ImageViewport
 						{activeFile}
 						bind:currentFrame
