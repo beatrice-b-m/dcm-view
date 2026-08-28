@@ -115,13 +115,10 @@ pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
 
 /// Describe the viewer's current display capability without changing decode routing.
 ///
-/// A successful PNG response is not sufficient for `renderable`: the current generic
-/// multi-sample path reduces color pixels to one channel, so those layouts remain an
-/// explicit compatibility gap until a color-aware renderer is used.
+/// This classifier describes the layouts that the active display pipeline handles;
+/// semantic interpretation such as segmentation or parametric mapping is separate.
 pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
     if !file.has_pixels {
-        // The current discovery path recognizes only Pixel Data (7FE0,0010).
-        // Float Pixel Data and Double Float Pixel Data therefore also land here.
         return PixelSupport::metadata_only(PixelSupportReason::PixelDataAbsentOrUnrecognized);
     }
 
@@ -146,18 +143,34 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
         return PixelSupport::unsupported(PixelSupportReason::InvalidGeometry);
     }
 
-    match file.bits_allocated {
-        8 | 16 => {}
-        1 => {
-            return PixelSupport::unsupported(PixelSupportReason::BitPackedPixelsNotSupported);
-        }
-        _ => {
-            return PixelSupport::unsupported(PixelSupportReason::NumericPrecisionNotSupported);
-        }
-    }
-
     if file.samples_per_pixel == 0 {
         return PixelSupport::unsupported(PixelSupportReason::SamplesPerPixelNotSupported);
+    }
+
+    let pixel_kind = file
+        .series_metadata
+        .native_pixel
+        .pixel_data_kind
+        .unwrap_or(crate::types::NativePixelDataKind::Integer);
+    let supported_precision = match syntax_class {
+        TransferSyntaxClass::Uncompressed => match pixel_kind {
+            crate::types::NativePixelDataKind::Integer => {
+                matches!(file.bits_allocated, 1 | 8 | 16 | 32)
+            }
+            crate::types::NativePixelDataKind::Float32 => file.bits_allocated == 32,
+            crate::types::NativePixelDataKind::Float64 => file.bits_allocated == 64,
+        },
+        _ => {
+            pixel_kind == crate::types::NativePixelDataKind::Integer
+                && matches!(file.bits_allocated, 8 | 16)
+        }
+    };
+    if !supported_precision {
+        return PixelSupport::unsupported(if file.bits_allocated == 1 {
+            PixelSupportReason::BitPackedPixelsNotSupported
+        } else {
+            PixelSupportReason::NumericPrecisionNotSupported
+        });
     }
 
     let photometric = file.photometric_interpretation.trim().to_ascii_uppercase();
@@ -211,7 +224,7 @@ fn unsupported_transfer_syntax_reason(uid: &str) -> PixelSupportReason {
 #[cfg(test)]
 mod tests {
     use super::{classify_pixel_support, PixelSupportReason, PixelSupportState};
-    use crate::types::FileEntry;
+    use crate::types::{FileEntry, NativePixelDataKind};
     use std::path::PathBuf;
 
     fn file(transfer_syntax_uid: &str) -> FileEntry {
@@ -408,12 +421,7 @@ mod tests {
     fn unsupported_numeric_layouts_have_pixel_layout_reasons() {
         for (bits_allocated, expected_reason, reason_id) in [
             (
-                1,
-                PixelSupportReason::BitPackedPixelsNotSupported,
-                "pixel_layout.bit_packed_not_supported",
-            ),
-            (
-                32,
+                24,
                 PixelSupportReason::NumericPrecisionNotSupported,
                 "pixel_layout.numeric_precision_not_supported",
             ),
@@ -430,6 +438,24 @@ mod tests {
             assert_eq!(support.state, PixelSupportState::Unsupported);
             assert_eq!(support.reason, Some(expected_reason));
             assert_eq!(support.reason_id(), Some(reason_id));
+        }
+    }
+
+    #[test]
+    fn supported_uncompressed_numeric_kinds_are_renderable() {
+        for (kind, bits_allocated) in [
+            (NativePixelDataKind::Integer, 1),
+            (NativePixelDataKind::Integer, 32),
+            (NativePixelDataKind::Float32, 32),
+            (NativePixelDataKind::Float64, 64),
+        ] {
+            let mut entry = file("1.2.840.10008.1.2.1");
+            entry.bits_allocated = bits_allocated;
+            entry.series_metadata.native_pixel.pixel_data_kind = Some(kind);
+
+            let support = classify_pixel_support(&entry);
+            assert_eq!(support.state, PixelSupportState::Renderable, "{kind:?}");
+            assert_eq!(support.reason, None, "{kind:?}");
         }
     }
 
