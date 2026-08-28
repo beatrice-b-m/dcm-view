@@ -11,6 +11,20 @@ function bitmap(width: number, height: number): BitmapResource {
 }
 
 describe("ByteBudgetLruCache", () => {
+	it("retains visited frames from different source files within one budget", () => {
+		const cache = new ByteBudgetLruCache<string, { bytes: number }>({
+			maxBytes: 12,
+			sizeOf: (entry) => entry.bytes,
+		});
+		cache.set("7:0", { bytes: 4 });
+		cache.set("9:0", { bytes: 4 });
+		cache.set("9:1", { bytes: 4 });
+
+		expect([...cache.keys()]).toEqual(["7:0", "9:0", "9:1"]);
+		expect(cache.get("7:0")).toEqual({ bytes: 4 });
+		expect([...cache.keys()]).toEqual(["9:0", "9:1", "7:0"]);
+	});
+
 	it("evicts the least-recently-used entry within its byte budget", () => {
 		const disposed: string[] = [];
 		const cache = new ByteBudgetLruCache<string, { id: string; bytes: number }>({

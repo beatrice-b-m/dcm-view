@@ -26,7 +26,9 @@
 		findSeriesStackForFile,
 		frameAtPosition,
 		framePosition,
+		navigationFramesForFile,
 		navigationTabId,
+		type NavigationFrameRef,
 	} from "./lib/seriesNavigation";
 	import { DEFAULT_ORIENTATION, WL_PRESETS, type ActiveTool, type ImageOrientation } from "./lib/viewerTools";
 
@@ -110,7 +112,13 @@
 			: findSeriesStackForFile(seriesResponse?.series ?? [], activeFileIndex),
 	);
 	const activeStack = $derived(activeLocatedStack?.stack ?? null);
-	const navigationFrameCount = $derived(activeStack?.frames.length ?? activeFile?.frame_count ?? 0);
+	const navigationFrames = $derived.by<readonly NavigationFrameRef[]>(() => {
+		if (activeStack) return activeStack.frames;
+		if (activeFile) return navigationFramesForFile(activeFile.index, activeFile.frame_count);
+		return [];
+	});
+	const navigationFrameCount = $derived(navigationFrames.length);
+	const navigationScopeKey = $derived(activeTabId ?? (activeFile ? `file:${activeFile.index}` : ""));
 	const activeOrientation = $derived(activeFileIndex === null ? DEFAULT_ORIENTATION : orientationByFile[activeFileIndex] ?? DEFAULT_ORIENTATION);
 	const openTabFiles = $derived(resolveFilesById(filesById, openTabs.map((tab) => tab.fileIndex)));
 	const openTabFrameCounts = $derived(new Map(
@@ -751,6 +759,8 @@
 						{cineMode}
 						bind:cineDirection
 						navigationFrameCount={navigationFrameCount}
+						navigationFrames={navigationFrames}
+						navigationScopeKey={navigationScopeKey}
 						navigationPosition={stackPosition}
 						onnavigationchange={setStackPosition}
 						externalCineNavigation={true}
