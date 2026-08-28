@@ -47,6 +47,9 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("export interface ViewerIdentity", output)
 		self.assertIn("viewer: ViewerIdentity;", output)
 		self.assertIn("discovery: DiscoveryResult[];", output)
+		self.assertIn("series: SeriesSummary[];", output)
+		self.assertIn("stacks: SeriesStackSummary[];", output)
+		self.assertIn("frames: FrameRefSummary[];", output)
 		self.assertIn(
 			'export type SupportState = "renderable" | "metadata_only" | "unsupported";',
 			output,

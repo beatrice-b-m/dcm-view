@@ -193,6 +193,20 @@ define_api_endpoints! {
         error_type: ErrorResponse,
         success_status: 200
     },
+    API_ENDPOINT_SERIES => {
+        operation: Series,
+        id: "series",
+        method: Get,
+        path: "/series",
+        query_type: NoQuery,
+        request_type: NoRequest,
+        request_media_type: None,
+        response_type: SeriesCatalogResponse,
+        response_media_type: "application/json",
+        response_headers_type: NoResponseHeaders,
+        error_type: ErrorResponse,
+        success_status: 200
+    },
     API_ENDPOINT_FILE_INFO => {
         operation: FileInfo,
         id: "fileInfo",
@@ -462,6 +476,52 @@ pub struct FilesResponse {
     pub scanned: usize,
     pub skipped: usize,
     pub filtered: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesCatalogResponse {
+    pub series: Vec<SeriesSummary>,
+    pub scan_complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesSummary {
+    pub id: String,
+    pub study_instance_uid: String,
+    pub series_instance_uid: String,
+    pub frame_of_reference_uids: Vec<String>,
+    pub stacks: Vec<SeriesStackSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesStackSummary {
+    pub id: String,
+    pub kind: String,
+    pub concatenation_uid: Option<String>,
+    pub pyramid_uid: Option<String>,
+    pub image_type_role: Option<String>,
+    pub total_pixel_matrix_rows: Option<u32>,
+    pub total_pixel_matrix_columns: Option<u32>,
+    pub frames: Vec<FrameRefSummary>,
+    pub warnings: Vec<SeriesWarningSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FrameRefSummary {
+    pub virtual_index: usize,
+    pub file_index: usize,
+    pub frame_index: u32,
+    pub source_path: String,
+    pub sop_instance_uid: String,
+    pub instance_number: Option<i32>,
+    pub position_along_normal_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesWarningSummary {
+    pub code: String,
+    pub message: String,
+    pub file_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]

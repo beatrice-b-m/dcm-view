@@ -55,6 +55,7 @@ Static frontend assets are served at `/` and `/assets/*`.
 |---|---|---|
 | GET | `/api/health` | Ready-state probe with viewer build identity, file count, and server start time. |
 | GET | `/api/files` | File registry, tunnel metadata, and progressive scan status. |
+| GET | `/api/series` | Server-owned logical series and ordered virtual frame stacks. |
 | GET | `/api/file/:index/info` | Frame metadata for one file. |
 | GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG. |
 | GET | `/api/file/:index/frame/:frame/raw` | Decoded frame sample bytes plus rendering metadata headers. |
@@ -169,6 +170,52 @@ async function waitForCompleteFiles() {
 
 For workflows that only need the first available file, poll until
 `files.length > 0` or `scan_complete` becomes `true`.
+
+## Series Catalog
+
+`GET /api/series` returns Study/Series-owned navigation stacks. Each
+`FrameRef` maps a zero-based virtual position to the original file index and
+source frame, so clients keep metadata, cache, and annotation operations scoped
+to the actual DICOM object:
+
+```json
+{
+  "series": [{
+    "id": "study:1.2.3|series:1.2.3.4",
+    "study_instance_uid": "1.2.3",
+    "series_instance_uid": "1.2.3.4",
+    "frame_of_reference_uids": ["1.2.3.9"],
+    "stacks": [{
+      "id": "study:1.2.3|series:1.2.3.4|stack:ordinary",
+      "kind": "ordinary",
+      "concatenation_uid": null,
+      "pyramid_uid": null,
+      "image_type_role": null,
+      "total_pixel_matrix_rows": null,
+      "total_pixel_matrix_columns": null,
+      "frames": [{
+        "virtual_index": 0,
+        "file_index": 0,
+        "frame_index": 0,
+        "source_path": "/path/to/slice-001.dcm",
+        "sop_instance_uid": "1.2.3.4.5",
+        "instance_number": 30,
+        "position_along_normal_mm": 0.0
+      }],
+      "warnings": []
+    }]
+  }],
+  "scan_complete": true
+}
+```
+
+Ordinary CT/MR stacks prefer Image Position Patient projected onto the normal
+derived from Image Orientation Patient, then fall back deterministically to
+Instance Number and path. Warning codes include `missing_positions`,
+`duplicate_positions`, `nonuniform_spacing`, `inconsistent_orientation`, and
+`gantry_tilt`. Enhanced concatenations use their Concatenation UID and frame
+offset. WSI Pyramid UID members are exposed as separate level stacks, while
+same-series LABEL and other non-member companions remain isolated stacks.
 
 ## File Info
 

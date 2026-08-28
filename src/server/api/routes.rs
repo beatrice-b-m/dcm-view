@@ -3,8 +3,8 @@ use super::handlers;
 use super::state::AppState;
 use crate::api::contracts::{
     self as api_contracts, ApiEndpointContract, ApiEndpointSpec, ApiMethod, ApiOperation,
-    EmbedRoiAnnotations, ErrorResponse, FilesResponse, FrameInfo, HealthResponse, TagNode,
-    API_ENDPOINTS, API_PREFIX,
+    EmbedRoiAnnotations, ErrorResponse, FilesResponse, FrameInfo, HealthResponse,
+    SeriesCatalogResponse, TagNode, API_ENDPOINTS, API_PREFIX,
 };
 use crate::server::web;
 use crate::server::RequestActivity;
@@ -67,6 +67,7 @@ macro_rules! json_handler_response {
 json_handler_response!(
     HealthResponse,
     FilesResponse,
+    SeriesCatalogResponse,
     FrameInfo,
     Vec<TagNode>,
     TagNode,
@@ -166,6 +167,20 @@ fn register_api_endpoint(
                 get(|state: State<AppState>| async move {
                     let response: handler_response_type!(api_contracts::Files) =
                         handlers::files(state).await;
+                    response
+                }),
+            )
+        }
+        ApiOperation::Series => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::Series>(endpoint);
+            require_no_query::<api_contracts::Series>();
+            require_no_request::<api_contracts::Series>();
+            router.route(
+                endpoint.path,
+                get(|state: State<AppState>| async move {
+                    let response: handler_response_type!(api_contracts::Series) =
+                        handlers::series(state).await;
                     response
                 }),
             )

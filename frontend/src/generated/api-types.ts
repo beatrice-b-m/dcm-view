@@ -18,6 +18,14 @@ export interface ApiEndpointTypes {
 		responseHeaders: never;
 		error: ErrorResponse;
 	};
+	series: {
+		params: Record<string, never>;
+		query: never;
+		request: never;
+		response: SeriesCatalogResponse;
+		responseHeaders: never;
+		error: ErrorResponse;
+	};
 	fileInfo: {
 		params: { index: number };
 		query: never;
@@ -112,6 +120,18 @@ export const API_ENDPOINTS = {
 		requestType: null,
 		requestMediaType: null,
 		responseType: "FilesResponse",
+		responseMediaType: "application/json",
+		responseHeadersType: null,
+		errorType: "ErrorResponse",
+		successStatus: 200,
+	},
+	series: {
+		method: "GET",
+		path: "/api/series",
+		queryType: null,
+		requestType: null,
+		requestMediaType: null,
+		responseType: "SeriesCatalogResponse",
 		responseMediaType: "application/json",
 		responseHeadersType: null,
 		errorType: "ErrorResponse",
@@ -326,6 +346,68 @@ export interface FilesResponse {
 	filtered: number;
 }
 
+export interface SeriesCatalogResponse {
+	series: SeriesSummary[];
+	scan_complete: boolean;
+}
+
+export interface SeriesSummary {
+	id: string;
+	study_instance_uid: string;
+	series_instance_uid: string;
+	frame_of_reference_uids: string[];
+	stacks: SeriesStackSummary[];
+}
+
+export interface SeriesStackSummary {
+	id: string;
+	kind: string;
+	concatenation_uid: string | null;
+	pyramid_uid: string | null;
+	image_type_role: string | null;
+	total_pixel_matrix_rows: number | null;
+	total_pixel_matrix_columns: number | null;
+	frames: FrameRefSummary[];
+	warnings: SeriesWarningSummary[];
+}
+
+export interface FrameRefSummary {
+	virtual_index: number;
+	file_index: number;
+	frame_index: number;
+	source_path: string;
+	sop_instance_uid: string;
+	instance_number: number | null;
+	position_along_normal_mm: number | null;
+}
+
+export interface SeriesWarningSummary {
+	code: string;
+	message: string;
+	file_indices: number[];
+}
+
+export const RAW_FRAME_HEADERS = {
+	rows: "X-Frame-Rows",
+	columns: "X-Frame-Columns",
+	bitsAllocated: "X-Frame-Bits-Allocated",
+	pixelRepresentation: "X-Frame-Pixel-Representation",
+	samplesPerPixel: "X-Frame-Samples-Per-Pixel",
+	photometricInterpretation: "X-Frame-Photometric-Interpretation",
+	rescaleSlope: "X-Frame-Rescale-Slope",
+	rescaleIntercept: "X-Frame-Rescale-Intercept",
+	defaultWc: "X-Frame-Default-Wc",
+	defaultWw: "X-Frame-Default-Ww",
+} as const;
+
+export type TagValue =
+	| { type: "string"; value: string }
+	| { type: "number"; value: number }
+	| { type: "numbers"; value: number[]; truncated?: boolean; total?: number }
+	| { type: "binary"; length: number }
+	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
+	| { type: "error"; message: string };
+
 export interface DiscoveryResult {
 	path: string;
 	disposition: string;
@@ -365,27 +447,6 @@ export interface FrameQuery {
 	ww?: number;
 	mode?: WindowMode;
 }
-
-export const RAW_FRAME_HEADERS = {
-	rows: "X-Frame-Rows",
-	columns: "X-Frame-Columns",
-	bitsAllocated: "X-Frame-Bits-Allocated",
-	pixelRepresentation: "X-Frame-Pixel-Representation",
-	samplesPerPixel: "X-Frame-Samples-Per-Pixel",
-	photometricInterpretation: "X-Frame-Photometric-Interpretation",
-	rescaleSlope: "X-Frame-Rescale-Slope",
-	rescaleIntercept: "X-Frame-Rescale-Intercept",
-	defaultWc: "X-Frame-Default-Wc",
-	defaultWw: "X-Frame-Default-Ww",
-} as const;
-
-export type TagValue =
-	| { type: "string"; value: string }
-	| { type: "number"; value: number }
-	| { type: "numbers"; value: number[]; truncated?: boolean; total?: number }
-	| { type: "binary"; length: number }
-	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
-	| { type: "error"; message: string };
 
 export interface TagQuery {
 	path: string;

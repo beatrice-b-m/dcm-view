@@ -4,6 +4,7 @@ import {
 	displayFrameCacheKey,
 	displayFrameWindowCacheKey,
 	fetchFiles,
+	fetchSeries,
 	fetchSelectedTag,
 	frameUrl,
 	parseRawFrameMetadata,
@@ -127,6 +128,20 @@ describe("generated endpoint fetch wrappers", () => {
 
 		await expect(fetchFiles()).resolves.toEqual(payload);
 		expect(fetchMock).toHaveBeenCalledWith("/api/files", { method: "GET" });
+	});
+
+	it("uses the declared series catalog endpoint", async () => {
+		const payload = { series: [], scan_complete: true };
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify(payload), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(fetchSeries()).resolves.toEqual(payload);
+		expect(fetchMock).toHaveBeenCalledWith("/api/series", { method: "GET" });
 	});
 
 	it("uses the annotation update verb, body, and inferred response contract", async () => {

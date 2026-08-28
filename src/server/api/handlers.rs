@@ -2,8 +2,8 @@ use super::error::{self, ApiError};
 use super::state::AppState;
 use crate::api::contracts::{
     DiscoveryResult, EmbedRoiAnnotations, FileSummary, FilesResponse, FrameInfo, FrameQuery,
-    HealthResponse, TagNode, TagQuery, ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS,
-    EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
+    HealthResponse, SeriesCatalogResponse, TagNode, TagQuery, ViewerIdentity, CACHE_HEADER,
+    CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
     RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS, RAW_FRAME_HEADER_DEFAULT_WC,
     RAW_FRAME_HEADER_DEFAULT_WW, RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
     RAW_FRAME_HEADER_PIXEL_REPRESENTATION, RAW_FRAME_HEADER_RESCALE_INTERCEPT,
@@ -55,6 +55,10 @@ pub(super) async fn files(State(state): State<AppState>) -> Json<FilesResponse> 
         skipped: status.skipped,
         filtered: status.filtered,
     })
+}
+
+pub(super) async fn series(State(state): State<AppState>) -> Json<SeriesCatalogResponse> {
+    Json(state.registry().series_catalog_snapshot())
 }
 
 pub(super) async fn info(

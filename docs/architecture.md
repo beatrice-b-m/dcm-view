@@ -125,6 +125,11 @@ The executable contract is kept consistent by three layers:
   Class, coarse object kind, and explicit `renderable`, `metadata_only`, or
   `unsupported` state with a stable reason when applicable. These states
   describe viewer capability, not DICOM conformance.
+- `/api/series` builds an ephemeral server-owned catalog grouped strictly by
+  Study and Series UID. Its typed stacks map virtual positions to source file
+  and frame, prefer patient-geometry ordering for classic slices, surface
+  geometry-quality warnings, use concatenation offsets for enhanced parts, and
+  keep WSI pyramid levels and non-member companions distinct.
 - `/api/file/{index}/tags/select` traverses explicit tag/item paths against the
   original object and pages sequence items, allowing targeted retrieval beyond
   legacy tag-tree preview caps.

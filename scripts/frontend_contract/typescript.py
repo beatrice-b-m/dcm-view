@@ -44,6 +44,10 @@ def ts_type(rust_type: str, *, option_as_optional: bool = False) -> str:
 	if rust_type in {
 		"WindowPreset",
 		"FileSummary",
+		"SeriesSummary",
+		"SeriesStackSummary",
+		"FrameRefSummary",
+		"SeriesWarningSummary",
 		"DiscoveryResult",
 		"ViewerIdentity",
 		"TagNode",

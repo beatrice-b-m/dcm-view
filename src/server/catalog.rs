@@ -1,6 +1,14 @@
-use crate::api::contracts::FileSummary;
+use crate::api::contracts::{
+    FileSummary, FrameRefSummary, SeriesCatalogResponse, SeriesStackSummary, SeriesSummary,
+    SeriesWarningSummary,
+};
 use crate::loader::{DiscoveryDisposition, DiscoveryRecord};
+use crate::series::{
+    FrameOrderingInput, NavigationInput, NavigationKind, OrderingInput, SeriesCatalog,
+    SeriesFileInput, SeriesGroup, SeriesStack, SeriesWarning,
+};
 use crate::types::FileEntry;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{futures::Notified, Notify};
@@ -125,6 +133,19 @@ impl FileRegistry {
             .clone()
     }
 
+    pub fn series_catalog_snapshot(&self) -> SeriesCatalogResponse {
+        let files = self.files_snapshot();
+        let catalog = SeriesCatalog::build(files.iter().map(series_file_input));
+        SeriesCatalogResponse {
+            series: catalog
+                .series()
+                .iter()
+                .map(|group| series_summary(group, &files))
+                .collect(),
+            scan_complete: self.scan_complete.load(Ordering::Relaxed),
+        }
+    }
+
     pub fn discovery_ledger_snapshot(&self) -> Vec<DiscoveryRecord> {
         let mut records = self
             .inner
@@ -151,6 +172,236 @@ impl FileRegistry {
             scan_complete: self.scan_complete.load(Ordering::Relaxed),
         }
     }
+}
+
+const VL_WHOLE_SLIDE_MICROSCOPY_IMAGE_STORAGE: &str = "1.2.840.10008.5.1.4.1.1.77.1.6";
+
+fn series_file_input(file: &FileEntry) -> SeriesFileInput {
+    let metadata = &file.series_metadata;
+    let has_per_frame_geometry = !metadata.frame_image_positions_patient.is_empty()
+        || !metadata.frame_image_orientations_patient.is_empty();
+    let per_frame_ordering = if has_per_frame_geometry {
+        (0..file.frame_count)
+            .map(|frame_index| FrameOrderingInput {
+                frame_index,
+                ordering: OrderingInput {
+                    image_position_patient: file.frame_image_position_patient(frame_index),
+                    image_orientation_patient: file.frame_image_orientation_patient(frame_index),
+                },
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let navigation = if let Some(concatenation_uid) = metadata
+        .concatenation_uid
+        .as_ref()
+        .filter(|uid| !uid.is_empty())
+    {
+        NavigationInput::Concatenation {
+            concatenation_uid: concatenation_uid.clone(),
+            concatenation_frame_offset_number: metadata.concatenation_frame_offset_number,
+            in_concatenation_number: metadata.in_concatenation_number,
+        }
+    } else if file.sop_class_uid == VL_WHOLE_SLIDE_MICROSCOPY_IMAGE_STORAGE {
+        NavigationInput::Wsi {
+            pyramid_uid: metadata.pyramid_uid.clone().filter(|uid| !uid.is_empty()),
+            image_type_role: metadata
+                .image_type
+                .get(2)
+                .cloned()
+                .filter(|role| !role.is_empty()),
+            total_pixel_matrix_rows: metadata.total_pixel_matrix_rows,
+            total_pixel_matrix_columns: metadata.total_pixel_matrix_columns,
+        }
+    } else {
+        NavigationInput::Ordinary
+    };
+
+    SeriesFileInput {
+        file_index: file.index,
+        path: file.path.clone(),
+        study_instance_uid: file.study_instance_uid.clone(),
+        series_instance_uid: file.series_instance_uid.clone(),
+        frame_of_reference_uid: metadata.frame_of_reference_uid.clone(),
+        sop_instance_uid: file.sop_instance_uid.clone(),
+        frame_count: file.frame_count,
+        instance_number: file.instance_number.trim().parse().ok(),
+        ordering: OrderingInput {
+            image_position_patient: metadata.image_position_patient,
+            image_orientation_patient: metadata.image_orientation_patient,
+        },
+        per_frame_ordering,
+        navigation,
+    }
+}
+
+fn series_summary(group: &SeriesGroup, files: &[FileEntry]) -> SeriesSummary {
+    let frame_of_reference_uids = files
+        .iter()
+        .filter(|file| {
+            file.study_instance_uid == group.id.study_instance_uid
+                && file.series_instance_uid == group.id.series_instance_uid
+        })
+        .map(|file| file.series_metadata.frame_of_reference_uid.clone())
+        .filter(|uid| !uid.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let id = series_id(&group.id.study_instance_uid, &group.id.series_instance_uid);
+    SeriesSummary {
+        id: id.clone(),
+        study_instance_uid: group.id.study_instance_uid.clone(),
+        series_instance_uid: group.id.series_instance_uid.clone(),
+        frame_of_reference_uids,
+        stacks: group
+            .stacks
+            .iter()
+            .map(|stack| stack_summary(&id, stack))
+            .collect(),
+    }
+}
+
+fn series_id(study_instance_uid: &str, series_instance_uid: &str) -> String {
+    format!("study:{study_instance_uid}|series:{series_instance_uid}")
+}
+
+fn stack_summary(series_id: &str, stack: &SeriesStack) -> SeriesStackSummary {
+    let (kind, identity, concatenation_uid, pyramid_uid, image_type_role, rows, columns) =
+        match &stack.kind {
+            NavigationKind::Ordinary => (
+                "ordinary",
+                "ordinary".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            NavigationKind::Concatenation { concatenation_uid } => (
+                "concatenation",
+                format!("concatenation:{concatenation_uid}"),
+                Some(concatenation_uid.clone()),
+                None,
+                None,
+                None,
+                None,
+            ),
+            NavigationKind::WsiPyramidLevel {
+                pyramid_uid,
+                image_type_role,
+                total_pixel_matrix_rows,
+                total_pixel_matrix_columns,
+            } => (
+                "wsi_pyramid_level",
+                format!(
+                    "pyramid:{pyramid_uid}|role:{}|matrix:{}x{}",
+                    image_type_role.as_deref().unwrap_or(""),
+                    total_pixel_matrix_rows.map_or_else(String::new, |value| value.to_string()),
+                    total_pixel_matrix_columns.map_or_else(String::new, |value| value.to_string())
+                ),
+                None,
+                Some(pyramid_uid.clone()),
+                image_type_role.clone(),
+                *total_pixel_matrix_rows,
+                *total_pixel_matrix_columns,
+            ),
+            NavigationKind::WsiCompanion {
+                sop_instance_uid,
+                image_type_role,
+            } => (
+                "wsi_companion",
+                format!("companion:{sop_instance_uid}"),
+                None,
+                None,
+                image_type_role.clone(),
+                None,
+                None,
+            ),
+        };
+    SeriesStackSummary {
+        id: format!("{series_id}|stack:{identity}"),
+        kind: kind.to_string(),
+        concatenation_uid,
+        pyramid_uid,
+        image_type_role,
+        total_pixel_matrix_rows: rows,
+        total_pixel_matrix_columns: columns,
+        frames: stack
+            .frames
+            .iter()
+            .map(|frame| FrameRefSummary {
+                virtual_index: frame.virtual_index,
+                file_index: frame.file_index,
+                frame_index: frame.frame_index,
+                source_path: frame.source_path.display().to_string(),
+                sop_instance_uid: frame.sop_instance_uid.clone(),
+                instance_number: frame
+                    .instance_number
+                    .and_then(|value| value.try_into().ok()),
+                position_along_normal_mm: frame.position_along_normal_mm,
+            })
+            .collect(),
+        warnings: stack.warnings.iter().map(warning_summary).collect(),
+    }
+}
+
+fn warning_summary(warning: &SeriesWarning) -> SeriesWarningSummary {
+    let (code, message, file_indices) = match warning {
+        SeriesWarning::MissingPositions { frames } => (
+            "missing_positions",
+            format!(
+                "{} frame source(s) have no Image Position Patient",
+                frames.len()
+            ),
+            frame_file_indices(frames.iter().map(|frame| frame.file_index)),
+        ),
+        SeriesWarning::DuplicatePositions { groups } => (
+            "duplicate_positions",
+            format!("{} duplicate projected position group(s)", groups.len()),
+            frame_file_indices(
+                groups
+                    .iter()
+                    .flat_map(|group| group.frames.iter().map(|frame| frame.file_index)),
+            ),
+        ),
+        SeriesWarning::NonuniformSpacing {
+            adjacent_spacing_mm,
+        } => (
+            "nonuniform_spacing",
+            format!("adjacent projected spacing is {adjacent_spacing_mm:?} mm"),
+            Vec::new(),
+        ),
+        SeriesWarning::InconsistentOrientation { frames } => (
+            "inconsistent_orientation",
+            format!(
+                "{} frame source(s) differ from the reference orientation",
+                frames.len()
+            ),
+            frame_file_indices(frames.iter().map(|frame| frame.file_index)),
+        ),
+        SeriesWarning::GantryTilt {
+            frames,
+            max_lateral_shift_mm,
+        } => (
+            "gantry_tilt",
+            format!("maximum in-plane position shift is {max_lateral_shift_mm:.6} mm"),
+            frame_file_indices(frames.iter().map(|frame| frame.file_index)),
+        ),
+    };
+    SeriesWarningSummary {
+        code: code.to_string(),
+        message,
+        file_indices,
+    }
+}
+
+fn frame_file_indices(indices: impl IntoIterator<Item = usize>) -> Vec<usize> {
+    indices
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 impl Default for FileRegistry {
