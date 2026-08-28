@@ -12,7 +12,6 @@ use super::render::encode_windowed_luminance_png;
 pub(crate) const DEFLATED_IMAGE_FRAME_UID: &str = "1.2.840.10008.1.2.8.1";
 
 struct DecodedBinaryFrame {
-    packed: Vec<u8>,
     samples: Vec<u8>,
     rows: u32,
     columns: u32,
@@ -60,7 +59,9 @@ pub(crate) async fn decode_raw_deflated_binary_frame(
     task::spawn_blocking(move || {
         let decoded = decode_binary_frame(&file, frame).map_err(PixelError::raw_decode)?;
         let metadata = file.raw_metadata(decoded.rows, decoded.columns, 1, 1);
-        Ok((Bytes::from(decoded.packed), metadata))
+        // Match the native one-bit raw contract: BitsAllocated remains 1,
+        // while each response byte is one canonical decoded sample (0 or 1).
+        Ok((Bytes::from(decoded.samples), metadata))
     })
     .await
     .map_err(|error| {
@@ -105,7 +106,6 @@ fn decode_binary_frame(file: &FileEntry, frame: u32) -> Result<DecodedBinaryFram
     let packed = decoded.data().to_vec();
     let samples = unpack_one_bit_frame(&packed, pixel_count)?;
     Ok(DecodedBinaryFrame {
-        packed,
         samples,
         rows: decoded.rows(),
         columns: decoded.columns(),
@@ -164,7 +164,7 @@ mod tests {
     };
 
     #[test]
-    fn unpacks_lsb_first_binary_samples_and_requires_exact_packed_size() {
+    fn raw_one_bit_contract_expands_lsb_first_samples_to_one_byte_each() {
         assert_eq!(unpack_one_bit_frame(&[0b1001], 4).unwrap(), [1, 0, 0, 1]);
         assert_eq!(unpack_one_bit_frame(&[0b0110], 4).unwrap(), [0, 1, 1, 0]);
         assert!(unpack_one_bit_frame(&[], 4).is_err());
@@ -193,14 +193,14 @@ mod tests {
 
         let raw_cache = new_raw_cache();
         let display_cache = new_cache();
-        for (frame, packed, pixels) in [
-            (0, [0b1001_u8], [255_u8, 0, 0, 255]),
-            (1, [0b0110_u8], [0_u8, 255, 255, 0]),
+        for (frame, samples, pixels) in [
+            (0, [1_u8, 0, 0, 1], [255_u8, 0, 0, 255]),
+            (1, [0_u8, 1, 1, 0], [0_u8, 255, 255, 0]),
         ] {
             let raw = load_raw_frame(file.clone(), raw_cache.clone(), RawFrameRequest { frame })
                 .await
                 .expect("decode prepared raw frame");
-            assert_eq!(raw.body.as_ref(), packed);
+            assert_eq!(raw.body.as_ref(), samples);
             assert_eq!(raw.metadata.bits_allocated, 1);
 
             let display = load_frame(
