@@ -10,7 +10,44 @@ diagnostic viewer.
 
 ## Unreleased
 
-### Viewer Reliability
+## 0.2.10 - 2026-08-28
+
+### Major Feature Additions
+
+- Added logical series catalogs and virtual frame stacks so related single-frame,
+  multiframe, and concatenated DICOM objects can be reviewed as one ordered
+  sequence. The viewer now uses geometry-aware ordering, retains logical frame
+  identity across source files, and navigates files in explorer order when no
+  logical stack applies.
+- Added typed DICOM reference extraction, local target resolution, API exposure,
+  and in-viewer navigation. References such as a segmentation source can now
+  open the resolved local object at the referenced frame.
+- Expanded display and raw decoding across RLE Lossless, JPEG-LS Lossless
+  grayscale, JPEG XL Lossless RGB, binary deflated image frames, extended native
+  numeric formats, and native color layouts. Multifragments and planar RLE color
+  are normalized before rendering.
+- Added native presentation processing for Modality and VOI LUT sequences,
+  embedded overlay planes, rectangular display shutters, stored-bit fields, and
+  eight-bit DICOM LUTs. Unambiguous ICC profiles are preserved in generated PNGs
+  for native and RLE color images.
+- Added a bounded compatibility campaign runner with frozen corpus scope, typed
+  expectations, evidence probes, and corrected-corpus overlay merging to make
+  codec and presentation support reproducible and auditable.
+
+### API And Observability Changes
+
+- Added explicit prepared-object and transfer-syntax support classifications,
+  structured discovery ledger entries, file support observability, and viewer
+  build identity to the HTTP API.
+- Added stable machine-readable error codes while retaining the shared JSON
+  error envelope, plus selective metadata pagination for large tag trees.
+- Exposed effective pixel aspect ratio and logical-series/reference data needed
+  by the viewer. Images with non-square pixels now render using their physical
+  geometry.
+- Bounded discovery-ledger responses so scans with many rejected or unsupported
+  objects cannot create unbounded API payloads.
+
+### Fixes And Reliability
 
 - Prevented active-file cleanup from recursively updating ROI selection during
   logical stack source changes, and preserved later ROI selection and editing.
@@ -18,6 +55,29 @@ diagnostic viewer.
   files that use per-file fallback instead of a catalog-backed logical stack.
 - Kept files without complete Study and Series Instance UIDs independent rather
   than merging unrelated objects into one logical navigation sequence.
+- Retained logical-stack frames across source changes and paced cine playback
+  across the normalized sequence, including fallback frame advancement.
+- Fell back cleanly to display rendering when an image layout does not support
+  raw client-side windowing, avoiding broken placeholders for color images.
+- Avoided retaining pixel payloads during discovery, reducing scan-time memory
+  pressure, and fixed multifragment JPEG raw decoding.
+- Corrected native stored-bit interpretation, eight-bit LUT rendering, planar
+  RLE color display, deflated image-object recognition, and registry-dependent
+  compatibility evidence.
+
+### Build, Packaging, And Test Changes
+
+- Statically linked the CharLS codec and stabilized its vendored CMake linkage;
+  normalized the manylinux CMake library path for wheel builds.
+- Updated release-tooling dependencies to address advisories and pinned fixture
+  generator/build identity so generated evidence remains deterministic.
+- Kept the external test profile limited to feature-gated remote fixtures while
+  expanding committed integration coverage for logical series, discovery,
+  native pixels, API contracts, tags, and supported codecs.
+- Recorded the release frontend QA matrix in
+  [`docs/v0.2.10-frontend-qa.md`](docs/v0.2.10-frontend-qa.md), including the
+  automated core gate, active browser checks, fixes found during review, and the
+  remaining responsive-layout manual check.
 
 ## 0.2.9 - 2026-08-26
 
