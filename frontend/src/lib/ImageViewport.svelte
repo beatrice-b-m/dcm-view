@@ -32,6 +32,7 @@
 		createDisplayFrameCache,
 		type DisplayFrameCacheEntry,
 	} from "./frameCache";
+	import { fitImageToViewportHeight, imageDisplayGeometry } from "./imageGeometry";
 	import {
 		canRunCinePlayback,
 		runRenderPacedCine,
@@ -238,8 +239,8 @@
 		let css = `translate(${tx}px, ${ty}px) scale(${scale})`;
 		const { flipH, flipV, rotation } = orientation;
 		if (rotation !== 0 || flipH || flipV) {
-			const cx = imageColumns / 2;
-			const cy = imageRows / 2;
+			const cx = displayGeometry.centerX;
+			const cy = displayGeometry.centerY;
 			const sx = flipH ? -1 : 1;
 			const sy = flipV ? -1 : 1;
 			css += ` translate(${cx}px,${cy}px) rotate(${rotation}deg) scale(${sx},${sy}) translate(${-cx}px,${-cy}px)`;
@@ -284,6 +285,9 @@
 		pipelineMode === "diagnostic_wl" && currentRawFrame
 			? currentRawFrame.metadata.columns
 			: activeFile?.columns ?? 0,
+	);
+	const displayGeometry = $derived(
+		imageDisplayGeometry(imageRows, imageColumns, activeFile?.pixel_aspect_ratio),
 	);
 	const visibleRois = $derived(deriveVisibleRois(activeAnnotations, currentFrame));
 	const draftRoi = $derived(
@@ -1021,12 +1025,15 @@ function startDisplayPrefetch(
 	}
 
 	function fitTransformForViewport(): TransformState | null {
-		if (imageRows <= 0 || imageColumns <= 0 || viewportSize.height <= 0) return null;
-		const scale = Math.max(MIN_ZOOM, viewportSize.height / imageRows);
+		const fit = fitImageToViewportHeight(
+			displayGeometry,
+			viewportSize.width,
+			viewportSize.height,
+			MIN_ZOOM,
+		);
+		if (!fit) return null;
 		return {
-			scale,
-			tx: (viewportSize.width - imageColumns * scale) / 2,
-			ty: (viewportSize.height - imageRows * scale) / 2,
+			...fit,
 			fit: true,
 		};
 	}
@@ -1039,7 +1046,7 @@ function startDisplayPrefetch(
 	}
 
 	function imageLayoutOrigin(): { left: number; top: number } | null {
-		if (!viewportEl || imageColumns <= 0 || imageRows <= 0) return null;
+		if (!viewportEl || displayGeometry.width <= 0 || displayGeometry.height <= 0) return null;
 		const rect = viewportEl.getBoundingClientRect();
 		return {
 			left: rect.left,
@@ -1673,7 +1680,7 @@ function startDisplayPrefetch(
 		{/if}
 		<div
 			class="image-layer"
-			style={`transform:${transformCss}; width:${Math.max(imageColumns, 1)}px; height:${Math.max(imageRows, 1)}px;`}
+			style={`transform:${transformCss}; width:${Math.max(displayGeometry.width, 1)}px; height:${Math.max(displayGeometry.height, 1)}px;`}
 		>
 			<canvas bind:this={canvasEl} class="dicom-canvas"></canvas>
 			{#if imageColumns > 0 && imageRows > 0}
