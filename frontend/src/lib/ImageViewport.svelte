@@ -50,6 +50,7 @@
 		type PersistenceSnapshot,
 	} from "./revisionedPersistence";
 	import { trackForegroundRequest } from "./requestIndicator";
+	import { SharedRequestRegistry } from "./sharedRequestRegistry";
 	import {
 		renderRawFrameToRgba,
 		resolveDisplayWindow,
@@ -182,7 +183,6 @@
 		},
 	});
 
-	let rawRequestCtrl: AbortController | null = null;
 	let rawPrefetchCtrl: AbortController | null = null;
 	let displayPrefetchCtrl: AbortController | null = null;
 	let displayScopeCtrl: AbortController | null = null;
@@ -193,6 +193,7 @@
 		maxBytes: RAW_CACHE_BYTE_BUDGET,
 		sizeOf: (frame) => frame.buffer.byteLength,
 	});
+	const rawRequests = new SharedRequestRegistry<string, RawFrame>();
 	const displayFrameCache = createDisplayFrameCache(DISPLAY_CACHE_BYTE_BUDGET);
 	const displayDecodePromises = new Map<
 		string,
@@ -520,6 +521,7 @@
 	}
 
 	function clearRawFrameCache(): void {
+		rawRequests.abortAll();
 		rawFrameCache.clear();
 	}
 
@@ -529,6 +531,13 @@
 
 	function cacheRawFrame(fileIndex: number, frameIndex: number, frame: RawFrame): void {
 		rawFrameCache.set(rawFrameCacheKey(fileIndex, frameIndex), frame);
+	}
+
+	function ensureRawFrame(fileIndex: number, frameIndex: number): Promise<RawFrame> {
+		const key = rawFrameCacheKey(fileIndex, frameIndex);
+		const cached = rawFrameCache.get(key);
+		if (cached) return Promise.resolve(cached);
+		return rawRequests.request(key, (signal) => fetchRawFrame(fileIndex, frameIndex, signal));
 	}
 
 	function clearDisplayCache(): void {
@@ -798,7 +807,8 @@
 					const key = rawFrameCacheKey(frame.file_index, frame.frame_index);
 					if (signal.aborted || rawFrameCache.has(key)) return;
 					try {
-						const rawFrame = await fetchRawFrame(frame.file_index, frame.frame_index, signal);
+						const rawFrame = await ensureRawFrame(frame.file_index, frame.frame_index);
+						if (signal.aborted) return;
 						if (validateRenderableRawFrame(rawFrame) !== null) return;
 						cacheRawFrame(frame.file_index, frame.frame_index, rawFrame);
 					} catch {
@@ -937,19 +947,16 @@ function startDisplayPrefetch(
 			return;
 		}
 
-		rawRequestCtrl?.abort();
-		rawRequestCtrl = new AbortController();
-		const ctrl = rawRequestCtrl;
-
 		try {
-			const rawFrameRequest = fetchRawFrame(fileIndex, frameIndex, ctrl.signal);
+			const key = rawFrameCacheKey(fileIndex, frameIndex);
+			const rawFrameRequest = ensureRawFrame(fileIndex, frameIndex);
 			trackForegroundRequest(
-				rawFrameRequest,
+				rawRequests.get(key),
 				() => generation === requestGeneration,
 				(pending) => { loading = pending; },
 			);
 			const rawFrame = await rawFrameRequest;
-			if (ctrl.signal.aborted || generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
+			if (generation !== requestGeneration || pipelineMode !== "diagnostic_wl") return;
 			loading = false;
 			const validationError = validateRenderableRawFrame(rawFrame);
 			if (validationError) {
@@ -986,8 +993,6 @@ function startDisplayPrefetch(
 				...rawWindowLevelFallbackByFile,
 				[fileIndex]: true,
 			};
-		} finally {
-			if (rawRequestCtrl === ctrl) rawRequestCtrl = null;
 		}
 	}
 
@@ -1157,7 +1162,6 @@ function startDisplayPrefetch(
 		if (!nextScope || nextScope === retainedScopeKey) return;
 		retainedScopeKey = nextScope;
 		invalidateWindowLevelRenders();
-		rawRequestCtrl?.abort();
 		rawPrefetchCtrl?.abort();
 		displayScopeCtrl?.abort();
 		displayScopeCtrl = null;
@@ -1174,7 +1178,6 @@ function startDisplayPrefetch(
 		if (!activeFile) return;
 		void activeFile.index;
 		invalidateWindowLevelRenders();
-		rawRequestCtrl?.abort();
 		currentRawFrame = null;
 		liveWindowCenter = null;
 		liveWindowWidth = null;
@@ -1200,8 +1203,6 @@ function startDisplayPrefetch(
 		const mode = pipelineMode;
 		requestGeneration += 1;
 		if (mode !== "diagnostic_wl") {
-			rawRequestCtrl?.abort();
-			rawRequestCtrl = null;
 			rawPrefetchCtrl?.abort();
 			rawPrefetchCtrl = null;
 			invalidateWindowLevelRenders();
@@ -1340,7 +1341,6 @@ function startDisplayPrefetch(
 
 	$effect(() => {
 		return () => {
-			rawRequestCtrl?.abort();
 			rawPrefetchCtrl?.abort();
 			displayScopeCtrl?.abort();
 			displayPrefetchCtrl?.abort();
