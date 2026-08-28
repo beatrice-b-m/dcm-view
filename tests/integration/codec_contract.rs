@@ -149,6 +149,64 @@ async fn jpeg2000_lossless_fixture_satisfies_display_and_raw_contracts() {
 }
 
 #[tokio::test]
+async fn deflated_explicit_vr_little_endian_satisfies_display_and_raw_contracts() {
+    const UID: &str = "1.2.840.10008.1.2.1.99";
+    let directory = tempdir().expect("temporary fixture directory");
+    let path = directory.path().join("deflated-u16.dcm");
+    let samples = [0_u16, 85, 170, 255];
+    support::write_uncompressed_u16_dicom(&path, UID, 2, 2, samples.to_vec(), None, None);
+
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover deflated fixture");
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files[0].transfer_syntax_uid, UID);
+    assert_eq!(
+        pixels::classify_transfer_syntax(UID),
+        TransferSyntaxClass::Uncompressed
+    );
+    assert_eq!(
+        pixels::classify_pixel_support(&report.files[0]).state,
+        pixels::PixelSupportState::Renderable
+    );
+
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let display = test_server
+        .get("/api/file/0/frame/0?mode=full_dynamic")
+        .await;
+    display.assert_status_ok();
+    assert_eq!(header(&display, "content-type"), "image/png");
+    assert_eq!(header(&display, "x-cache"), "MISS");
+    let rendered =
+        image::load_from_memory_with_format(display.as_bytes().as_ref(), ImageFormat::Png)
+            .expect("deflated display should return PNG")
+            .to_luma8();
+    assert_eq!(rendered.dimensions(), (2, 2));
+    assert_eq!(rendered.into_raw(), [0, 85, 170, 255]);
+
+    let raw = test_server.get("/api/file/0/frame/0/raw").await;
+    raw.assert_status_ok();
+    assert_eq!(header(&raw, "content-type"), "application/octet-stream");
+    assert_eq!(header(&raw, "x-cache"), "MISS");
+    assert_eq!(header(&raw, "x-frame-bits-allocated"), "16");
+    let expected_raw = samples
+        .into_iter()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(raw.as_bytes().as_ref(), expected_raw);
+    let raw_repeat = test_server.get("/api/file/0/frame/0/raw").await;
+    raw_repeat.assert_status_ok();
+    assert_eq!(header(&raw_repeat, "x-cache"), "HIT");
+    assert_eq!(raw_repeat.as_bytes(), raw.as_bytes());
+}
+
+#[tokio::test]
 async fn rle_lossless_reconstructs_standard_most_significant_byte_planes() {
     let dir = tempdir().expect("temporary fixture directory");
     let path = dir.path().join("rle-u16.dcm");
@@ -274,6 +332,7 @@ fn transfer_syntax_classification_table_covers_every_supported_status() {
         ("1.2.840.10008.1.2", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.1", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.2", TransferSyntaxClass::Uncompressed),
+        ("1.2.840.10008.1.2.1.99", TransferSyntaxClass::Uncompressed),
         ("1.2.840.10008.1.2.4.80", TransferSyntaxClass::JpegLs),
         ("1.2.840.10008.1.2.4.81", TransferSyntaxClass::JpegLs),
         ("1.2.840.10008.1.2.5", TransferSyntaxClass::Rle),

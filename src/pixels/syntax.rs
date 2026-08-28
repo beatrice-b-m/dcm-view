@@ -23,7 +23,6 @@ pub enum PixelSupportReason {
     RleLosslessNotSupported,
     JpegLsNotSupported,
     JpegXlNotSupported,
-    DeflatedDatasetNotSupported,
     DeflatedImageFrameNotSupported,
     TransferSyntaxNotSupported,
     InvalidGeometry,
@@ -43,7 +42,6 @@ impl PixelSupportReason {
             Self::RleLosslessNotSupported => "transfer_syntax.rle_lossless_not_supported",
             Self::JpegLsNotSupported => "transfer_syntax.jpeg_ls_not_supported",
             Self::JpegXlNotSupported => "transfer_syntax.jpeg_xl_not_supported",
-            Self::DeflatedDatasetNotSupported => "transfer_syntax.deflated_dataset_not_supported",
             Self::DeflatedImageFrameNotSupported => {
                 "transfer_syntax.deflated_image_frame_not_supported"
             }
@@ -104,9 +102,10 @@ pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
         // JPEG Lossless: browsers cannot decode — must be decoded server-side
         "1.2.840.10008.1.2.4.57" | "1.2.840.10008.1.2.4.70" => TransferSyntaxClass::JpegLossless,
         "1.2.840.10008.1.2.4.90" | "1.2.840.10008.1.2.4.91" => TransferSyntaxClass::Jpeg2000,
-        "1.2.840.10008.1.2" | "1.2.840.10008.1.2.1" | "1.2.840.10008.1.2.2" => {
-            TransferSyntaxClass::Uncompressed
-        }
+        "1.2.840.10008.1.2"
+        | "1.2.840.10008.1.2.1"
+        | "1.2.840.10008.1.2.2"
+        | "1.2.840.10008.1.2.1.99" => TransferSyntaxClass::Uncompressed,
         "1.2.840.10008.1.2.4.80" | "1.2.840.10008.1.2.4.81" => TransferSyntaxClass::JpegLs,
         "1.2.840.10008.1.2.5" => TransferSyntaxClass::Rle,
         _ => TransferSyntaxClass::Unsupported,
@@ -215,7 +214,6 @@ fn unsupported_transfer_syntax_reason(uid: &str) -> PixelSupportReason {
         "1.2.840.10008.1.2.4.110" | "1.2.840.10008.1.2.4.111" | "1.2.840.10008.1.2.4.112" => {
             PixelSupportReason::JpegXlNotSupported
         }
-        "1.2.840.10008.1.2.1.99" => PixelSupportReason::DeflatedDatasetNotSupported,
         "1.2.840.10008.1.2.8.1" => PixelSupportReason::DeflatedImageFrameNotSupported,
         _ => PixelSupportReason::TransferSyntaxNotSupported,
     }
@@ -266,6 +264,7 @@ mod tests {
             "1.2.840.10008.1.2",
             "1.2.840.10008.1.2.1",
             "1.2.840.10008.1.2.2",
+            "1.2.840.10008.1.2.1.99",
             "1.2.840.10008.1.2.4.50",
             "1.2.840.10008.1.2.4.70",
             "1.2.840.10008.1.2.4.90",
@@ -306,11 +305,6 @@ mod tests {
                 "1.2.840.10008.1.2.4.110",
                 PixelSupportReason::JpegXlNotSupported,
                 "transfer_syntax.jpeg_xl_not_supported",
-            ),
-            (
-                "1.2.840.10008.1.2.1.99",
-                PixelSupportReason::DeflatedDatasetNotSupported,
-                "transfer_syntax.deflated_dataset_not_supported",
             ),
             (
                 "1.2.840.10008.1.2.8.1",
