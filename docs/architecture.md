@@ -175,6 +175,15 @@ one byte per sample. Float and double-float objects are pixel-renderable, but
 real-world-value mapping remains a separate semantic capability rather than an
 implicit part of the display pipeline.
 
+For supported 8-bit RGB display paths, a structurally valid source ICC profile
+is preserved in the PNG `iCCP` chunk. The profile may come from the top-level
+ICC Profile attribute or from Optical Path Sequence; nested profiles are used
+only when every optical-path item supplies the same bytes. Missing or differing
+optical-path profiles are omitted because the renderer does not yet prove a
+frame-to-optical-path association. This is metadata preservation, not a numeric
+color-space transformation, and it does not change decoded RGB samples or raw
+frame responses.
+
 For native monochrome display, Modality LUT or rescale precedes VOI LUT or
 windowing, followed by MONOCHROME1 presentation inversion. A validated
 rectangular shutter then replaces pixels outside its one-based inclusive
