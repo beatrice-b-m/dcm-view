@@ -149,6 +149,38 @@ async fn jpeg2000_lossless_fixture_satisfies_display_and_raw_contracts() {
 }
 
 #[tokio::test]
+async fn rle_lossless_reconstructs_standard_most_significant_byte_planes() {
+    let dir = tempdir().expect("temporary fixture directory");
+    let path = dir.path().join("rle-u16.dcm");
+    let mut fragment = vec![0_u8; 64];
+    fragment[0..4].copy_from_slice(&2_u32.to_le_bytes());
+    fragment[4..8].copy_from_slice(&64_u32.to_le_bytes());
+    fragment[8..12].copy_from_slice(&67_u32.to_le_bytes());
+    // Annex G orders the most-significant plane before the least-significant
+    // plane. Each segment is a two-byte PackBits literal run.
+    fragment.extend_from_slice(&[1, 0x12, 0xab, 1, 0x34, 0xcd]);
+    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.5", vec![fragment]);
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.5", 1);
+    entry.rows = 1;
+    entry.columns = 2;
+    let test_server = TestServer::new(server::router(support::app_state(vec![entry])));
+
+    let display = test_server.get("/api/file/0/frame/0").await;
+    display.assert_status_ok();
+    assert_eq!(header(&display, "content-type"), "image/png");
+    assert_eq!(header(&display, "x-cache"), "MISS");
+    let image = image::load_from_memory_with_format(display.as_bytes().as_ref(), ImageFormat::Png)
+        .expect("RLE display should be a valid PNG");
+    assert_eq!((image.width(), image.height()), (2, 1));
+
+    let raw = test_server.get("/api/file/0/frame/0/raw").await;
+    raw.assert_status_ok();
+    assert_eq!(header(&raw, "x-cache"), "MISS");
+    assert_eq!(raw.as_bytes().as_ref(), [0x34, 0x12, 0xcd, 0xab]);
+}
+
+#[tokio::test]
 async fn jpeg2000_display_applies_rescale_before_every_window_mode() {
     let report = loader::discover(
         &[fixture_path("golden-jpeg2000-lossless-u8-single-frame.dcm")],
@@ -263,7 +295,6 @@ async fn unsupported_syntax_classes_return_422_from_both_frame_endpoints() {
     let cases = [
         ("jpeg-ls-lossless", "1.2.840.10008.1.2.4.80"),
         ("jpeg-ls-near-lossless", "1.2.840.10008.1.2.4.81"),
-        ("rle", "1.2.840.10008.1.2.5"),
         ("unknown", "9.9.9"),
     ];
 

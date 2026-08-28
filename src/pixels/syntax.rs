@@ -127,9 +127,6 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
 
     let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
     match syntax_class {
-        TransferSyntaxClass::Rle => {
-            return PixelSupport::unsupported(PixelSupportReason::RleLosslessNotSupported);
-        }
         TransferSyntaxClass::JpegLs => {
             return PixelSupport::unsupported(PixelSupportReason::JpegLsNotSupported);
         }
@@ -138,7 +135,8 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
                 &file.transfer_syntax_uid,
             ));
         }
-        TransferSyntaxClass::Jpeg
+        TransferSyntaxClass::Rle
+        | TransferSyntaxClass::Jpeg
         | TransferSyntaxClass::JpegLossless
         | TransferSyntaxClass::Jpeg2000
         | TransferSyntaxClass::Uncompressed => {}
@@ -165,8 +163,18 @@ pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
     let photometric = file.photometric_interpretation.trim().to_ascii_uppercase();
     match (file.samples_per_pixel, photometric.as_str()) {
         (1, "MONOCHROME1" | "MONOCHROME2") => PixelSupport::renderable(),
+        (1, "PALETTE COLOR")
+            if syntax_class == TransferSyntaxClass::Rle && file.bits_allocated == 8 =>
+        {
+            PixelSupport::renderable()
+        }
         (1, "PALETTE COLOR") => {
             PixelSupport::unsupported(PixelSupportReason::PaletteColorNotSupported)
+        }
+        (3, "RGB" | "YBR_FULL")
+            if syntax_class == TransferSyntaxClass::Rle && file.bits_allocated == 8 =>
+        {
+            PixelSupport::renderable()
         }
         (3, "RGB" | "YBR_FULL" | "YBR_FULL_422" | "YBR_ICT" | "YBR_RCT") => {
             PixelSupport::unsupported(PixelSupportReason::GenericColorRenderingOnly)
@@ -266,11 +274,6 @@ mod tests {
     fn disabled_codecs_have_transfer_syntax_reasons() {
         let cases = [
             (
-                "1.2.840.10008.1.2.5",
-                PixelSupportReason::RleLosslessNotSupported,
-                "transfer_syntax.rle_lossless_not_supported",
-            ),
-            (
                 "1.2.840.10008.1.2.4.80",
                 PixelSupportReason::JpegLsNotSupported,
                 "transfer_syntax.jpeg_ls_not_supported",
@@ -303,6 +306,39 @@ mod tests {
             assert_eq!(support.reason, Some(reason), "{uid}");
             assert_eq!(support.reason_id(), Some(reason_id), "{uid}");
         }
+    }
+
+    #[test]
+    fn supported_rle_layouts_are_renderable() {
+        for (samples_per_pixel, photometric) in [
+            (1, "MONOCHROME1"),
+            (1, "MONOCHROME2"),
+            (1, "PALETTE COLOR"),
+            (3, "RGB"),
+            (3, "YBR_FULL"),
+        ] {
+            let mut entry = file("1.2.840.10008.1.2.5");
+            entry.bits_allocated = 8;
+            entry.samples_per_pixel = samples_per_pixel;
+            entry.photometric_interpretation = photometric.to_string();
+
+            let support = classify_pixel_support(&entry);
+            assert_eq!(
+                support.state,
+                PixelSupportState::Renderable,
+                "{photometric}"
+            );
+            assert_eq!(support.reason, None, "{photometric}");
+        }
+
+        let mut unsupported = file("1.2.840.10008.1.2.5");
+        unsupported.bits_allocated = 16;
+        unsupported.samples_per_pixel = 3;
+        unsupported.photometric_interpretation = "RGB".to_string();
+        assert_eq!(
+            classify_pixel_support(&unsupported).reason,
+            Some(PixelSupportReason::GenericColorRenderingOnly)
+        );
     }
 
     #[test]
