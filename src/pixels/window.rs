@@ -121,17 +121,29 @@ fn percentile_window(samples: &[f64]) -> Option<ResolvedWindow> {
 }
 
 pub fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
-    let low = center - width / 2.0;
-    let high = center + width / 2.0;
+    // DICOM's LINEAR VOI function is intentionally asymmetric around
+    // center - 0.5 and spans width - 1 input units (PS3.3 C.11.2.1.2.1).
+    // Width 1 is the threshold special case and must not divide by zero.
+    let width = width.max(1.0);
+    let low = center - 0.5 - (width - 1.0) / 2.0;
+    let high = center - 0.5 + (width - 1.0) / 2.0;
     samples
         .iter()
-        .map(|sample| (((sample.clamp(low, high) - low) / (high - low)) * 255.0).round() as u8)
+        .map(|sample| {
+            if *sample <= low {
+                0
+            } else if *sample > high || width == 1.0 {
+                255
+            } else {
+                (((*sample - (center - 0.5)) / (width - 1.0) + 0.5) * 255.0).round() as u8
+            }
+        })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_modality_transform, apply_voi_lut_if_selected};
+    use super::{apply_modality_transform, apply_voi_lut_if_selected, apply_window};
     use crate::api::contracts::{WindowMode, WindowPreset};
     use crate::types::DicomLut;
 
@@ -267,6 +279,23 @@ mod tests {
                 &[0.0, 1.0],
             ),
             None
+        );
+    }
+
+    #[test]
+    fn linear_window_uses_dicom_half_unit_boundaries() {
+        assert_eq!(
+            apply_window(&[-3.0, -2.0, -1.0, 0.0, 1.0, 2.0], 0.0, 4.0),
+            [0, 0, 85, 170, 255, 255]
+        );
+        assert_eq!(apply_window(&[-1.0, 0.0, 1.0], 0.0, 2.0), [0, 255, 255]);
+    }
+
+    #[test]
+    fn linear_width_one_is_a_binary_threshold() {
+        assert_eq!(
+            apply_window(&[9.0, 9.5, 9.500_001, 10.0], 10.0, 1.0),
+            [0, 0, 255, 255]
         );
     }
 }
