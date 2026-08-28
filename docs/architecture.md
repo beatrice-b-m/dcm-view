@@ -119,6 +119,8 @@ The executable contract is kept consistent by three layers:
   `{"code":"stable_machine_code","error":"human-readable detail"}`. Codes are
   owned by `ApiErrorCode` in the canonical Rust contract; messages may add
   context without changing automation behavior.
+- `/api/health` exposes the package version plus build source revision, target,
+  and profile so compatibility evidence can identify the tested viewer build.
   Path, query, and JSON extractor failures pass through the same envelope.
 - Unknown `/api` routes return JSON `404`; unsupported methods return JSON
   `405`.

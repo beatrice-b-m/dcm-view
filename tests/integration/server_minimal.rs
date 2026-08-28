@@ -101,6 +101,11 @@ async fn health_endpoint_reports_ready_state() {
     let health: Value = response.json();
 
     assert_eq!(health["status"], "ok");
+    assert_eq!(health["viewer"]["name"], "dcmview");
+    assert_eq!(health["viewer"]["version"], env!("CARGO_PKG_VERSION"));
+    assert!(health["viewer"]["build_git_sha"].as_str().is_some());
+    assert!(health["viewer"]["build_target"].as_str().is_some());
+    assert!(health["viewer"]["build_profile"].as_str().is_some());
     assert_eq!(health["file_count"], 1);
     assert!(
         health["server_start_ms"]

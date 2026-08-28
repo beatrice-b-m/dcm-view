@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    emit_build_identity();
     if debug_api_enabled() {
         println!(
             "cargo:warning=The dcmview debug-api feature enables permissive API CORS for debugging. Never enable it outside dcmview debugging contexts."
@@ -46,6 +47,29 @@ fn main() {
     }
 
     run_npm(&npm_bin, ["run", "build"]);
+}
+
+fn emit_build_identity() {
+    println!("cargo:rerun-if-env-changed=DCMVIEW_BUILD_GIT_SHA");
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    let git_sha = std::env::var("DCMVIEW_BUILD_GIT_SHA")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|value| value.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=DCMVIEW_BUILD_GIT_SHA={git_sha}");
+    println!("cargo:rustc-env=DCMVIEW_BUILD_TARGET={target}");
+    println!("cargo:rustc-env=DCMVIEW_BUILD_PROFILE={profile}");
 }
 
 fn debug_api_enabled() -> bool {

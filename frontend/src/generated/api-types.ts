@@ -308,8 +308,17 @@ export interface FrameInfo {
 	default_window: WindowPreset | null;
 }
 
+export interface ViewerIdentity {
+	name: string;
+	version: string;
+	build_git_sha: string;
+	build_target: string;
+	build_profile: string;
+}
+
 export interface HealthResponse {
 	status: string;
+	viewer: ViewerIdentity;
 	file_count: number;
 	server_start_ms: number;
 }
@@ -324,19 +333,6 @@ export interface EmbedRoiAnnotations {
 	num_roi: number;
 	roi_coords: [number, number, number, number][];
 	roi_frames: number[][];
-}
-
-export interface RawFrameMetadata {
-	rows: number;
-	columns: number;
-	bitsAllocated: number;
-	pixelRepresentation: number;
-	samplesPerPixel: number;
-	photometricInterpretation: string;
-	rescaleSlope: number;
-	rescaleIntercept: number;
-	defaultWc: number | null;
-	defaultWw: number | null;
 }
 
 export const RAW_FRAME_HEADERS = {
@@ -359,6 +355,19 @@ export type TagValue =
 	| { type: "binary"; length: number }
 	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
 	| { type: "error"; message: string };
+
+export interface RawFrameMetadata {
+	rows: number;
+	columns: number;
+	bitsAllocated: number;
+	pixelRepresentation: number;
+	samplesPerPixel: number;
+	photometricInterpretation: string;
+	rescaleSlope: number;
+	rescaleIntercept: number;
+	defaultWc: number | null;
+	defaultWw: number | null;
+}
 
 export interface TagNode {
 	tag: string;

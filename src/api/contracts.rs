@@ -548,8 +548,30 @@ pub struct RawFrameMetadata {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ViewerIdentity {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub build_git_sha: &'static str,
+    pub build_target: &'static str,
+    pub build_profile: &'static str,
+}
+
+impl ViewerIdentity {
+    pub const fn current() -> Self {
+        Self {
+            name: "dcmview",
+            version: env!("CARGO_PKG_VERSION"),
+            build_git_sha: env!("DCMVIEW_BUILD_GIT_SHA"),
+            build_target: env!("DCMVIEW_BUILD_TARGET"),
+            build_profile: env!("DCMVIEW_BUILD_PROFILE"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct HealthResponse {
     pub status: &'static str,
+    pub viewer: ViewerIdentity,
     pub file_count: usize,
     pub server_start_ms: u64,
 }

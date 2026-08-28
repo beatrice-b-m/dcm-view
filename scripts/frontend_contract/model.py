@@ -8,6 +8,7 @@ STRUCTS = (
 	"FileSummary",
 	"FilesResponse",
 	"FrameInfo",
+	"ViewerIdentity",
 	"HealthResponse",
 	"FrameQuery",
 	"EmbedRoiAnnotations",

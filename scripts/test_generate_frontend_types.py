@@ -41,6 +41,8 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("export interface EmbedRoiAnnotations", output)
 		self.assertIn("roi_coords: [number, number, number, number][];", output)
 		self.assertIn("export interface RawFrameMetadata", output)
+		self.assertIn("export interface ViewerIdentity", output)
+		self.assertIn("viewer: ViewerIdentity;", output)
 		self.assertIn("bitsAllocated: number;", output)
 		self.assertNotIn("bits_allocated: number;", output)
 

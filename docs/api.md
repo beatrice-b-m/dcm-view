@@ -53,7 +53,7 @@ Static frontend assets are served at `/` and `/assets/*`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | Ready-state probe with file count and server start time. |
+| GET | `/api/health` | Ready-state probe with viewer build identity, file count, and server start time. |
 | GET | `/api/files` | File registry, tunnel metadata, and progressive scan status. |
 | GET | `/api/file/:index/info` | Frame metadata for one file. |
 | GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG. |

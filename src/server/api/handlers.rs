@@ -2,7 +2,7 @@ use super::error::{self, ApiError};
 use super::state::AppState;
 use crate::api::contracts::{
     EmbedRoiAnnotations, FilesResponse, FrameInfo, FrameQuery, HealthResponse, TagNode,
-    CACHE_HEADER, CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER,
+    ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER,
     EXPORT_CONTENT_DISPOSITION_VALUE, RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS,
     RAW_FRAME_HEADER_DEFAULT_WC, RAW_FRAME_HEADER_DEFAULT_WW,
     RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION, RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
@@ -21,6 +21,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<HealthResponse
     let status = state.registry().status();
     Json(HealthResponse {
         status: "ok",
+        viewer: ViewerIdentity::current(),
         file_count: status.file_count,
         server_start_ms: state.server_start_ms(),
     })
