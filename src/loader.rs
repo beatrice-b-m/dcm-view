@@ -644,6 +644,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let pixel_aspect_ratio = read_positive_u32_pair(&obj, "PixelAspectRatio");
     let normalized_pixel_aspect = normalize_pixel_aspect(pixel_spacing, pixel_aspect_ratio);
     let modality_lut = read_lut_sequence(&obj, tags::MODALITY_LUT_SEQUENCE);
+    let voi_lut = read_lut_sequence(&obj, tags::VOILUT_SEQUENCE);
     let pixel_representation = read_u32(&obj, "PixelRepresentation").unwrap_or(0);
     let samples_per_pixel = read_u32(&obj, "SamplesPerPixel").unwrap_or(1).max(1);
     let photometric_interpretation =
@@ -693,6 +694,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
                 pixel_aspect_ratio,
                 normalized_pixel_aspect,
                 modality_lut,
+                voi_lut,
             },
             frame_of_reference_uid,
             image_position_patient,
@@ -1326,6 +1328,57 @@ mod tests {
         assert_eq!(lut.first_mapped_value, 0);
         assert_eq!(lut.bits_per_entry, 16);
         assert_eq!(lut.entries, [0, 1024, 2048, 4095]);
+    }
+
+    #[test]
+    fn extracts_prepared_voi_lut_sequence() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("voi-lut.dcm");
+        let lut_item = InMemDicomObject::from_element_iter([
+            DataElement::new(
+                tags::LUT_DESCRIPTOR,
+                VR::US,
+                PrimitiveValue::U16(vec![4, 0, 16].into()),
+            ),
+            DataElement::new(
+                tags::LUT_DATA,
+                VR::OW,
+                PrimitiveValue::U16(vec![0, 21_845, 43_690, 65_535].into()),
+            ),
+        ]);
+        let mut object = base_object();
+        object.put(DataElement::new(
+            tags::VOILUT_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![lut_item]),
+        ));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PrimitiveValue::U8(vec![0_u8, 1, 2, 3].into()),
+        ));
+        let object = object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::COMPUTED_RADIOGRAPHY_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.300"),
+            )
+            .expect("file meta");
+        object.write_to_file(&path).expect("write fixture");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        let lut = file
+            .series_metadata
+            .native_pixel
+            .voi_lut
+            .as_ref()
+            .expect("VOI LUT");
+        assert_eq!(lut.first_mapped_value, 0);
+        assert_eq!(lut.bits_per_entry, 16);
+        assert_eq!(lut.entries, [0, 21_845, 43_690, 65_535]);
     }
 
     fn write_series_identity_fixture(path: &std::path::Path) {

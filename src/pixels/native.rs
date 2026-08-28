@@ -11,7 +11,9 @@ use super::color::{encode_rgb8_png, rgb8_interleaved, ybr_full_to_rgb8};
 use super::native_layout::{native_pixel_element_tag, NativeByteOrder, NativeFrameLayout};
 use super::palette::palette_indices_to_rgb8;
 use super::render::apply_monochrome1_inversion;
-use super::window::{apply_modality_transform, apply_window, resolve_window_with_mode};
+use super::window::{
+    apply_modality_transform, apply_voi_lut_if_selected, apply_window, resolve_window_with_mode,
+};
 
 pub(crate) async fn decode_uncompressed_to_png(
     file: FileEntry,
@@ -110,19 +112,30 @@ fn decode_uncompressed_to_png_blocking(
         rescaled
     };
 
-    let resolved_window = resolve_window_with_mode(
+    let mut windowed = if let Some(values) = apply_voi_lut_if_selected(
         window_mode,
         requested_wc,
         requested_ww,
         file.default_window,
+        file.series_metadata.native_pixel.voi_lut.as_ref(),
         &luminance_samples,
-    )
-    .ok_or_else(|| anyhow!("frame decode failed: could not resolve window"))?;
-    let mut windowed = apply_window(
-        &luminance_samples,
-        resolved_window.center,
-        resolved_window.width.max(1.0),
-    );
+    ) {
+        values
+    } else {
+        let resolved_window = resolve_window_with_mode(
+            window_mode,
+            requested_wc,
+            requested_ww,
+            file.default_window,
+            &luminance_samples,
+        )
+        .ok_or_else(|| anyhow!("frame decode failed: could not resolve window"))?;
+        apply_window(
+            &luminance_samples,
+            resolved_window.center,
+            resolved_window.width.max(1.0),
+        )
+    };
     apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
 
     let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)

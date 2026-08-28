@@ -23,6 +23,35 @@ pub(crate) fn apply_modality_transform(
         .collect()
 }
 
+pub(crate) fn apply_voi_lut_if_selected(
+    mode: WindowMode,
+    requested_wc: Option<f64>,
+    requested_ww: Option<f64>,
+    default_window: Option<WindowPreset>,
+    voi_lut: Option<&DicomLut>,
+    samples: &[f64],
+) -> Option<Vec<u8>> {
+    if mode != WindowMode::Default
+        || requested_wc.is_some()
+        || requested_ww.is_some()
+        || default_window.is_some()
+    {
+        return None;
+    }
+    let lut = voi_lut.filter(|lut| !lut.entries.is_empty() && lut.bits_per_entry == 16)?;
+    let last = lut.entries.len().saturating_sub(1) as i64;
+    Some(
+        samples
+            .iter()
+            .map(|value| {
+                let offset = (*value as i64) - i64::from(lut.first_mapped_value);
+                let output = u32::from(lut.entries[offset.clamp(0, last) as usize]);
+                ((output * 255 + 32_767) / 65_535) as u8
+            })
+            .collect(),
+    )
+}
+
 pub fn resolve_window(
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
@@ -100,7 +129,8 @@ pub fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::apply_modality_transform;
+    use super::{apply_modality_transform, apply_voi_lut_if_selected};
+    use crate::api::contracts::{WindowMode, WindowPreset};
     use crate::types::DicomLut;
 
     #[test]
@@ -121,6 +151,100 @@ mod tests {
         assert_eq!(
             apply_modality_transform(&[0.0, 1.0, 2.0], None, 2.0, -1.0),
             [-1.0, 1.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn voi_lut_maps_post_modality_values_and_clamps_to_descriptor_range() {
+        let lut = DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 16,
+            entries: vec![0, 21_845, 43_690, 65_535],
+        };
+        assert_eq!(
+            apply_voi_lut_if_selected(
+                WindowMode::Default,
+                None,
+                None,
+                None,
+                Some(&lut),
+                &[0.0, 1.0, 2.0, 3.0, 1024.0],
+            ),
+            Some(vec![0, 85, 170, 255, 255])
+        );
+    }
+
+    #[test]
+    fn prepared_cr_modality_and_voi_luts_compose_in_pipeline_order() {
+        let modality_lut = DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 16,
+            entries: vec![0, 1024, 2048, 4095],
+        };
+        let voi_lut = DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 16,
+            entries: vec![0, 21_845, 43_690, 65_535],
+        };
+        let modality_values =
+            apply_modality_transform(&[0.0, 1.0, 2.0, 3.0], Some(&modality_lut), 1.0, 0.0);
+
+        assert_eq!(modality_values, [0.0, 1024.0, 2048.0, 4095.0]);
+        assert_eq!(
+            apply_voi_lut_if_selected(
+                WindowMode::Default,
+                None,
+                None,
+                None,
+                Some(&voi_lut),
+                &modality_values,
+            ),
+            Some(vec![0, 255, 255, 255])
+        );
+    }
+
+    #[test]
+    fn explicit_and_dicom_windows_take_precedence_over_voi_lut() {
+        let lut = DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 16,
+            entries: vec![0, 65_535],
+        };
+        assert_eq!(
+            apply_voi_lut_if_selected(
+                WindowMode::Default,
+                Some(1.0),
+                Some(2.0),
+                None,
+                Some(&lut),
+                &[0.0, 1.0],
+            ),
+            None
+        );
+        assert_eq!(
+            apply_voi_lut_if_selected(
+                WindowMode::Default,
+                None,
+                None,
+                Some(WindowPreset {
+                    center: 1.0,
+                    width: 2.0,
+                }),
+                Some(&lut),
+                &[0.0, 1.0],
+            ),
+            None
+        );
+        assert_eq!(
+            apply_voi_lut_if_selected(
+                WindowMode::FullDynamic,
+                None,
+                None,
+                None,
+                Some(&lut),
+                &[0.0, 1.0],
+            ),
+            None
         );
     }
 }

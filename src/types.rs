@@ -37,6 +37,7 @@ pub struct NativePixelMetadata {
     /// Pixel Spacing is authoritative when valid; Pixel Aspect Ratio is fallback.
     pub normalized_pixel_aspect: Option<[f64; 2]>,
     pub modality_lut: Option<DicomLut>,
+    pub voi_lut: Option<DicomLut>,
 }
 
 impl NativePixelMetadata {
