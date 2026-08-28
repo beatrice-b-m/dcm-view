@@ -4,6 +4,7 @@ pub mod loader;
 pub mod object_kind;
 pub mod pixels;
 pub mod references;
+pub mod semantic;
 pub mod series;
 pub mod server;
 pub mod tunnel;

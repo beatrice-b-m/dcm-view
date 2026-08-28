@@ -235,6 +235,20 @@ define_api_endpoints! {
         error_type: ErrorResponse,
         success_status: 200
     },
+    API_ENDPOINT_FILE_SEMANTIC_CONTEXT => {
+        operation: FileSemanticContext,
+        id: "fileSemanticContext",
+        method: Get,
+        path: "/file/{index}/semantic-context",
+        query_type: NoQuery,
+        request_type: NoRequest,
+        request_media_type: None,
+        response_type: SemanticContextResponse,
+        response_media_type: "application/json",
+        response_headers_type: NoResponseHeaders,
+        error_type: ErrorResponse,
+        success_status: 200
+    },
     API_ENDPOINT_FILE_FRAME => {
         operation: FileFrame,
         id: "fileFrame",
@@ -531,6 +545,122 @@ pub struct ReferenceMatchSummary {
     pub sop_instance_uid: String,
     /// Validated, zero-based frame indices suitable for viewer navigation.
     pub frame_indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SemanticContextResponse {
+    pub source_file_index: usize,
+    /// The normal frame endpoints remain the default and are never semantically transformed.
+    pub default_mode: String,
+    pub pixel_preview_preserves_stored_values: bool,
+    #[serde(flatten)]
+    pub context: SemanticContext,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SemanticContext {
+    Segmentation(SegmentationContext),
+    ParametricMap(ParametricMapContext),
+    RtDose(RtDoseContext),
+    NotApplicable { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CodedConceptSummary {
+    pub value: String,
+    pub scheme: String,
+    pub meaning: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SegmentationContext {
+    pub segmentation_type: Option<String>,
+    pub segmentation_fractional_type: Option<String>,
+    pub maximum_fractional_value: Option<u32>,
+    pub segments: Vec<SegmentSummary>,
+    pub frame_mappings: Vec<SegmentFrameMapping>,
+    pub references: Vec<ReferenceSummary>,
+    pub overlay: OverlayEligibility,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SegmentSummary {
+    pub number: u16,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub property_category: Option<CodedConceptSummary>,
+    pub property_type: Option<CodedConceptSummary>,
+    pub algorithm_type: Option<String>,
+    pub algorithm_name: Option<String>,
+    pub recommended_display_cielab: Option<Vec<u16>>,
+    pub recommended_display_grayscale: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SegmentFrameMapping {
+    /// Zero-based frame index in the segmentation object.
+    pub frame_index: u32,
+    pub segment_number: Option<u16>,
+    pub source_sop_instance_uid: Option<String>,
+    /// DICOM-declared, one-based source frame numbers.
+    pub source_frame_numbers: Vec<u32>,
+    pub source_file_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OverlayEligibility {
+    pub eligible: bool,
+    pub reason: String,
+    pub source_file_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParametricMapContext {
+    pub stored_value_type: String,
+    pub displayed_value_kind: String,
+    pub mappings: Vec<RealWorldValueMappingSummary>,
+    pub mapping_status: String,
+    pub source_references: Vec<ReferenceSummary>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RealWorldValueMappingSummary {
+    pub source: String,
+    pub label: Option<String>,
+    pub first_value_mapped: Option<f64>,
+    pub last_value_mapped: Option<f64>,
+    pub slope: Option<f64>,
+    pub intercept: Option<f64>,
+    pub lut_data: Vec<f64>,
+    pub lut_data_truncated: bool,
+    pub units: Option<CodedConceptSummary>,
+    pub quantity: Option<CodedConceptSummary>,
+    pub derivation: Option<CodedConceptSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RtDoseContext {
+    pub dose_grid_scaling: Option<f64>,
+    pub scaling_status: String,
+    pub displayed_value_kind: String,
+    pub dose_units: Option<String>,
+    pub dose_type: Option<String>,
+    pub dose_summation_type: Option<String>,
+    pub geometry: DoseGridGeometry,
+    pub references: Vec<ReferenceSummary>,
+    pub overlay: OverlayEligibility,
+    pub clinical_use_warning: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoseGridGeometry {
+    pub frame_of_reference_uid: Option<String>,
+    pub image_position_patient: Option<[f64; 3]>,
+    pub image_orientation_patient: Option<[f64; 6]>,
+    pub pixel_spacing: Option<[f64; 2]>,
+    pub grid_frame_offsets: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
