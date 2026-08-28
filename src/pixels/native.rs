@@ -12,6 +12,7 @@ use super::native_layout::{native_pixel_element_tag, NativeByteOrder, NativeFram
 use super::overlay::apply_overlay_planes;
 use super::palette::palette_indices_to_rgb8;
 use super::render::apply_monochrome1_inversion;
+use super::shutter::apply_rectangular_shutter;
 use super::window::{
     apply_modality_transform, apply_voi_lut_if_selected, apply_window, resolve_window_with_mode,
 };
@@ -138,6 +139,12 @@ fn decode_uncompressed_to_png_blocking(
         )
     };
     apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
+    apply_rectangular_shutter(
+        &mut windowed,
+        rows,
+        columns,
+        file.series_metadata.presentation.rectangular_shutter,
+    );
     apply_overlay_planes(
         &mut windowed,
         rows,

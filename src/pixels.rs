@@ -14,6 +14,7 @@ mod palette;
 mod render;
 mod rle;
 mod service;
+mod shutter;
 mod syntax;
 mod window;
 

@@ -247,6 +247,109 @@ async fn prepared_native_overlay_composites_after_luts_and_preserves_raw_frame()
 }
 
 #[tokio::test]
+async fn native_rectangular_shutter_applies_after_monochrome1_and_preserves_raw_samples() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("shutter-monochrome1.dcm");
+    support::write_uncompressed_u16_dicom_with_photometric(
+        &path,
+        "1.2.840.10008.1.2.1",
+        (3, 3),
+        vec![0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4095],
+        "MONOCHROME1",
+        Some("2048"),
+        Some("4096"),
+    );
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 3;
+    entry.columns = 3;
+    entry.photometric_interpretation = "MONOCHROME1".to_string();
+    entry.default_window = Some(WindowPreset {
+        center: 2048.0,
+        width: 4096.0,
+    });
+    entry.series_metadata.presentation.rectangular_shutter =
+        Some(dcmview::types::RectangularDisplayShutter {
+            left_vertical_edge: 2,
+            right_vertical_edge: 2,
+            upper_horizontal_edge: 2,
+            lower_horizontal_edge: 2,
+            presentation_value: 0,
+        });
+
+    let display = load_frame(
+        entry.clone(),
+        new_cache(),
+        FrameRequest {
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+        },
+    )
+    .await
+    .expect("shutter display frame");
+    let raw = load_raw_frame(entry, new_raw_cache(), RawFrameRequest { frame: 0 })
+        .await
+        .expect("shutter raw frame");
+
+    assert_eq!(raw.body.len(), 18);
+    assert_eq!(&raw.body[..4], &[0, 0, 0xF4, 0x01]);
+    let pixels = image::load_from_memory_with_format(display.body.as_ref(), ImageFormat::Png)
+        .expect("valid shutter PNG")
+        .to_luma8()
+        .into_raw();
+    assert_eq!(pixels, [0, 0, 0, 0, 130, 0, 0, 0, 0]);
+}
+
+#[tokio::test]
+#[ignore = "requires the independently generated prepared DICOM corpus"]
+async fn prepared_native_full_frame_shutter_preserves_windowed_pixels_and_raw_frame() {
+    let root = std::env::var_os("DCMVIEW_PREPARED_CORPUS")
+        .map(std::path::PathBuf::from)
+        .expect("set DCMVIEW_PREPARED_CORPUS to the generated suite directory");
+    let path = root
+        .join("core")
+        .join("classic/dx/display_shutter_mono2_u16_explicit_le/instance.dcm");
+    let report = dcmview::loader::discover(
+        &[path],
+        dcmview::loader::DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover prepared DX");
+    let entry = report.files.into_iter().next().expect("prepared DX entry");
+
+    let display = load_frame(
+        entry.clone(),
+        new_cache(),
+        FrameRequest {
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+        },
+    )
+    .await
+    .expect("prepared shutter display");
+    let raw = load_raw_frame(entry, new_raw_cache(), RawFrameRequest { frame: 0 })
+        .await
+        .expect("prepared shutter raw frame");
+
+    assert_eq!(
+        raw.body.as_ref(),
+        &[0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0xff, 0x0f]
+    );
+    let pixels = image::load_from_memory_with_format(display.body.as_ref(), ImageFormat::Png)
+        .expect("valid prepared shutter PNG")
+        .to_luma8()
+        .into_raw();
+    assert_eq!(pixels, [0, 64, 128, 255]);
+}
+
+#[tokio::test]
 async fn monochrome1_inversion_preserves_default_and_full_dynamic_window_modes() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("monochrome1-window-modes.dcm");
