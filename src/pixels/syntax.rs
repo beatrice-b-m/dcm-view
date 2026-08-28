@@ -1,4 +1,101 @@
-use crate::types::TransferSyntaxClass;
+use crate::types::{FileEntry, TransferSyntaxClass};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelSupportState {
+    Renderable,
+    MetadataOnly,
+    Unsupported,
+}
+
+impl PixelSupportState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Renderable => "renderable",
+            Self::MetadataOnly => "metadata_only",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelSupportReason {
+    PixelDataAbsentOrUnrecognized,
+    RleLosslessNotSupported,
+    JpegLsNotSupported,
+    JpegXlNotSupported,
+    DeflatedDatasetNotSupported,
+    DeflatedImageFrameNotSupported,
+    TransferSyntaxNotSupported,
+    InvalidGeometry,
+    BitPackedPixelsNotSupported,
+    NumericPrecisionNotSupported,
+    SamplesPerPixelNotSupported,
+    GenericColorRenderingOnly,
+    PaletteColorNotSupported,
+    PhotometricInterpretationNotSupported,
+}
+
+impl PixelSupportReason {
+    /// Stable, machine-readable reason identifier for compatibility evidence.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::PixelDataAbsentOrUnrecognized => "pixel_data.absent_or_unrecognized",
+            Self::RleLosslessNotSupported => "transfer_syntax.rle_lossless_not_supported",
+            Self::JpegLsNotSupported => "transfer_syntax.jpeg_ls_not_supported",
+            Self::JpegXlNotSupported => "transfer_syntax.jpeg_xl_not_supported",
+            Self::DeflatedDatasetNotSupported => "transfer_syntax.deflated_dataset_not_supported",
+            Self::DeflatedImageFrameNotSupported => {
+                "transfer_syntax.deflated_image_frame_not_supported"
+            }
+            Self::TransferSyntaxNotSupported => "transfer_syntax.not_supported",
+            Self::InvalidGeometry => "pixel_layout.invalid_geometry",
+            Self::BitPackedPixelsNotSupported => "pixel_layout.bit_packed_not_supported",
+            Self::NumericPrecisionNotSupported => "pixel_layout.numeric_precision_not_supported",
+            Self::SamplesPerPixelNotSupported => "pixel_layout.samples_per_pixel_not_supported",
+            Self::GenericColorRenderingOnly => "pixel_layout.generic_color_rendering_only",
+            Self::PaletteColorNotSupported => "pixel_layout.palette_color_not_supported",
+            Self::PhotometricInterpretationNotSupported => {
+                "pixel_layout.photometric_interpretation_not_supported"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelSupport {
+    pub state: PixelSupportState,
+    pub reason: Option<PixelSupportReason>,
+}
+
+impl PixelSupport {
+    const fn renderable() -> Self {
+        Self {
+            state: PixelSupportState::Renderable,
+            reason: None,
+        }
+    }
+
+    const fn metadata_only(reason: PixelSupportReason) -> Self {
+        Self {
+            state: PixelSupportState::MetadataOnly,
+            reason: Some(reason),
+        }
+    }
+
+    const fn unsupported(reason: PixelSupportReason) -> Self {
+        Self {
+            state: PixelSupportState::Unsupported,
+            reason: Some(reason),
+        }
+    }
+
+    pub const fn reason_id(self) -> Option<&'static str> {
+        match self.reason {
+            Some(reason) => Some(reason.id()),
+            None => None,
+        }
+    }
+}
 
 pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
     match uid {
@@ -13,5 +110,278 @@ pub fn classify_transfer_syntax(uid: &str) -> TransferSyntaxClass {
         "1.2.840.10008.1.2.4.80" | "1.2.840.10008.1.2.4.81" => TransferSyntaxClass::JpegLs,
         "1.2.840.10008.1.2.5" => TransferSyntaxClass::Rle,
         _ => TransferSyntaxClass::Unsupported,
+    }
+}
+
+/// Describe the viewer's current display capability without changing decode routing.
+///
+/// A successful PNG response is not sufficient for `renderable`: the current generic
+/// multi-sample path reduces color pixels to one channel, so those layouts remain an
+/// explicit compatibility gap until a color-aware renderer is used.
+pub fn classify_pixel_support(file: &FileEntry) -> PixelSupport {
+    if !file.has_pixels {
+        // The current discovery path recognizes only Pixel Data (7FE0,0010).
+        // Float Pixel Data and Double Float Pixel Data therefore also land here.
+        return PixelSupport::metadata_only(PixelSupportReason::PixelDataAbsentOrUnrecognized);
+    }
+
+    let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
+    match syntax_class {
+        TransferSyntaxClass::Rle => {
+            return PixelSupport::unsupported(PixelSupportReason::RleLosslessNotSupported);
+        }
+        TransferSyntaxClass::JpegLs => {
+            return PixelSupport::unsupported(PixelSupportReason::JpegLsNotSupported);
+        }
+        TransferSyntaxClass::Unsupported => {
+            return PixelSupport::unsupported(unsupported_transfer_syntax_reason(
+                &file.transfer_syntax_uid,
+            ));
+        }
+        TransferSyntaxClass::Jpeg
+        | TransferSyntaxClass::JpegLossless
+        | TransferSyntaxClass::Jpeg2000
+        | TransferSyntaxClass::Uncompressed => {}
+    }
+
+    if file.rows == 0 || file.columns == 0 {
+        return PixelSupport::unsupported(PixelSupportReason::InvalidGeometry);
+    }
+
+    match file.bits_allocated {
+        8 | 16 => {}
+        1 => {
+            return PixelSupport::unsupported(PixelSupportReason::BitPackedPixelsNotSupported);
+        }
+        _ => {
+            return PixelSupport::unsupported(PixelSupportReason::NumericPrecisionNotSupported);
+        }
+    }
+
+    if file.samples_per_pixel == 0 {
+        return PixelSupport::unsupported(PixelSupportReason::SamplesPerPixelNotSupported);
+    }
+
+    let photometric = file.photometric_interpretation.trim().to_ascii_uppercase();
+    match (file.samples_per_pixel, photometric.as_str()) {
+        (1, "MONOCHROME1" | "MONOCHROME2") => PixelSupport::renderable(),
+        (1, "PALETTE COLOR") => {
+            PixelSupport::unsupported(PixelSupportReason::PaletteColorNotSupported)
+        }
+        (3, "RGB" | "YBR_FULL" | "YBR_FULL_422" | "YBR_ICT" | "YBR_RCT") => {
+            PixelSupport::unsupported(PixelSupportReason::GenericColorRenderingOnly)
+        }
+        (1, _) => {
+            PixelSupport::unsupported(PixelSupportReason::PhotometricInterpretationNotSupported)
+        }
+        _ => PixelSupport::unsupported(PixelSupportReason::SamplesPerPixelNotSupported),
+    }
+}
+
+fn unsupported_transfer_syntax_reason(uid: &str) -> PixelSupportReason {
+    match uid {
+        "1.2.840.10008.1.2.4.110" | "1.2.840.10008.1.2.4.111" | "1.2.840.10008.1.2.4.112" => {
+            PixelSupportReason::JpegXlNotSupported
+        }
+        "1.2.840.10008.1.2.1.99" => PixelSupportReason::DeflatedDatasetNotSupported,
+        "1.2.840.10008.1.2.8.1" => PixelSupportReason::DeflatedImageFrameNotSupported,
+        _ => PixelSupportReason::TransferSyntaxNotSupported,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_pixel_support, PixelSupportReason, PixelSupportState};
+    use crate::types::FileEntry;
+    use std::path::PathBuf;
+
+    fn file(transfer_syntax_uid: &str) -> FileEntry {
+        FileEntry {
+            index: 0,
+            path: PathBuf::from("fixture.dcm"),
+            label: String::new(),
+            patient_id: String::new(),
+            patient_name: String::new(),
+            study_instance_uid: String::new(),
+            study_date: String::new(),
+            study_description: String::new(),
+            series_instance_uid: String::new(),
+            series_number: String::new(),
+            series_description: String::new(),
+            modality: String::new(),
+            instance_number: String::new(),
+            sop_instance_uid: String::new(),
+            has_pixels: true,
+            frame_count: 1,
+            rows: 2,
+            columns: 2,
+            bits_allocated: 16,
+            pixel_representation: 0,
+            samples_per_pixel: 1,
+            photometric_interpretation: "MONOCHROME2".to_string(),
+            rescale_slope: 1.0,
+            rescale_intercept: 0.0,
+            transfer_syntax_uid: transfer_syntax_uid.to_string(),
+            default_window: None,
+        }
+    }
+
+    #[test]
+    fn current_monochrome_decode_paths_are_renderable() {
+        for uid in [
+            "1.2.840.10008.1.2",
+            "1.2.840.10008.1.2.1",
+            "1.2.840.10008.1.2.2",
+            "1.2.840.10008.1.2.4.50",
+            "1.2.840.10008.1.2.4.70",
+            "1.2.840.10008.1.2.4.90",
+        ] {
+            let support = classify_pixel_support(&file(uid));
+            assert_eq!(support.state, PixelSupportState::Renderable, "{uid}");
+            assert_eq!(support.reason_id(), None, "{uid}");
+        }
+    }
+
+    #[test]
+    fn absent_or_unrecognized_pixel_elements_are_metadata_only() {
+        let mut entry = file("1.2.840.10008.1.2.1");
+        entry.has_pixels = false;
+        entry.bits_allocated = 64;
+
+        let support = classify_pixel_support(&entry);
+        assert_eq!(support.state, PixelSupportState::MetadataOnly);
+        assert_eq!(
+            support.reason,
+            Some(PixelSupportReason::PixelDataAbsentOrUnrecognized)
+        );
+        assert_eq!(
+            support.reason_id(),
+            Some("pixel_data.absent_or_unrecognized")
+        );
+    }
+
+    #[test]
+    fn disabled_codecs_have_transfer_syntax_reasons() {
+        let cases = [
+            (
+                "1.2.840.10008.1.2.5",
+                PixelSupportReason::RleLosslessNotSupported,
+                "transfer_syntax.rle_lossless_not_supported",
+            ),
+            (
+                "1.2.840.10008.1.2.4.80",
+                PixelSupportReason::JpegLsNotSupported,
+                "transfer_syntax.jpeg_ls_not_supported",
+            ),
+            (
+                "1.2.840.10008.1.2.4.110",
+                PixelSupportReason::JpegXlNotSupported,
+                "transfer_syntax.jpeg_xl_not_supported",
+            ),
+            (
+                "1.2.840.10008.1.2.1.99",
+                PixelSupportReason::DeflatedDatasetNotSupported,
+                "transfer_syntax.deflated_dataset_not_supported",
+            ),
+            (
+                "1.2.840.10008.1.2.8.1",
+                PixelSupportReason::DeflatedImageFrameNotSupported,
+                "transfer_syntax.deflated_image_frame_not_supported",
+            ),
+            (
+                "9.9.9",
+                PixelSupportReason::TransferSyntaxNotSupported,
+                "transfer_syntax.not_supported",
+            ),
+        ];
+
+        for (uid, reason, reason_id) in cases {
+            let support = classify_pixel_support(&file(uid));
+            assert_eq!(support.state, PixelSupportState::Unsupported, "{uid}");
+            assert_eq!(support.reason, Some(reason), "{uid}");
+            assert_eq!(support.reason_id(), Some(reason_id), "{uid}");
+        }
+    }
+
+    #[test]
+    fn generic_color_responses_are_not_declared_fully_renderable() {
+        for (samples_per_pixel, photometric, expected_reason) in [
+            (3, "RGB", PixelSupportReason::GenericColorRenderingOnly),
+            (3, "YBR_FULL", PixelSupportReason::GenericColorRenderingOnly),
+            (
+                1,
+                "PALETTE COLOR",
+                PixelSupportReason::PaletteColorNotSupported,
+            ),
+        ] {
+            let mut entry = file("1.2.840.10008.1.2.1");
+            entry.bits_allocated = 8;
+            entry.samples_per_pixel = samples_per_pixel;
+            entry.photometric_interpretation = photometric.to_string();
+
+            let support = classify_pixel_support(&entry);
+            assert_eq!(
+                support.state,
+                PixelSupportState::Unsupported,
+                "{photometric}"
+            );
+            assert_eq!(support.reason, Some(expected_reason), "{photometric}");
+            assert!(support
+                .reason_id()
+                .is_some_and(|id| id.starts_with("pixel_layout.")));
+        }
+    }
+
+    #[test]
+    fn unsupported_numeric_layouts_have_pixel_layout_reasons() {
+        for (bits_allocated, expected_reason, reason_id) in [
+            (
+                1,
+                PixelSupportReason::BitPackedPixelsNotSupported,
+                "pixel_layout.bit_packed_not_supported",
+            ),
+            (
+                32,
+                PixelSupportReason::NumericPrecisionNotSupported,
+                "pixel_layout.numeric_precision_not_supported",
+            ),
+            (
+                64,
+                PixelSupportReason::NumericPrecisionNotSupported,
+                "pixel_layout.numeric_precision_not_supported",
+            ),
+        ] {
+            let mut entry = file("1.2.840.10008.1.2.1");
+            entry.bits_allocated = bits_allocated;
+
+            let support = classify_pixel_support(&entry);
+            assert_eq!(support.state, PixelSupportState::Unsupported);
+            assert_eq!(support.reason, Some(expected_reason));
+            assert_eq!(support.reason_id(), Some(reason_id));
+        }
+    }
+
+    #[test]
+    fn invalid_geometry_and_component_counts_are_layout_gaps() {
+        let mut invalid_geometry = file("1.2.840.10008.1.2.1");
+        invalid_geometry.rows = 0;
+        assert_eq!(
+            classify_pixel_support(&invalid_geometry).reason,
+            Some(PixelSupportReason::InvalidGeometry)
+        );
+
+        let mut unsupported_components = file("1.2.840.10008.1.2.1");
+        unsupported_components.samples_per_pixel = 4;
+        assert_eq!(
+            classify_pixel_support(&unsupported_components).reason,
+            Some(PixelSupportReason::SamplesPerPixelNotSupported)
+        );
+    }
+
+    #[test]
+    fn state_names_are_stable() {
+        assert_eq!(PixelSupportState::Renderable.as_str(), "renderable");
+        assert_eq!(PixelSupportState::MetadataOnly.as_str(), "metadata_only");
+        assert_eq!(PixelSupportState::Unsupported.as_str(), "unsupported");
     }
 }

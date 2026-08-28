@@ -17,5 +17,8 @@ pub use error::{PixelError, PixelResult};
 pub use service::{
     load_frame, load_raw_frame, FrameRequest, FrameResponse, RawFrameRequest, RawFrameResponse,
 };
-pub use syntax::classify_transfer_syntax;
+pub use syntax::{
+    classify_pixel_support, classify_transfer_syntax, PixelSupport, PixelSupportReason,
+    PixelSupportState,
+};
 pub use window::{apply_window, resolve_window, resolve_window_with_mode};
