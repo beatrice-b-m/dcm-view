@@ -69,28 +69,32 @@ describe("renderRawFrameToRgba", () => {
 			label: "unsigned 8-bit",
 			frame: frameFromSamples([0, 128, 255], 8, 0),
 			wc: 127.5,
-			ww: 255,
+			ww: 256,
+			expected: [0, 129, 255],
 		},
 		{
 			label: "signed 8-bit",
 			frame: frameFromSamples([-128, 0, 127], 8, 1),
 			wc: -0.5,
-			ww: 255,
+			ww: 256,
+			expected: [0, 129, 255],
 		},
 		{
 			label: "unsigned 16-bit little-endian",
 			frame: frameFromSamples([0, 32768, 65535], 16, 0),
 			wc: 32767.5,
-			ww: 65535,
+			ww: 65536,
+			expected: [0, 128, 255],
 		},
 		{
 			label: "signed 16-bit little-endian",
 			frame: frameFromSamples([-32768, 0, 32767], 16, 1),
 			wc: -0.5,
-			ww: 65535,
+			ww: 65536,
+			expected: [0, 128, 255],
 		},
-	])("windows $label samples across the grayscale range", ({ frame, wc, ww }) => {
-		expect(grayValues(renderRawFrameToRgba(frame, wc, ww))).toEqual([0, 128, 255]);
+	])("windows $label samples across the grayscale range", ({ frame, wc, ww, expected }) => {
+		expect(grayValues(renderRawFrameToRgba(frame, wc, ww))).toEqual(expected);
 	});
 
 	it("applies rescale metadata before windowing", () => {
@@ -107,7 +111,26 @@ describe("renderRawFrameToRgba", () => {
 			photometricInterpretation: " monochrome1 ",
 		});
 
-		expect(grayValues(renderRawFrameToRgba(frame, 127.5, 255))).toEqual([255, 0]);
+		expect(grayValues(renderRawFrameToRgba(frame, 127.5, 256))).toEqual([255, 0]);
+	});
+
+	it("uses the DICOM LINEAR half-unit boundaries", () => {
+		const frame = frameFromSamples([0, 1, 49, 50, 99, 100], 8, 0);
+
+		expect(grayValues(renderRawFrameToRgba(frame, 50, 100))).toEqual([
+			0,
+			3,
+			126,
+			129,
+			255,
+			255,
+		]);
+	});
+
+	it("treats width one as a threshold at center minus one half", () => {
+		const frame = frameFromSamples([49, 50], 8, 0);
+
+		expect(grayValues(renderRawFrameToRgba(frame, 50, 1))).toEqual([0, 255]);
 	});
 });
 

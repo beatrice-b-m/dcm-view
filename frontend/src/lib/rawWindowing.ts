@@ -186,17 +186,24 @@ function buildWindowLut(
 	wc: number,
 	ww: number,
 ): Uint8Array {
-	const low = wc - ww / 2;
-	const high = wc + ww / 2;
-	const range = Math.max(high - low, 1e-10);
+	const width = Math.max(ww, 1);
+	const center = wc - 0.5;
+	const low = center - (width - 1) / 2;
+	const high = center + (width - 1) / 2;
 	const invert = metadata.photometricInterpretation.trim().toUpperCase() === "MONOCHROME1";
 	const lut = new Uint8Array(reader.size);
 
 	for (let index = 0; index < reader.size; index += 1) {
 		const raw = index + reader.minRaw;
 		const modal = raw * metadata.rescaleSlope + metadata.rescaleIntercept;
-		let value = (modal - low) / range;
-		value = value < 0 ? 0 : value > 1 ? 1 : value;
+		let value: number;
+		if (modal <= low) {
+			value = 0;
+		} else if (modal > high || width === 1) {
+			value = 1;
+		} else {
+			value = (modal - center) / (width - 1) + 0.5;
+		}
 		if (invert) value = 1 - value;
 		lut[index] = Math.round(value * 255);
 	}
