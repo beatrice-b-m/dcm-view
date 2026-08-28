@@ -12,6 +12,7 @@ from scripts.compatibility.run import (
     normalized_report,
     pixel_geometry_observation,
     png_pixels,
+    reference_observation,
     series_observation,
     validate_json_schema,
     validate_report,
@@ -30,6 +31,60 @@ def grayscale_png(values: bytes, width: int, height: int) -> bytes:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_reference_observation_requires_exact_identity_and_local_frames(self) -> None:
+        expected = [
+            {
+                "relationship": "source_image",
+                "sop_class_uid": "1.2.class",
+                "sop_instance_uid": "1.2.instance",
+                "series_instance_uid": "1.2.series",
+                "frame_numbers": [1, 4],
+                "source_path": "source/instance.dcm",
+            }
+        ]
+        payload = {
+            "references": [
+                {
+                    "relationship": "source_image",
+                    "target": {
+                        "sop_class_uid": "1.2.class",
+                        "sop_instance_uid": "1.2.instance",
+                        "series_instance_uid": "1.2.series",
+                        "frame_numbers": [1, 4],
+                        "segment_numbers": [],
+                    },
+                    "matches": [
+                        {
+                            "file_index": 9,
+                            "path": "/corpus/extended/source/instance.dcm",
+                            "sop_instance_uid": "1.2.instance",
+                            "frame_indices": [0, 3],
+                        }
+                    ],
+                }
+            ]
+        }
+        observed = reference_observation(payload, expected)
+        self.assertTrue(observed["identities_match"])
+        self.assertTrue(observed["all_resolved"])
+        self.assertTrue(observed["exact_evidence"])
+        self.assertNotIn(
+            "resolve_references",
+            unprobed_capabilities(
+                ["resolve_references"], {"references": observed}
+            ),
+        )
+
+        payload["references"][0]["matches"][0]["frame_indices"] = [0]
+        mismatch = reference_observation(payload, expected)
+        self.assertFalse(mismatch["exact_evidence"])
+        self.assertIn(
+            "resolve_references",
+            unprobed_capabilities(
+                ["resolve_references"], {"references": mismatch}
+            ),
+        )
+
     def test_pixel_geometry_requires_exact_api_evidence_without_claiming_ui_rendering(self) -> None:
         expected = {
             "expected_nonsquare_spacing": {

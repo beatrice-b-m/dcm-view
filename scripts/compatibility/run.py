@@ -64,6 +64,8 @@ PROBED_CAPABILITIES = {
 }
 CONDITIONAL_CAPABILITY_CHECKS = {
     "interpret_pixel_geometry": "pixel_geometry",
+    "resolve_frame_references": "references",
+    "resolve_references": "references",
 }
 
 
@@ -499,6 +501,110 @@ def unprobed_capabilities(
     return sorted(unprobed)
 
 
+def reference_observation(
+    payload: Any, expected_references: list[dict[str, Any]]
+) -> dict[str, Any]:
+    identity_fields = (
+        "relationship",
+        "sop_class_uid",
+        "sop_instance_uid",
+        "series_instance_uid",
+        "frame_numbers",
+    )
+
+    def expected_identity(reference: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "relationship": reference.get("relationship"),
+            "sop_class_uid": reference.get("sop_class_uid"),
+            "sop_instance_uid": reference.get("sop_instance_uid"),
+            "series_instance_uid": reference.get("series_instance_uid"),
+            "frame_numbers": reference.get("frame_numbers") or [],
+        }
+
+    def observed_identity(reference: dict[str, Any]) -> dict[str, Any]:
+        target = reference.get("target") or {}
+        return {
+            "relationship": reference.get("relationship"),
+            "sop_class_uid": target.get("sop_class_uid"),
+            "sop_instance_uid": target.get("sop_instance_uid"),
+            "series_instance_uid": target.get("series_instance_uid"),
+            "frame_numbers": target.get("frame_numbers") or [],
+        }
+
+    def sorted_identities(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            values,
+            key=lambda value: json.dumps(value, sort_keys=True, separators=(",", ":")),
+        )
+
+    expected = sorted_identities([expected_identity(row) for row in expected_references])
+    observed_rows = (
+        payload.get("references")
+        if isinstance(payload, dict) and isinstance(payload.get("references"), list)
+        else []
+    )
+    observed = sorted_identities(
+        [observed_identity(row) for row in observed_rows if isinstance(row, dict)]
+    )
+    identities_match = observed == expected
+
+    resolution_checks = []
+    for expected_row in expected_references:
+        identity = expected_identity(expected_row)
+        candidate = next(
+            (
+                row
+                for row in observed_rows
+                if isinstance(row, dict) and observed_identity(row) == identity
+            ),
+            None,
+        )
+        expected_frames = [number - 1 for number in identity["frame_numbers"] if number > 0]
+        expected_path = expected_row.get("source_path")
+        matching_targets = []
+        if candidate is not None:
+            for match in candidate.get("matches") or []:
+                if not isinstance(match, dict):
+                    continue
+                normalized_match_path = str(match.get("path") or "").replace("\\", "/")
+                path_matches = not expected_path or normalized_match_path.endswith(
+                    "/" + expected_path
+                )
+                frames = match.get("frame_indices") or []
+                frames_match = not expected_frames or frames == expected_frames
+                uid_matches = match.get("sop_instance_uid") == identity["sop_instance_uid"]
+                if path_matches and frames_match and uid_matches:
+                    matching_targets.append(
+                        {
+                            "file_index": match.get("file_index"),
+                            "path": match.get("path"),
+                            "frame_indices": frames,
+                        }
+                    )
+        resolution_checks.append(
+            {
+                "identity": identity,
+                "expected_source_path": expected_path,
+                "matches": matching_targets,
+                "passed": bool(matching_targets),
+            }
+        )
+
+    all_resolved = all(check["passed"] for check in resolution_checks)
+    exact_evidence = identities_match and all_resolved
+    return {
+        "evidence_scope": "typed_api_identity_and_local_resolution",
+        "expected": expected,
+        "observed": observed,
+        "identity_fields": list(identity_fields),
+        "identities_match": identities_match,
+        "resolution_checks": resolution_checks,
+        "all_resolved": all_resolved,
+        "exact_evidence": exact_evidence,
+        "passed": exact_evidence,
+    }
+
+
 def series_observation(
     catalog: dict[str, Any], file_summary: dict[str, Any], expected: dict[str, Any]
 ) -> dict[str, Any]:
@@ -632,6 +738,13 @@ def probe_case(
         tags = request("tags", f"/api/file/{index}/tags")
         checks["file_info"] = info["status"] == 200 and isinstance(info["json"], dict)
         checks["tags"] = tags["status"] == 200 and isinstance(tags["json"], list)
+        expected_references = expected.get("references") or []
+        if expected_references:
+            reference_response = request("references", f"/api/file/{index}/references")
+            checks["references"] = reference_observation(
+                reference_response["json"] if reference_response["status"] == 200 else None,
+                expected_references,
+            )
         invalid = request("invalid_frame", f"/api/file/{index}/frame/{frame_count}")
         checks["error_envelope"] = (
             invalid["status"] in {400, 404, 422}
@@ -759,6 +872,7 @@ def _finish_result(
             "lossless_frame_hash",
             "lossless_frame_hashes",
             "pixel_geometry",
+            "references",
         ):
             if name in checks and checks[name].get("passed") is not True:
                 validation_failures.append(name)
