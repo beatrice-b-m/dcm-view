@@ -216,6 +216,12 @@ fn process_event(event: loader::DiscoveryEvent, registry: &FileRegistry) {
         }
         loader::DiscoveryEvent::Skipped => registry.record_skipped(),
         loader::DiscoveryEvent::Filtered => registry.record_filtered(),
+        loader::DiscoveryEvent::Selected { file, record } => {
+            registry.record_discovery(record);
+            registry.insert(*file);
+        }
+        loader::DiscoveryEvent::SkippedInput(record)
+        | loader::DiscoveryEvent::FilteredInput(record) => registry.record_discovery(record),
     }
 }
 
@@ -444,7 +450,7 @@ mod tests {
                 let result = match behavior {
                     TestBehavior::Complete(file) => {
                         events
-                            .send(loader::DiscoveryEvent::File(Box::new(file)))
+                            .send(selected_event(file))
                             .await
                             .map_err(|_| anyhow::anyhow!("synthetic event receiver closed"))?;
                         Ok(loader::DiscoveryReport {
@@ -462,7 +468,7 @@ mod tests {
                     }),
                     TestBehavior::WaitForCancellation(file) => {
                         events
-                            .send(loader::DiscoveryEvent::File(Box::new(file)))
+                            .send(selected_event(file))
                             .await
                             .map_err(|_| anyhow::anyhow!("synthetic event receiver closed"))?;
                         while !cancellation.is_cancelled() {
@@ -512,6 +518,18 @@ mod tests {
             rescale_intercept: 0.0,
             transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
             default_window: None,
+        }
+    }
+
+    fn selected_event(file: FileEntry) -> loader::DiscoveryEvent {
+        let path = file.path.clone();
+        loader::DiscoveryEvent::Selected {
+            file: Box::new(file),
+            record: loader::DiscoveryRecord {
+                path,
+                disposition: loader::DiscoveryDisposition::Selected,
+                reason: loader::DiscoveryReason::ValidDicom,
+            },
         }
     }
 
@@ -591,6 +609,14 @@ mod tests {
         assert_eq!(outcome, DiscoveryOutcome::Completed);
         assert!(spawner.finished.load(Ordering::Acquire));
         assert_eq!(registry.status().file_count, 1);
+        assert_eq!(
+            registry.discovery_ledger_snapshot(),
+            vec![loader::DiscoveryRecord {
+                path: PathBuf::from("/synthetic/scan.dcm"),
+                disposition: loader::DiscoveryDisposition::Selected,
+                reason: loader::DiscoveryReason::ValidDicom,
+            }]
+        );
     }
 
     #[tokio::test]

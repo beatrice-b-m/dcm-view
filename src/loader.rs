@@ -6,7 +6,7 @@ use dicom_object::OpenFileOptions;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{self, Read, Seek};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -140,6 +140,66 @@ pub enum DiscoveryEvent {
     File(Box<FileEntry>),
     Skipped,
     Filtered,
+    Selected {
+        file: Box<FileEntry>,
+        record: DiscoveryRecord,
+    },
+    SkippedInput(DiscoveryRecord),
+    FilteredInput(DiscoveryRecord),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DiscoveryDisposition {
+    Selected,
+    Skipped,
+    Filtered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DiscoveryReason {
+    ValidDicom,
+    InputPathUnavailable,
+    DirectoryEntryUnreadable,
+    MissingPart10Preamble,
+    DicomParseFailed,
+    InspectionFailed,
+    FilterMismatch,
+}
+
+impl DiscoveryReason {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ValidDicom => "valid_dicom",
+            Self::InputPathUnavailable => "input_path_unavailable",
+            Self::DirectoryEntryUnreadable => "directory_entry_unreadable",
+            Self::MissingPart10Preamble => "missing_part10_preamble",
+            Self::DicomParseFailed => "dicom_parse_failed",
+            Self::InspectionFailed => "inspection_failed",
+            Self::FilterMismatch => "filter_mismatch",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DiscoveryRecord {
+    pub path: PathBuf,
+    pub disposition: DiscoveryDisposition,
+    pub reason: DiscoveryReason,
+}
+
+impl DiscoveryRecord {
+    fn new(path: &Path, disposition: DiscoveryDisposition, reason: DiscoveryReason) -> Self {
+        Self {
+            path: normalize_input_path(path),
+            disposition,
+            reason,
+        }
+    }
+}
+
+enum EntryInspection {
+    Selected(FileEntry),
+    Skipped(DiscoveryReason),
 }
 
 #[derive(Debug, Clone)]
@@ -240,7 +300,10 @@ pub async fn discover_progressive_with_cancellation(
     .context("loader worker panicked")?
 }
 
-fn collect_candidates(paths: &[PathBuf], options: &DiscoverOptions) -> (Vec<PathBuf>, usize) {
+fn collect_candidates(
+    paths: &[PathBuf],
+    options: &DiscoverOptions,
+) -> (Vec<PathBuf>, Vec<DiscoveryRecord>) {
     collect_candidates_with_check(paths, options, || Ok(()))
         .expect("infallible candidate collection check failed")
 }
@@ -250,7 +313,7 @@ fn collect_progressive_candidates(
     options: &DiscoverOptions,
     events: &mpsc::Sender<DiscoveryEvent>,
     cancellation: &DiscoveryCancellation,
-) -> std::result::Result<(Vec<PathBuf>, usize), DiscoveryCancelled> {
+) -> std::result::Result<(Vec<PathBuf>, Vec<DiscoveryRecord>), DiscoveryCancelled> {
     collect_candidates_with_check(paths, options, || {
         ensure_discovery_active(events, cancellation)
     })
@@ -260,12 +323,12 @@ fn collect_candidates_with_check<F>(
     paths: &[PathBuf],
     options: &DiscoverOptions,
     mut check_active: F,
-) -> std::result::Result<(Vec<PathBuf>, usize), DiscoveryCancelled>
+) -> std::result::Result<(Vec<PathBuf>, Vec<DiscoveryRecord>), DiscoveryCancelled>
 where
     F: FnMut() -> std::result::Result<(), DiscoveryCancelled>,
 {
     let mut candidates = Vec::new();
-    let mut skipped = 0_usize;
+    let mut skipped = Vec::new();
 
     for path in paths {
         check_active()?;
@@ -293,7 +356,12 @@ where
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        skipped += 1;
+                        let skipped_path = error.path().unwrap_or(path);
+                        skipped.push(DiscoveryRecord::new(
+                            skipped_path,
+                            DiscoveryDisposition::Skipped,
+                            DiscoveryReason::DirectoryEntryUnreadable,
+                        ));
                         eprintln!("dcmview: warning — could not read path entry: {error}");
                     }
                 }
@@ -301,7 +369,11 @@ where
             continue;
         }
 
-        skipped += 1;
+        skipped.push(DiscoveryRecord::new(
+            path,
+            DiscoveryDisposition::Skipped,
+            DiscoveryReason::InputPathUnavailable,
+        ));
         eprintln!(
             "dcmview: warning — input path does not exist or is unsupported: {}",
             path.display()
@@ -313,7 +385,8 @@ where
 }
 
 fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<LoadReport> {
-    let (candidates, mut skipped) = collect_candidates(paths, options);
+    let (candidates, initial_skipped) = collect_candidates(paths, options);
+    let mut skipped = initial_skipped.len();
 
     let processed: Vec<_> = candidates
         .par_iter()
@@ -325,9 +398,11 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
 
     for item in processed {
         match item {
-            Ok(Some(entry)) if matches_filters(&entry, &options.filters) => files.push(entry),
-            Ok(Some(_)) => filtered += 1,
-            Ok(None) => skipped += 1,
+            Ok(EntryInspection::Selected(entry)) if matches_filters(&entry, &options.filters) => {
+                files.push(entry)
+            }
+            Ok(EntryInspection::Selected(_)) => filtered += 1,
+            Ok(EntryInspection::Skipped(_)) => skipped += 1,
             Err(error) => {
                 skipped += 1;
                 eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
@@ -360,12 +435,12 @@ fn discover_progressive_blocking(
 ) -> Result<DiscoveryReport> {
     let (candidates, initial_skipped) =
         collect_progressive_candidates(paths, options, &events, cancellation)?;
-    for _ in 0..initial_skipped {
-        send_discovery_event(&events, cancellation, DiscoveryEvent::Skipped)?;
+    for record in initial_skipped.iter().cloned() {
+        send_discovery_event(&events, cancellation, DiscoveryEvent::SkippedInput(record))?;
     }
 
     let files_found = AtomicUsize::new(0);
-    let skipped = AtomicUsize::new(initial_skipped);
+    let skipped = AtomicUsize::new(initial_skipped.len());
     let filtered = AtomicUsize::new(0);
 
     let processing_result: std::result::Result<(), DiscoveryCancelled> = candidates
@@ -374,24 +449,58 @@ fn discover_progressive_blocking(
             ensure_discovery_active(events, cancellation)?;
 
             match build_entry(candidate) {
-                Ok(Some(entry)) if matches_filters(&entry, &options.filters) => {
+                Ok(EntryInspection::Selected(entry))
+                    if matches_filters(&entry, &options.filters) =>
+                {
+                    let record = DiscoveryRecord::new(
+                        candidate,
+                        DiscoveryDisposition::Selected,
+                        DiscoveryReason::ValidDicom,
+                    );
                     send_discovery_event(
                         events,
                         cancellation,
-                        DiscoveryEvent::File(Box::new(entry)),
+                        DiscoveryEvent::Selected {
+                            file: Box::new(entry),
+                            record,
+                        },
                     )?;
                     files_found.fetch_add(1, Ordering::Relaxed);
                 }
-                Ok(Some(_)) => {
-                    send_discovery_event(events, cancellation, DiscoveryEvent::Filtered)?;
+                Ok(EntryInspection::Selected(_)) => {
+                    let record = DiscoveryRecord::new(
+                        candidate,
+                        DiscoveryDisposition::Filtered,
+                        DiscoveryReason::FilterMismatch,
+                    );
+                    send_discovery_event(
+                        events,
+                        cancellation,
+                        DiscoveryEvent::FilteredInput(record),
+                    )?;
                     filtered.fetch_add(1, Ordering::Relaxed);
                 }
-                Ok(None) => {
-                    send_discovery_event(events, cancellation, DiscoveryEvent::Skipped)?;
+                Ok(EntryInspection::Skipped(reason)) => {
+                    let record =
+                        DiscoveryRecord::new(candidate, DiscoveryDisposition::Skipped, reason);
+                    send_discovery_event(
+                        events,
+                        cancellation,
+                        DiscoveryEvent::SkippedInput(record),
+                    )?;
                     skipped.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(error) => {
-                    send_discovery_event(events, cancellation, DiscoveryEvent::Skipped)?;
+                    let record = DiscoveryRecord::new(
+                        candidate,
+                        DiscoveryDisposition::Skipped,
+                        DiscoveryReason::InspectionFailed,
+                    );
+                    send_discovery_event(
+                        events,
+                        cancellation,
+                        DiscoveryEvent::SkippedInput(record),
+                    )?;
                     skipped.fetch_add(1, Ordering::Relaxed);
                     eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
                 }
@@ -453,9 +562,11 @@ fn matches_filters(entry: &FileEntry, filters: &[ScanFilter]) -> bool {
     filters.iter().all(|filter| filter.matches(entry))
 }
 
-fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
+fn build_entry(path: &Path) -> Result<EntryInspection> {
     if !has_dicm_preamble(path)? {
-        return Ok(None);
+        return Ok(EntryInspection::Skipped(
+            DiscoveryReason::MissingPart10Preamble,
+        ));
     }
 
     let obj = match OpenFileOptions::new()
@@ -463,7 +574,7 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
         .open_file(path)
     {
         Ok(obj) => obj,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(EntryInspection::Skipped(DiscoveryReason::DicomParseFailed)),
     };
 
     let transfer_syntax_uid = obj.meta().transfer_syntax().to_string();
@@ -504,7 +615,7 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
         .unwrap_or_else(|| path.to_string_lossy().to_string());
     let label = build_label(&patient_id, &modality, &study_date, &fallback_label);
 
-    Ok(Some(FileEntry {
+    Ok(EntryInspection::Selected(FileEntry {
         index: 0,
         path: path.to_path_buf(),
         label,
@@ -532,6 +643,39 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
         transfer_syntax_uid,
         default_window,
     }))
+}
+
+fn normalize_input_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|current| current.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    lexical_normalize(&absolute)
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.is_absolute() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 fn has_dicm_preamble(path: &Path) -> Result<bool> {

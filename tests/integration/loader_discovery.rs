@@ -80,6 +80,7 @@ async fn progressive_discovery_applies_backpressure_and_reports_each_disposition
     let mut accepted_events = 0;
     let mut skipped_events = 0;
     let mut filtered_events = 0;
+    let expected_root = dir.path().canonicalize().expect("canonical temp path");
     while let Some(event) = events_rx.recv().await {
         match event {
             loader::DiscoveryEvent::File(file) => {
@@ -88,6 +89,29 @@ async fn progressive_discovery_applies_backpressure_and_reports_each_disposition
             }
             loader::DiscoveryEvent::Skipped => skipped_events += 1,
             loader::DiscoveryEvent::Filtered => filtered_events += 1,
+            loader::DiscoveryEvent::Selected { file, record } => {
+                accepted_events += 1;
+                assert_eq!(file.modality, "CT");
+                assert_eq!(record.disposition, loader::DiscoveryDisposition::Selected);
+                assert_eq!(record.reason, loader::DiscoveryReason::ValidDicom);
+                assert_eq!(record.reason.code(), "valid_dicom");
+                assert_eq!(record.path, expected_root.join("accepted.dcm"));
+            }
+            loader::DiscoveryEvent::SkippedInput(record) => {
+                skipped_events += 1;
+                assert_eq!(record.disposition, loader::DiscoveryDisposition::Skipped);
+                assert_eq!(
+                    record.reason,
+                    loader::DiscoveryReason::MissingPart10Preamble
+                );
+                assert_eq!(record.path, expected_root.join("not-dicom.bin"));
+            }
+            loader::DiscoveryEvent::FilteredInput(record) => {
+                filtered_events += 1;
+                assert_eq!(record.disposition, loader::DiscoveryDisposition::Filtered);
+                assert_eq!(record.reason, loader::DiscoveryReason::FilterMismatch);
+                assert_eq!(record.path, expected_root.join("filtered.dcm"));
+            }
         }
     }
 
@@ -101,6 +125,35 @@ async fn progressive_discovery_applies_backpressure_and_reports_each_disposition
     assert_eq!(report.files_found, 1);
     assert_eq!(report.skipped, 1);
     assert_eq!(report.filtered, 1);
+}
+
+#[tokio::test]
+async fn progressive_discovery_records_normalized_unavailable_input() {
+    let dir = tempdir().expect("temp dir");
+    let unavailable = dir.path().join("nested/../missing.dcm");
+    let expected = dir.path().join("missing.dcm");
+    let (events_tx, mut events_rx) = mpsc::channel(1);
+
+    let report = loader::discover_progressive(
+        std::slice::from_ref(&unavailable),
+        discover_options(true),
+        events_tx,
+    )
+    .await
+    .expect("unavailable input should produce a completed discovery report");
+
+    let event = events_rx.recv().await.expect("unavailable input event");
+    let loader::DiscoveryEvent::SkippedInput(record) = event else {
+        panic!("expected detailed skipped-input event");
+    };
+    assert_eq!(record.path, expected);
+    assert_eq!(record.disposition, loader::DiscoveryDisposition::Skipped);
+    assert_eq!(record.reason, loader::DiscoveryReason::InputPathUnavailable);
+    assert_eq!(record.reason.code(), "input_path_unavailable");
+    assert!(events_rx.recv().await.is_none());
+    assert_eq!(report.files_found, 0);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.filtered, 0);
 }
 
 #[tokio::test]
