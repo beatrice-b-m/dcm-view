@@ -38,6 +38,18 @@ It also captures the completed `/api/series` catalog once per shard and records
 each file's logical stack, virtual position, ordered source frames, geometry
 warnings, concatenation identity, and WSI level/companion classification.
 Manifest-declared series capabilities are evaluated from that server-owned
-evidence rather than by reimplementing DICOM ordering in the harness.
+evidence rather than by reimplementing DICOM ordering in the harness. For
+reference-bearing objects, the runner compares the typed reference endpoint to
+the manifest identity closure and requires every declared SOP/path/frame target
+to resolve locally before marking reference resolution as probed. Physical
+pixel aspect is compared exactly from `/api/files`; that observation is labeled
+as API metadata evidence and does not claim a real-browser layout check.
+
+For lossless transfer syntaxes, every manifest frame hash is compared with the
+decoded raw endpoint, not only the first frame. The first and last display
+frames are also decoded far enough to validate PNG dimensions, while declared
+small visual patterns are checked from decoded PNG pixels where an explicit
+validator exists.
+
 It writes separate process logs, a companion-schema detail report, a timing-free
 normalized report for reproducibility comparison, and a SHA-256 artifact index.
