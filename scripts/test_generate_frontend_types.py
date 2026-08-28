@@ -33,6 +33,10 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("responseHeaders: CacheResponseHeaders;", output)
 		self.assertIn("responseHeaders: RawFrameResponseHeaders;", output)
 		self.assertIn("responseHeaders: ExportResponseHeaders;", output)
+		self.assertIn("fileSemanticContext: {", output)
+		self.assertIn("response: SemanticContextResponse;", output)
+		self.assertIn('({ kind: "segmentation" } & SegmentationContext)', output)
+		self.assertIn("context: SemanticContext;", output)
 		self.assertEqual(
 			output.count("error: ErrorResponse;"),
 			len(generator.parse_api_endpoints(self.source)),

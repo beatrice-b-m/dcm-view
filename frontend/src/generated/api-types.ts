@@ -42,6 +42,14 @@ export interface ApiEndpointTypes {
 		responseHeaders: never;
 		error: ErrorResponse;
 	};
+	fileSemanticContext: {
+		params: { index: number };
+		query: never;
+		request: never;
+		response: SemanticContextResponse;
+		responseHeaders: never;
+		error: ErrorResponse;
+	};
 	fileFrame: {
 		params: { index: number; frame: number };
 		query: FrameQuery;
@@ -164,6 +172,18 @@ export const API_ENDPOINTS = {
 		requestType: null,
 		requestMediaType: null,
 		responseType: "ReferenceCatalogResponse",
+		responseMediaType: "application/json",
+		responseHeadersType: null,
+		errorType: "ErrorResponse",
+		successStatus: 200,
+	},
+	fileSemanticContext: {
+		method: "GET",
+		path: "/api/file/{index}/semantic-context",
+		queryType: null,
+		requestType: null,
+		requestMediaType: null,
+		responseType: "SemanticContextResponse",
 		responseMediaType: "application/json",
 		responseHeadersType: null,
 		errorType: "ErrorResponse",
@@ -429,6 +449,12 @@ export type TagValue =
 	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
 	| { type: "error"; message: string };
 
+export type SemanticContext =
+	| ({ kind: "segmentation" } & SegmentationContext)
+	| ({ kind: "parametric_map" } & ParametricMapContext)
+	| ({ kind: "rt_dose" } & RtDoseContext)
+	| { kind: "not_applicable"; reason: string };
+
 export interface ReferenceCatalogResponse {
 	source_file_index: number;
 	source_sop_instance_uid: string;
@@ -454,6 +480,99 @@ export interface ReferenceMatchSummary {
 	path: string;
 	sop_instance_uid: string;
 	frame_indices: number[];
+}
+
+export interface SemanticContextResponse {
+	source_file_index: number;
+	default_mode: string;
+	pixel_preview_preserves_stored_values: boolean;
+	context: SemanticContext;
+}
+
+export interface CodedConceptSummary {
+	value: string;
+	scheme: string;
+	meaning: string;
+}
+
+export interface SegmentationContext {
+	segmentation_type: string | null;
+	segmentation_fractional_type: string | null;
+	maximum_fractional_value: number | null;
+	segments: SegmentSummary[];
+	frame_mappings: SegmentFrameMapping[];
+	references: ReferenceSummary[];
+	overlay: OverlayEligibility;
+}
+
+export interface SegmentSummary {
+	number: number;
+	label: string | null;
+	description: string | null;
+	property_category: CodedConceptSummary | null;
+	property_type: CodedConceptSummary | null;
+	algorithm_type: string | null;
+	algorithm_name: string | null;
+	recommended_display_cielab: number[] | null;
+	recommended_display_grayscale: number | null;
+}
+
+export interface SegmentFrameMapping {
+	frame_index: number;
+	segment_number: number | null;
+	source_sop_instance_uid: string | null;
+	source_frame_numbers: number[];
+	source_file_indices: number[];
+}
+
+export interface OverlayEligibility {
+	eligible: boolean;
+	reason: string;
+	source_file_index: number | null;
+}
+
+export interface ParametricMapContext {
+	stored_value_type: string;
+	displayed_value_kind: string;
+	mappings: RealWorldValueMappingSummary[];
+	mapping_status: string;
+	source_references: ReferenceSummary[];
+	warnings: string[];
+}
+
+export interface RealWorldValueMappingSummary {
+	source: string;
+	label: string | null;
+	first_value_mapped: number | null;
+	last_value_mapped: number | null;
+	slope: number | null;
+	intercept: number | null;
+	lut_data: number[];
+	lut_data_truncated: boolean;
+	units: CodedConceptSummary | null;
+	quantity: CodedConceptSummary | null;
+	derivation: CodedConceptSummary | null;
+}
+
+export interface RtDoseContext {
+	dose_grid_scaling: number | null;
+	scaling_status: string;
+	displayed_value_kind: string;
+	dose_units: string | null;
+	dose_type: string | null;
+	dose_summation_type: string | null;
+	geometry: DoseGridGeometry;
+	references: ReferenceSummary[];
+	overlay: OverlayEligibility;
+	clinical_use_warning: string;
+}
+
+export interface DoseGridGeometry {
+	frame_of_reference_uid: string | null;
+	image_position_patient: [number, number, number] | null;
+	image_orientation_patient: [number, number, number, number, number, number] | null;
+	pixel_spacing: [number, number] | null;
+	grid_frame_offsets: number[];
 }
 
 export interface DiscoveryResult {

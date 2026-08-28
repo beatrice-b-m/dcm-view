@@ -90,20 +90,21 @@ async fn segmentation_context_reports_segment_closure_and_validated_overlay() {
         .json();
     assert_eq!(response["default_mode"], "pixel_preview");
     assert_eq!(response["pixel_preview_preserves_stored_values"], true);
-    assert_eq!(response["kind"], "segmentation");
-    assert_eq!(response["segmentation_type"], "BINARY");
-    assert_eq!(response["segments"][0]["number"], 1);
+    let context = &response["context"];
+    assert_eq!(context["kind"], "segmentation");
+    assert_eq!(context["segmentation_type"], "BINARY");
+    assert_eq!(context["segments"][0]["number"], 1);
     assert_eq!(
-        response["segments"][0]["property_type"]["meaning"],
+        context["segments"][0]["property_type"]["meaning"],
         "Neoplasm"
     );
-    assert_eq!(response["frame_mappings"][0]["segment_number"], 1);
+    assert_eq!(context["frame_mappings"][0]["segment_number"], 1);
     assert_eq!(
-        response["frame_mappings"][0]["source_file_indices"],
+        context["frame_mappings"][0]["source_file_indices"],
         serde_json::json!([1])
     );
-    assert_eq!(response["overlay"]["eligible"], true);
-    assert_eq!(response["overlay"]["source_file_index"], 1);
+    assert_eq!(context["overlay"]["eligible"], true);
+    assert_eq!(context["overlay"]["source_file_index"], 1);
 }
 
 #[tokio::test]
@@ -159,13 +160,14 @@ async fn parametric_map_context_exposes_explicit_mapping_without_applying_it() {
         .get("/api/file/0/semantic-context")
         .await
         .json();
-    assert_eq!(response["kind"], "parametric_map");
-    assert_eq!(response["stored_value_type"], "float32");
-    assert_eq!(response["displayed_value_kind"], "mapped");
-    assert_eq!(response["mapping_status"], "mapping_available");
-    assert_eq!(response["mappings"][0]["slope"], 0.5);
-    assert_eq!(response["mappings"][0]["intercept"], -1.0);
-    assert_eq!(response["mappings"][0]["units"]["scheme"], "UCUM");
+    let context = &response["context"];
+    assert_eq!(context["kind"], "parametric_map");
+    assert_eq!(context["stored_value_type"], "float32");
+    assert_eq!(context["displayed_value_kind"], "mapped");
+    assert_eq!(context["mapping_status"], "mapping_available");
+    assert_eq!(context["mappings"][0]["slope"], 0.5);
+    assert_eq!(context["mappings"][0]["intercept"], -1.0);
+    assert_eq!(context["mappings"][0]["units"]["scheme"], "UCUM");
 }
 
 #[tokio::test]
@@ -207,21 +209,22 @@ async fn rt_dose_context_reports_scaling_geometry_and_refuses_incompatible_overl
         .get("/api/file/0/semantic-context")
         .await
         .json();
-    assert_eq!(response["kind"], "rt_dose");
-    assert_eq!(response["dose_grid_scaling"], 0.0025);
-    assert_eq!(response["scaling_status"], "available");
-    assert_eq!(response["displayed_value_kind"], "mapped");
-    assert_eq!(response["dose_units"], "GY");
+    let context = &response["context"];
+    assert_eq!(context["kind"], "rt_dose");
+    assert_eq!(context["dose_grid_scaling"], 0.0025);
+    assert_eq!(context["scaling_status"], "available");
+    assert_eq!(context["displayed_value_kind"], "mapped");
+    assert_eq!(context["dose_units"], "GY");
     assert_eq!(
-        response["geometry"]["grid_frame_offsets"],
+        context["geometry"]["grid_frame_offsets"],
         serde_json::json!([0.0, 2.5, 5.0])
     );
-    assert_eq!(response["overlay"]["eligible"], false);
-    assert!(response["overlay"]["reason"]
+    assert_eq!(context["overlay"]["eligible"], false);
+    assert!(context["overlay"]["reason"]
         .as_str()
         .expect("overlay reason")
         .contains("incompatible"));
-    assert!(response["clinical_use_warning"]
+    assert!(context["clinical_use_warning"]
         .as_str()
         .expect("warning")
         .contains("clinical acceptability"));

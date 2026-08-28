@@ -41,26 +41,7 @@ def ts_type(rust_type: str, *, option_as_optional: bool = False) -> str:
 		return "boolean"
 	if rust_type in {"String", "&str", "&'static str"}:
 		return "string"
-	if rust_type in {
-		"WindowPreset",
-		"FileSummary",
-		"SeriesSummary",
-		"SeriesStackSummary",
-		"FrameRefSummary",
-		"SeriesWarningSummary",
-		"ReferenceCatalogResponse",
-		"ReferenceSummary",
-		"ReferenceTargetSummary",
-		"ReferenceMatchSummary",
-		"DiscoveryResult",
-		"ViewerIdentity",
-		"TagNode",
-		"TagValue",
-		"WindowMode",
-		"TagQuery",
-		"ApiErrorCode",
-		"SupportState",
-	}:
+	if rust_type in set(STRUCTS) | set(ENUMS):
 		return rust_type
 	raise ValueError(f"unsupported Rust type: {rust_type}")
 
@@ -122,6 +103,18 @@ def render_tag_value(source: str) -> str:
 			fields.append(f"{field}{suffix}: {ts_type(rust_type, option_as_optional=optional)}")
 		variants.append("\t| { " + "; ".join(fields) + " }")
 	return "export type TagValue =\n" + "\n".join(variants) + ";"
+
+
+def render_semantic_context() -> str:
+	return "\n".join(
+		[
+			"export type SemanticContext =",
+			'\t| ({ kind: "segmentation" } & SegmentationContext)',
+			'\t| ({ kind: "parametric_map" } & ParametricMapContext)',
+			'\t| ({ kind: "rt_dose" } & RtDoseContext)',
+			'\t| { kind: "not_applicable"; reason: string };',
+		]
+	)
 
 
 def render_raw_frame_headers(source: str) -> str:
@@ -361,5 +354,6 @@ def render(source: str) -> str:
 	sections.extend(render_struct(source, name) for name in STRUCTS[:8])
 	sections.append(render_raw_frame_headers(source))
 	sections.append(render_tag_value(source))
+	sections.append(render_semantic_context())
 	sections.extend(render_struct(source, name) for name in STRUCTS[8:])
 	return "\n\n".join(sections) + "\n"

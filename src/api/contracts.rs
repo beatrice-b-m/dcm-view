@@ -553,7 +553,6 @@ pub struct SemanticContextResponse {
     /// The normal frame endpoints remain the default and are never semantically transformed.
     pub default_mode: String,
     pub pixel_preview_preserves_stored_values: bool,
-    #[serde(flatten)]
     pub context: SemanticContext,
 }
 

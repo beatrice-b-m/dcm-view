@@ -16,6 +16,16 @@ STRUCTS = (
 	"ReferenceSummary",
 	"ReferenceTargetSummary",
 	"ReferenceMatchSummary",
+	"SemanticContextResponse",
+	"CodedConceptSummary",
+	"SegmentationContext",
+	"SegmentSummary",
+	"SegmentFrameMapping",
+	"OverlayEligibility",
+	"ParametricMapContext",
+	"RealWorldValueMappingSummary",
+	"RtDoseContext",
+	"DoseGridGeometry",
 	"DiscoveryResult",
 	"FrameInfo",
 	"ViewerIdentity",
@@ -27,7 +37,7 @@ STRUCTS = (
 	"TagNode",
 	"ErrorResponse",
 )
-ENUMS = ("WindowMode", "SupportState", "ApiErrorCode", "TagValue")
+ENUMS = ("WindowMode", "SupportState", "ApiErrorCode", "TagValue", "SemanticContext")
 INPUT_STRUCTS = frozenset({"FrameQuery", "TagQuery"})
 
 ENDPOINT_TYPE_MARKERS = {
