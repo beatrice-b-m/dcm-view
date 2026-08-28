@@ -166,6 +166,7 @@ pub enum DiscoveryReason {
     DirectoryEntryUnreadable,
     MissingPart10Preamble,
     DicomParseFailed,
+    UnsupportedMediaDirectory,
     InspectionFailed,
     FilterMismatch,
 }
@@ -178,6 +179,7 @@ impl DiscoveryReason {
             Self::DirectoryEntryUnreadable => "directory_entry_unreadable",
             Self::MissingPart10Preamble => "missing_part10_preamble",
             Self::DicomParseFailed => "dicom_parse_failed",
+            Self::UnsupportedMediaDirectory => "unsupported_media_directory",
             Self::InspectionFailed => "inspection_failed",
             Self::FilterMismatch => "filter_mismatch",
         }
@@ -584,6 +586,11 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let modality = read_str(&obj, "Modality").unwrap_or_default();
     let sop_instance_uid = read_str(&obj, "SOPInstanceUID").unwrap_or_default();
     let sop_class_uid = read_str(&obj, "SOPClassUID").unwrap_or_default();
+    if sop_class_uid == "1.2.840.10008.1.3.10" {
+        return Ok(EntryInspection::Skipped(
+            DiscoveryReason::UnsupportedMediaDirectory,
+        ));
+    }
     let study_instance_uid = read_str(&obj, "StudyInstanceUID").unwrap_or_default();
     let study_date = read_str(&obj, "StudyDate").unwrap_or_default();
     let study_description = read_str(&obj, "StudyDescription").unwrap_or_default();

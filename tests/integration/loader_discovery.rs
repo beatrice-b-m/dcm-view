@@ -157,6 +157,47 @@ async fn progressive_discovery_records_normalized_unavailable_input() {
 }
 
 #[tokio::test]
+async fn skips_dicomdir_with_stable_reason_and_keeps_neighbor_instances() {
+    let dir = tempdir().expect("temp dir");
+    let dicomdir = dir.path().join("DICOMDIR");
+    let image = dir.path().join("image.dcm");
+    write_dicomdir(&dicomdir);
+    write_test_dicom(&image, "P1", "CR", "20260101", 1, true);
+
+    let (events_tx, mut events_rx) = mpsc::channel(4);
+    let report = loader::discover_progressive(
+        &[dir.path().to_path_buf()],
+        discover_options(true),
+        events_tx,
+    )
+    .await
+    .expect("mixed media directory should complete");
+
+    let mut saw_media_skip = false;
+    let mut saw_image = false;
+    while let Some(event) = events_rx.recv().await {
+        match event {
+            loader::DiscoveryEvent::SkippedInput(record) if record.path.ends_with("DICOMDIR") => {
+                saw_media_skip = true;
+                assert_eq!(
+                    record.reason,
+                    loader::DiscoveryReason::UnsupportedMediaDirectory
+                );
+                assert_eq!(record.reason.code(), "unsupported_media_directory");
+            }
+            loader::DiscoveryEvent::Selected { file, .. } if file.path.ends_with("image.dcm") => {
+                saw_image = true
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_media_skip);
+    assert!(saw_image);
+    assert_eq!(report.files_found, 1);
+    assert_eq!(report.skipped, 1);
+}
+
+#[tokio::test]
 async fn progressive_discovery_stops_before_work_when_pre_cancelled() {
     let dir = tempdir().expect("temp dir");
     copy_golden_discovery_fixtures(dir.path(), 4);
@@ -502,4 +543,21 @@ fn write_test_dicom(
     file_object
         .write_to_file(path)
         .expect("write DICOM fixture");
+}
+
+fn write_dicomdir(path: &Path) {
+    const MEDIA_STORAGE_DIRECTORY: &str = "1.2.840.10008.1.3.10";
+    let obj = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SOP_CLASS_UID, VR::UI, MEDIA_STORAGE_DIRECTORY),
+        DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.999"),
+    ]);
+    obj.with_meta(
+        FileMetaTableBuilder::new()
+            .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+            .media_storage_sop_class_uid(MEDIA_STORAGE_DIRECTORY)
+            .media_storage_sop_instance_uid("2.25.999"),
+    )
+    .expect("build DICOMDIR meta")
+    .write_to_file(path)
+    .expect("write DICOMDIR fixture");
 }
