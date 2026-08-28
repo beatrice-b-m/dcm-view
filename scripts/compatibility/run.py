@@ -42,6 +42,11 @@ PROBED_CAPABILITIES = {
     "render_native_pixels",
     "render_compressed_pixels",
     "decode_rle_lossless_pixels",
+    "render_color",
+    "render_palette_color",
+    "render_float_pixels",
+    "render_double_float_pixels",
+    "unpack_native_bit_packed_pixels",
     "navigate_multiframe",
     "sort_series_by_geometry",
     "parse_multiframe_functional_groups",
@@ -297,6 +302,19 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
         "2x2_vl_photo_palette_red_green_blue_white",
         "2x2_vl_photo_rgb_red_green_blue_white",
         "2x2_vl_photo_rgb_red_green_blue_white_with_srgb_icc",
+        "2x2_palette_rle_lossless_red_green_blue_white",
+        "2x2x2_palette_rle_lossless_palette_order_reversed",
+        "2x2_rgb_rle_lossless_red_green_blue_white",
+        "2x2_rgb_planar1_rle_lossless_red_green_blue_white",
+        "2x2x2_rgb_planar0_rle_lossless_primary_secondary",
+        "2x2x2_rgb_planar1_rle_lossless_primary_secondary",
+        "2x2_ybr_full_rle_lossless_red_green_blue_white",
+        "2x2_ybr_full_planar1_rle_lossless_red_green_blue_white",
+        "2x2x2_ybr_full_planar0_rle_lossless_primary_secondary",
+        "2x2x2_ybr_full_planar1_rle_lossless_primary_secondary",
+        "2x2_vl_photo_palette_rle_lossless_red_green_blue_white",
+        "2x2_vl_photo_rgb_rle_lossless_red_green_blue_white",
+        "2x2_vl_photo_rgb_planar1_rle_lossless_red_green_blue_white",
     }:
         passed = len(pixels) == 4 and (
             pixels[0][0] > pixels[0][1] and pixels[0][0] > pixels[0][2]
@@ -315,6 +333,14 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
             and pixels[2][2] > pixels[2][0] * 5 and pixels[2][2] > pixels[2][1] * 5
             and min(pixels[3][:3]) > 200
         )
+    elif pattern == "3x3x2_continuous_lsb_first_checkerboards":
+        passed = len(luminance) == 9 and luminance == [255, 0, 255, 0, 255, 0, 255, 0, 255]
+    elif pattern in {
+        "2x2_monochrome_u32_unsigned_boundaries",
+        "three_frame_ct_derived_float32_parametric_map",
+        "three_frame_ct_derived_float64_parametric_map",
+    }:
+        passed = len(luminance) == 4 and luminance == sorted(luminance)
     else:
         return {"status": "unautomated", "pattern": pattern}
     return {"status": "passed" if passed else "failed", "pattern": pattern}
@@ -520,6 +546,23 @@ def probe_case(
                     )
                 except (ValueError, zlib.error) as error:
                     checks["png_dimensions"] = {"passed": False, "error": str(error)}
+            if frame_count > 1:
+                display_last = request(
+                    "display_last", f"/api/file/{index}/frame/{frame_count - 1}"
+                )
+                last_dimensions = None
+                if display_last["status"] == 200:
+                    try:
+                        last_width, last_height, _ = png_pixels(display_last["body"])
+                        last_dimensions = [last_width, last_height]
+                    except (ValueError, zlib.error):
+                        pass
+                checks["frame_navigation"] = {
+                    "last_frame": frame_count - 1,
+                    "observed_dimensions": last_dimensions,
+                    "passed": display_last["status"] == 200
+                    and last_dimensions == [image.get("columns"), image.get("rows")],
+                }
             raw_first = request(
                 "raw_first", f"/api/file/{index}/frame/0/raw", ("x-cache",) + RAW_HEADERS
             )
@@ -538,6 +581,21 @@ def probe_case(
                     "observed": raw_first["body_sha256"] if raw_first["status"] == 200 else None,
                     "passed": raw_first["status"] == 200
                     and raw_first["body_sha256"] == expected_hashes[0],
+                }
+                observed_hashes = []
+                for frame_index, expected_hash in enumerate(expected_hashes):
+                    raw_frame = raw_first if frame_index == 0 else request(
+                        f"raw_frame_{frame_index}",
+                        f"/api/file/{index}/frame/{frame_index}/raw",
+                        RAW_HEADERS,
+                    )
+                    observed_hashes.append(
+                        raw_frame["body_sha256"] if raw_frame["status"] == 200 else None
+                    )
+                checks["lossless_frame_hashes"] = {
+                    "expected": expected_hashes,
+                    "observed": observed_hashes,
+                    "passed": observed_hashes == expected_hashes,
                 }
         else:
             checks["metadata_only_response"] = invalid["status"] == 404
@@ -576,7 +634,12 @@ def _finish_result(
         for name in ("display_cache", "display_body_stable", "raw_cache"):
             if name in checks and checks[name] is not True:
                 validation_failures.append(name)
-        for name in ("png_dimensions", "lossless_frame_hash"):
+        for name in (
+            "png_dimensions",
+            "frame_navigation",
+            "lossless_frame_hash",
+            "lossless_frame_hashes",
+        ):
             if name in checks and checks[name].get("passed") is not True:
                 validation_failures.append(name)
         series_checks = (checks.get("series_navigation") or {}).get("capabilities") or {}

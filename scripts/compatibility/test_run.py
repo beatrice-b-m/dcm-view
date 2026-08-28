@@ -30,6 +30,39 @@ def grayscale_png(values: bytes, width: int, height: int) -> bytes:
 class RunnerTests(unittest.TestCase):
     def test_rle_capability_is_backed_by_display_and_lossless_raw_probes(self) -> None:
         self.assertIn("decode_rle_lossless_pixels", PROBED_CAPABILITIES)
+        self.assertIn("render_color", PROBED_CAPABILITIES)
+        self.assertIn("render_palette_color", PROBED_CAPABILITIES)
+
+    def test_extended_native_numeric_patterns_are_automated(self) -> None:
+        checkerboard = [
+            (255, 255, 255, 255),
+            (0, 0, 0, 255),
+            (255, 255, 255, 255),
+            (0, 0, 0, 255),
+            (255, 255, 255, 255),
+            (0, 0, 0, 255),
+            (255, 255, 255, 255),
+            (0, 0, 0, 255),
+            (255, 255, 255, 255),
+        ]
+        self.assertEqual(
+            validate_visual(
+                "3x3x2_continuous_lsb_first_checkerboards", checkerboard
+            )["status"],
+            "passed",
+        )
+        gradient = [
+            (0, 0, 0, 255),
+            (1, 1, 1, 255),
+            (128, 128, 128, 255),
+            (255, 255, 255, 255),
+        ]
+        self.assertEqual(
+            validate_visual("2x2_monochrome_u32_unsigned_boundaries", gradient)[
+                "status"
+            ],
+            "passed",
+        )
 
     def test_runner_supports_documented_direct_invocation(self) -> None:
         runner = Path(__file__).with_name("run.py")
