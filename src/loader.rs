@@ -1,5 +1,5 @@
 use crate::api::contracts::WindowPreset;
-use crate::types::{FileEntry, LoadReport};
+use crate::types::{FileEntry, LoadReport, PatientOrientation, PatientPosition, SeriesMetadata};
 use anyhow::{anyhow, Context, Result};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::OpenFileOptions;
@@ -198,7 +198,7 @@ impl DiscoveryRecord {
 }
 
 enum EntryInspection {
-    Selected(FileEntry),
+    Selected(Box<FileEntry>),
     Skipped(DiscoveryReason),
 }
 
@@ -399,7 +399,7 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
     for item in processed {
         match item {
             Ok(EntryInspection::Selected(entry)) if matches_filters(&entry, &options.filters) => {
-                files.push(entry)
+                files.push(*entry)
             }
             Ok(EntryInspection::Selected(_)) => filtered += 1,
             Ok(EntryInspection::Skipped(_)) => skipped += 1,
@@ -461,7 +461,7 @@ fn discover_progressive_blocking(
                         events,
                         cancellation,
                         DiscoveryEvent::Selected {
-                            file: Box::new(entry),
+                            file: entry,
                             record,
                         },
                     )?;
@@ -591,6 +591,46 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let series_description = read_str(&obj, "SeriesDescription").unwrap_or_default();
     let instance_number = read_str(&obj, "InstanceNumber").unwrap_or_default();
     let frame_count = read_u32(&obj, "NumberOfFrames").unwrap_or(1);
+    let frame_of_reference_uid = read_str(&obj, "FrameOfReferenceUID").unwrap_or_default();
+    let image_position_patient = read_exact_f64s(&obj, "ImagePositionPatient");
+    let image_orientation_patient = read_exact_f64s(&obj, "ImageOrientationPatient");
+    let (frame_image_positions_patient, frame_image_orientations_patient) =
+        read_frame_patient_geometry(
+            &obj,
+            frame_count,
+            image_position_patient,
+            image_orientation_patient,
+        );
+    let concatenation_uid = read_str(&obj, "ConcatenationUID");
+    let in_concatenation_number = read_u32(&obj, "InConcatenationNumber");
+    let in_concatenation_total_number = read_u32(&obj, "InConcatenationTotalNumber");
+    let concatenation_frame_offset_number = read_u32(&obj, "ConcatenationFrameOffsetNumber");
+    let sop_instance_uid_of_concatenation_source =
+        read_str(&obj, "SOPInstanceUIDOfConcatenationSource");
+    let image_type = read_strings(&obj, "ImageType");
+    let pyramid_uid = read_str(&obj, "PyramidUID");
+    let dimension_organization_type = read_str(&obj, "DimensionOrganizationType");
+    let dimension_organization_uids = read_sequence_strings(
+        &obj,
+        tags::DIMENSION_ORGANIZATION_SEQUENCE,
+        tags::DIMENSION_ORGANIZATION_UID,
+    );
+    let image_orientation_slide = read_exact_f64s(&obj, "ImageOrientationSlide");
+    let total_pixel_matrix_rows = read_u32(&obj, "TotalPixelMatrixRows");
+    let total_pixel_matrix_columns = read_u32(&obj, "TotalPixelMatrixColumns");
+    let total_pixel_matrix_focal_planes = read_u32(&obj, "TotalPixelMatrixFocalPlanes");
+    let number_of_optical_paths = read_u32(&obj, "NumberOfOpticalPaths");
+    let container_identifier = read_str(&obj, "ContainerIdentifier");
+    let specimen_uids = read_sequence_strings(
+        &obj,
+        tags::SPECIMEN_DESCRIPTION_SEQUENCE,
+        tags::SPECIMEN_UID,
+    );
+    let optical_path_identifiers = read_sequence_strings(
+        &obj,
+        tags::OPTICAL_PATH_SEQUENCE,
+        tags::OPTICAL_PATH_IDENTIFIER,
+    );
     let rows = read_u32(&obj, "Rows").unwrap_or(0);
     let columns = read_u32(&obj, "Columns").unwrap_or(0);
     let bits_allocated = read_u32(&obj, "BitsAllocated").unwrap_or(8);
@@ -616,7 +656,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         .unwrap_or_else(|| path.to_string_lossy().to_string());
     let label = build_label(&patient_id, &modality, &study_date, &fallback_label);
 
-    Ok(EntryInspection::Selected(FileEntry {
+    Ok(EntryInspection::Selected(Box::new(FileEntry {
         index: 0,
         path: path.to_path_buf(),
         label,
@@ -632,6 +672,30 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         instance_number,
         sop_instance_uid,
         sop_class_uid,
+        series_metadata: Box::new(SeriesMetadata {
+            frame_of_reference_uid,
+            image_position_patient,
+            image_orientation_patient,
+            frame_image_positions_patient,
+            frame_image_orientations_patient,
+            concatenation_uid,
+            in_concatenation_number,
+            in_concatenation_total_number,
+            concatenation_frame_offset_number,
+            sop_instance_uid_of_concatenation_source,
+            image_type,
+            pyramid_uid,
+            dimension_organization_type,
+            dimension_organization_uids,
+            image_orientation_slide,
+            total_pixel_matrix_rows,
+            total_pixel_matrix_columns,
+            total_pixel_matrix_focal_planes,
+            number_of_optical_paths,
+            container_identifier,
+            specimen_uids,
+            optical_path_identifiers,
+        }),
         has_pixels,
         frame_count,
         rows,
@@ -644,7 +708,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         rescale_intercept,
         transfer_syntax_uid,
         default_window,
-    }))
+    })))
 }
 
 fn normalize_input_path(path: &Path) -> PathBuf {
@@ -733,17 +797,22 @@ fn has_pixel_data_tag(path: &Path, transfer_syntax_uid: &str) -> Result<bool> {
 }
 
 fn read_str(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<String> {
+    read_strings(obj, name).into_iter().next()
+}
+
+fn read_strings(obj: &dicom_object::DefaultDicomObject, name: &str) -> Vec<String> {
     obj.element_by_name(name)
         .ok()
         .and_then(|element| element.to_str().ok())
-        .map(|value| {
-            value
-                .split('\\')
-                .next()
-                .unwrap_or(value.as_ref())
-                .trim()
-                .to_string()
-        })
+        .map(|value| split_dicom_values(value.as_ref()))
+        .unwrap_or_default()
+}
+
+fn split_dicom_values(raw: &str) -> Vec<String> {
+    raw.split('\\')
+        .map(str::trim)
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn read_u32(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {
@@ -752,6 +821,130 @@ fn read_u32(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {
 
 fn read_f64(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<f64> {
     read_str(obj, name)?.parse::<f64>().ok()
+}
+
+fn read_exact_f64s<const N: usize>(
+    obj: &dicom_object::DefaultDicomObject,
+    name: &str,
+) -> Option<[f64; N]> {
+    let values = read_strings(obj, name)
+        .into_iter()
+        .map(|value| value.parse::<f64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let values: [f64; N] = values.try_into().ok()?;
+    values
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(values)
+}
+
+fn read_sequence_strings(
+    obj: &dicom_object::DefaultDicomObject,
+    sequence_tag: dicom_core::Tag,
+    value_tag: dicom_core::Tag,
+) -> Vec<String> {
+    let Some(items) = obj
+        .element(sequence_tag)
+        .ok()
+        .and_then(|element| element.items())
+    else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| item.element(value_tag).ok())
+        .filter_map(|element| element.to_str().ok())
+        .flat_map(|value| split_dicom_values(value.as_ref()))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn read_frame_patient_geometry(
+    obj: &dicom_object::DefaultDicomObject,
+    frame_count: u32,
+    top_level_position: Option<PatientPosition>,
+    top_level_orientation: Option<PatientOrientation>,
+) -> (
+    Vec<Option<PatientPosition>>,
+    Vec<Option<PatientOrientation>>,
+) {
+    let shared_orientation = obj
+        .element(tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)
+        .ok()
+        .and_then(|element| element.items())
+        .and_then(|items| items.first())
+        .and_then(|item| {
+            read_nested_exact_f64s(
+                item,
+                tags::PLANE_ORIENTATION_SEQUENCE,
+                tags::IMAGE_ORIENTATION_PATIENT,
+            )
+        });
+    let per_frame_items = obj
+        .element(tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
+        .ok()
+        .and_then(|element| element.items());
+
+    if per_frame_items.is_none() && shared_orientation.is_none() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let frame_count = frame_count as usize;
+    let mut positions = Vec::with_capacity(frame_count);
+    let mut orientations = Vec::with_capacity(frame_count);
+    for frame_index in 0..frame_count {
+        let frame_item = per_frame_items.and_then(|items| items.get(frame_index));
+        positions.push(
+            frame_item
+                .and_then(|item| {
+                    read_nested_exact_f64s(
+                        item,
+                        tags::PLANE_POSITION_SEQUENCE,
+                        tags::IMAGE_POSITION_PATIENT,
+                    )
+                })
+                .or(top_level_position),
+        );
+        orientations.push(
+            frame_item
+                .and_then(|item| {
+                    read_nested_exact_f64s(
+                        item,
+                        tags::PLANE_ORIENTATION_SEQUENCE,
+                        tags::IMAGE_ORIENTATION_PATIENT,
+                    )
+                })
+                .or(shared_orientation)
+                .or(top_level_orientation),
+        );
+    }
+    (positions, orientations)
+}
+
+fn read_nested_exact_f64s<const N: usize>(
+    item: &dicom_object::InMemDicomObject,
+    sequence_tag: dicom_core::Tag,
+    value_tag: dicom_core::Tag,
+) -> Option<[f64; N]> {
+    let value = item
+        .element(sequence_tag)
+        .ok()?
+        .items()?
+        .first()?
+        .element(value_tag)
+        .ok()?
+        .to_str()
+        .ok()?;
+    let values = split_dicom_values(value.as_ref())
+        .into_iter()
+        .map(|value| value.parse::<f64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let values: [f64; N] = values.try_into().ok()?;
+    values
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(values)
 }
 
 fn build_label(patient_id: &str, modality: &str, study_date: &str, fallback: &str) -> String {
@@ -770,5 +963,301 @@ fn build_label(patient_id: &str, modality: &str, study_date: &str, fallback: &st
         fallback.to_string()
     } else {
         fields.join(" · ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_entry, split_dicom_values, EntryInspection};
+    use dicom_core::value::DataSetSequence;
+    use dicom_core::{DataElement, PrimitiveValue, VR};
+    use dicom_dictionary_std::{tags, uids};
+    use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
+    use tempfile::tempdir;
+
+    #[test]
+    fn extracts_classic_enhanced_concatenation_and_wsi_identity() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("series-identity.dcm");
+        write_series_identity_fixture(&path);
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        let metadata = &file.series_metadata;
+
+        assert_eq!(file.study_instance_uid, "2.25.100");
+        assert_eq!(file.series_instance_uid, "2.25.200");
+        assert_eq!(file.sop_instance_uid, "2.25.300");
+        assert_eq!(file.instance_number, "7");
+        assert_eq!(metadata.frame_of_reference_uid, "2.25.400");
+        assert_eq!(metadata.image_position_patient, Some([10.0, 20.0, 30.0]));
+        assert_eq!(
+            metadata.image_orientation_patient,
+            Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        );
+        assert_eq!(
+            metadata.frame_image_positions_patient,
+            vec![Some([0.0, 0.0, 1.0]), Some([0.0, 0.0, 2.0])]
+        );
+        assert_eq!(
+            metadata.frame_image_orientations_patient,
+            vec![
+                Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                Some([0.0, 1.0, 0.0, 1.0, 0.0, 0.0]),
+            ]
+        );
+        assert_eq!(metadata.concatenation_uid.as_deref(), Some("2.25.500"));
+        assert_eq!(metadata.in_concatenation_number, Some(1));
+        assert_eq!(metadata.in_concatenation_total_number, Some(2));
+        assert_eq!(metadata.concatenation_frame_offset_number, Some(3));
+        assert_eq!(
+            metadata.sop_instance_uid_of_concatenation_source.as_deref(),
+            Some("2.25.600")
+        );
+        assert_eq!(
+            metadata.image_type,
+            ["ORIGINAL", "PRIMARY", "VOLUME", "NONE"]
+        );
+        assert_eq!(metadata.pyramid_uid.as_deref(), Some("2.25.700"));
+        assert_eq!(
+            metadata.dimension_organization_type.as_deref(),
+            Some("TILED_FULL")
+        );
+        assert_eq!(
+            metadata.dimension_organization_uids,
+            ["2.25.801", "2.25.802"]
+        );
+        assert_eq!(
+            metadata.image_orientation_slide,
+            Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        );
+        assert_eq!(metadata.total_pixel_matrix_rows, Some(8));
+        assert_eq!(metadata.total_pixel_matrix_columns, Some(12));
+        assert_eq!(metadata.total_pixel_matrix_focal_planes, Some(1));
+        assert_eq!(metadata.number_of_optical_paths, Some(2));
+        assert_eq!(metadata.container_identifier.as_deref(), Some("SLIDE-1"));
+        assert_eq!(metadata.specimen_uids, ["2.25.901", "2.25.902"]);
+        assert_eq!(metadata.optical_path_identifiers, ["RGB", "IHC"]);
+    }
+
+    #[test]
+    fn rejects_partial_or_non_finite_geometry_values() {
+        assert_eq!(split_dicom_values(" 1 \\ 2 \\ \\ 3 "), ["1", "2", "", "3"]);
+
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("invalid-geometry.dcm");
+        let object = base_object()
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.300"),
+            )
+            .expect("file meta");
+        object.write_to_file(&path).expect("write fixture");
+
+        let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture") else {
+            panic!("fixture should be selected");
+        };
+        assert_eq!(file.series_metadata.image_position_patient, None);
+        assert_eq!(file.series_metadata.image_orientation_patient, None);
+        assert!(file
+            .series_metadata
+            .frame_image_positions_patient
+            .is_empty());
+        assert!(file
+            .series_metadata
+            .frame_image_orientations_patient
+            .is_empty());
+    }
+
+    fn write_series_identity_fixture(path: &std::path::Path) {
+        let shared_orientation = nested_sequence_item(
+            tags::PLANE_ORIENTATION_SEQUENCE,
+            tags::IMAGE_ORIENTATION_PATIENT,
+            "1\\0\\0\\0\\1\\0",
+        );
+        let frame_one = nested_sequence_item(
+            tags::PLANE_POSITION_SEQUENCE,
+            tags::IMAGE_POSITION_PATIENT,
+            "0\\0\\1",
+        );
+        let mut frame_two = nested_sequence_item(
+            tags::PLANE_POSITION_SEQUENCE,
+            tags::IMAGE_POSITION_PATIENT,
+            "0\\0\\2",
+        );
+        frame_two.put(DataElement::new(
+            tags::PLANE_ORIENTATION_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![InMemDicomObject::from_element_iter([
+                DataElement::new(tags::IMAGE_ORIENTATION_PATIENT, VR::DS, "0\\1\\0\\1\\0\\0"),
+            ])]),
+        ));
+
+        let dimension_items = ["2.25.801", "2.25.802"]
+            .map(|uid| {
+                InMemDicomObject::from_element_iter([DataElement::new(
+                    tags::DIMENSION_ORGANIZATION_UID,
+                    VR::UI,
+                    uid,
+                )])
+            })
+            .to_vec();
+        let specimen_items = ["2.25.901", "2.25.902"]
+            .map(|uid| {
+                InMemDicomObject::from_element_iter([DataElement::new(
+                    tags::SPECIMEN_UID,
+                    VR::UI,
+                    uid,
+                )])
+            })
+            .to_vec();
+        let optical_path_items = ["RGB", "IHC"]
+            .map(|identifier| {
+                InMemDicomObject::from_element_iter([DataElement::new(
+                    tags::OPTICAL_PATH_IDENTIFIER,
+                    VR::SH,
+                    identifier,
+                )])
+            })
+            .to_vec();
+
+        let mut object = base_object();
+        for element in [
+            DataElement::new(tags::FRAME_OF_REFERENCE_UID, VR::UI, "2.25.400"),
+            DataElement::new(tags::IMAGE_POSITION_PATIENT, VR::DS, "10\\20\\30"),
+            DataElement::new(tags::IMAGE_ORIENTATION_PATIENT, VR::DS, "1\\0\\0\\0\\1\\0"),
+            DataElement::new(tags::CONCATENATION_UID, VR::UI, "2.25.500"),
+            DataElement::new(
+                tags::IN_CONCATENATION_NUMBER,
+                VR::US,
+                PrimitiveValue::from(1_u16),
+            ),
+            DataElement::new(
+                tags::IN_CONCATENATION_TOTAL_NUMBER,
+                VR::US,
+                PrimitiveValue::from(2_u16),
+            ),
+            DataElement::new(
+                tags::CONCATENATION_FRAME_OFFSET_NUMBER,
+                VR::UL,
+                PrimitiveValue::from(3_u32),
+            ),
+            DataElement::new(
+                tags::SOP_INSTANCE_UID_OF_CONCATENATION_SOURCE,
+                VR::UI,
+                "2.25.600",
+            ),
+            DataElement::new(tags::IMAGE_TYPE, VR::CS, "ORIGINAL\\PRIMARY\\VOLUME\\NONE"),
+            DataElement::new(tags::PYRAMID_UID, VR::UI, "2.25.700"),
+            DataElement::new(tags::DIMENSION_ORGANIZATION_TYPE, VR::CS, "TILED_FULL"),
+            DataElement::new(tags::IMAGE_ORIENTATION_SLIDE, VR::DS, "1\\0\\0\\0\\1\\0"),
+            DataElement::new(
+                tags::TOTAL_PIXEL_MATRIX_ROWS,
+                VR::UL,
+                PrimitiveValue::from(8_u32),
+            ),
+            DataElement::new(
+                tags::TOTAL_PIXEL_MATRIX_COLUMNS,
+                VR::UL,
+                PrimitiveValue::from(12_u32),
+            ),
+            DataElement::new(
+                tags::TOTAL_PIXEL_MATRIX_FOCAL_PLANES,
+                VR::UL,
+                PrimitiveValue::from(1_u32),
+            ),
+            DataElement::new(
+                tags::NUMBER_OF_OPTICAL_PATHS,
+                VR::UL,
+                PrimitiveValue::from(2_u32),
+            ),
+            DataElement::new(tags::CONTAINER_IDENTIFIER, VR::LO, "SLIDE-1"),
+        ] {
+            object.put(element);
+        }
+        object.put(DataElement::new(
+            tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![shared_orientation]),
+        ));
+        object.put(DataElement::new(
+            tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![frame_one, frame_two]),
+        ));
+        object.put(DataElement::new(
+            tags::DIMENSION_ORGANIZATION_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(dimension_items),
+        ));
+        object.put(DataElement::new(
+            tags::SPECIMEN_DESCRIPTION_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(specimen_items),
+        ));
+        object.put(DataElement::new(
+            tags::OPTICAL_PATH_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(optical_path_items),
+        ));
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OW,
+            PrimitiveValue::U16(vec![0_u16; 8].into()),
+        ));
+
+        let object = object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                    .media_storage_sop_class_uid(uids::ENHANCED_CT_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.300"),
+            )
+            .expect("file meta");
+        object.write_to_file(path).expect("write fixture");
+    }
+
+    fn base_object() -> InMemDicomObject {
+        InMemDicomObject::from_element_iter([
+            DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::ENHANCED_CT_IMAGE_STORAGE),
+            DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.300"),
+            DataElement::new(tags::STUDY_INSTANCE_UID, VR::UI, "2.25.100"),
+            DataElement::new(tags::SERIES_INSTANCE_UID, VR::UI, "2.25.200"),
+            DataElement::new(tags::INSTANCE_NUMBER, VR::IS, "7"),
+            DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, "2"),
+            DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(2_u16)),
+            DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(16_u16)),
+            DataElement::new(
+                tags::PIXEL_REPRESENTATION,
+                VR::US,
+                PrimitiveValue::from(0_u16),
+            ),
+            DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
+            DataElement::new(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "MONOCHROME2"),
+            DataElement::new(tags::IMAGE_POSITION_PATIENT, VR::DS, "1\\2"),
+            DataElement::new(
+                tags::IMAGE_ORIENTATION_PATIENT,
+                VR::DS,
+                "NaN\\0\\0\\0\\1\\0",
+            ),
+        ])
+    }
+
+    fn nested_sequence_item(
+        sequence_tag: dicom_core::Tag,
+        value_tag: dicom_core::Tag,
+        value: &str,
+    ) -> InMemDicomObject {
+        InMemDicomObject::from_element_iter([DataElement::new(
+            sequence_tag,
+            VR::SQ,
+            DataSetSequence::from(vec![InMemDicomObject::from_element_iter([
+                DataElement::new(value_tag, VR::DS, value),
+            ])]),
+        )])
     }
 }

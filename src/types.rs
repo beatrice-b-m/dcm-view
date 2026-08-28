@@ -8,6 +8,9 @@ pub use crate::api::contracts::{
 };
 use std::path::PathBuf;
 
+pub type PatientPosition = [f64; 3];
+pub type PatientOrientation = [f64; 6];
+
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub index: usize,
@@ -25,6 +28,7 @@ pub struct FileEntry {
     pub instance_number: String,
     pub sop_instance_uid: String,
     pub sop_class_uid: String,
+    pub series_metadata: Box<SeriesMetadata>,
     pub has_pixels: bool,
     pub frame_count: u32,
     pub rows: u32,
@@ -39,7 +43,49 @@ pub struct FileEntry {
     pub default_window: Option<WindowPreset>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SeriesMetadata {
+    pub frame_of_reference_uid: String,
+    pub image_position_patient: Option<PatientPosition>,
+    pub image_orientation_patient: Option<PatientOrientation>,
+    pub frame_image_positions_patient: Vec<Option<PatientPosition>>,
+    pub frame_image_orientations_patient: Vec<Option<PatientOrientation>>,
+    pub concatenation_uid: Option<String>,
+    pub in_concatenation_number: Option<u32>,
+    pub in_concatenation_total_number: Option<u32>,
+    pub concatenation_frame_offset_number: Option<u32>,
+    pub sop_instance_uid_of_concatenation_source: Option<String>,
+    pub image_type: Vec<String>,
+    pub pyramid_uid: Option<String>,
+    pub dimension_organization_type: Option<String>,
+    pub dimension_organization_uids: Vec<String>,
+    pub image_orientation_slide: Option<[f64; 6]>,
+    pub total_pixel_matrix_rows: Option<u32>,
+    pub total_pixel_matrix_columns: Option<u32>,
+    pub total_pixel_matrix_focal_planes: Option<u32>,
+    pub number_of_optical_paths: Option<u32>,
+    pub container_identifier: Option<String>,
+    pub specimen_uids: Vec<String>,
+    pub optical_path_identifiers: Vec<String>,
+}
+
 impl FileEntry {
+    pub fn frame_image_position_patient(&self, frame: u32) -> Option<PatientPosition> {
+        frame_geometry_value(
+            &self.series_metadata.frame_image_positions_patient,
+            self.series_metadata.image_position_patient,
+            frame,
+        )
+    }
+
+    pub fn frame_image_orientation_patient(&self, frame: u32) -> Option<PatientOrientation> {
+        frame_geometry_value(
+            &self.series_metadata.frame_image_orientations_patient,
+            self.series_metadata.image_orientation_patient,
+            frame,
+        )
+    }
+
     pub fn raw_metadata(
         &self,
         rows: u32,
@@ -75,6 +121,18 @@ impl FileEntry {
             default_ww: self.default_window.map(|window| window.width),
         }
     }
+}
+
+fn frame_geometry_value<const N: usize>(
+    frame_values: &[Option<[f64; N]>],
+    top_level_value: Option<[f64; N]>,
+    frame: u32,
+) -> Option<[f64; N]> {
+    frame_values
+        .get(frame as usize)
+        .copied()
+        .flatten()
+        .or(top_level_value)
 }
 
 impl From<&FileEntry> for FileSummary {
@@ -224,7 +282,20 @@ impl std::error::Error for WindowRequestError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameCacheKey, WindowMode, WindowRequest, WindowRequestError};
+    use super::{
+        frame_geometry_value, FrameCacheKey, WindowMode, WindowRequest, WindowRequestError,
+    };
+
+    #[test]
+    fn frame_geometry_prefers_frame_value_and_falls_back_to_top_level() {
+        let top_level = Some([1.0, 2.0, 3.0]);
+        let per_frame = vec![Some([4.0, 5.0, 6.0]), None];
+
+        assert_eq!(frame_geometry_value(&per_frame, top_level, 0), per_frame[0]);
+        assert_eq!(frame_geometry_value(&per_frame, top_level, 1), top_level);
+        assert_eq!(frame_geometry_value(&per_frame, top_level, 2), top_level);
+        assert_eq!(frame_geometry_value::<3>(&[], None, 0), None);
+    }
 
     #[test]
     fn frame_cache_key_distinguishes_absent_and_explicit_window_params() {

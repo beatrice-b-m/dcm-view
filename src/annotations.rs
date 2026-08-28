@@ -1017,6 +1017,7 @@ mod tests {
             instance_number: String::new(),
             sop_instance_uid: String::new(),
             sop_class_uid: "1.2.840.10008.5.1.4.1.1.2".to_string(),
+            series_metadata: Default::default(),
             has_pixels: true,
             frame_count,
             rows: 1,
