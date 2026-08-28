@@ -590,6 +590,7 @@ dependencies = [
  "dicom-object",
  "dicom-pixeldata",
  "dicom-test-files",
+ "flate2",
  "futures",
  "image",
  "jpeg2k",

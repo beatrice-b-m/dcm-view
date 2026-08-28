@@ -573,10 +573,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         ));
     }
 
-    let obj = match OpenFileOptions::new()
-        .read_until(tags::PIXEL_DATA)
-        .open_file(path)
-    {
+    let obj = match read_discovery_metadata(path) {
         Ok(obj) => obj,
         Err(_) => return Ok(EntryInspection::Skipped(DiscoveryReason::DicomParseFailed)),
     };
@@ -737,6 +734,14 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     })))
 }
 
+fn read_discovery_metadata(path: &Path) -> Result<dicom_object::DefaultDicomObject> {
+    Ok(OpenFileOptions::new()
+        // Float and double-float pixel data precede the conventional Pixel Data
+        // tag, so stopping there would materialize those payloads during scan.
+        .read_until(tags::FLOAT_PIXEL_DATA)
+        .open_file(path)?)
+}
+
 fn normalize_input_path(path: &Path) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return canonical;
@@ -785,22 +790,6 @@ fn find_native_pixel_data_kind(
     path: &Path,
     transfer_syntax_uid: &str,
 ) -> Result<Option<NativePixelDataKind>> {
-    if transfer_syntax_uid == uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN {
-        let obj = OpenFileOptions::new()
-            .read_all()
-            .open_file(path)
-            .with_context(|| format!("failed to inspect deflated DICOM {}", path.display()))?;
-        return Ok(if obj.element_by_name("PixelData").is_ok() {
-            Some(NativePixelDataKind::Integer)
-        } else if obj.element_by_name("FloatPixelData").is_ok() {
-            Some(NativePixelDataKind::Float32)
-        } else if obj.element_by_name("DoubleFloatPixelData").is_ok() {
-            Some(NativePixelDataKind::Float64)
-        } else {
-            None
-        });
-    }
-
     let needles: [(&[u8], NativePixelDataKind); 3] = if transfer_syntax_uid == "1.2.840.10008.1.2.2"
     {
         [
@@ -817,13 +806,57 @@ fn find_native_pixel_data_kind(
     };
     let mut file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    if transfer_syntax_uid == uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN {
+        let dataset_offset = part10_dataset_offset(&mut file, path)?;
+        file.seek(io::SeekFrom::Start(dataset_offset))
+            .with_context(|| format!("failed to seek {}", path.display()))?;
+        return scan_native_pixel_data_kind(
+            flate2::read::DeflateDecoder::new(file),
+            &needles,
+            path,
+        );
+    }
+
     file.seek(io::SeekFrom::Start(132))
         .with_context(|| format!("failed to seek {}", path.display()))?;
+    scan_native_pixel_data_kind(file, &needles, path)
+}
+
+fn part10_dataset_offset(file: &mut File, path: &Path) -> Result<u64> {
+    file.seek(io::SeekFrom::Start(132))
+        .with_context(|| format!("failed to seek {}", path.display()))?;
+    let mut group_length_element = [0_u8; 12];
+    file.read_exact(&mut group_length_element)
+        .with_context(|| {
+            format!(
+                "failed to read file meta group length from {}",
+                path.display()
+            )
+        })?;
+    if group_length_element[..8] != [0x02, 0x00, 0x00, 0x00, b'U', b'L', 0x04, 0x00] {
+        return Err(anyhow!(
+            "DICOM file meta for {} does not begin with (0002,0000) UL",
+            path.display()
+        ));
+    }
+    let group_length = u32::from_le_bytes(
+        group_length_element[8..12]
+            .try_into()
+            .expect("fixed four-byte group length"),
+    );
+    Ok(144 + u64::from(group_length))
+}
+
+fn scan_native_pixel_data_kind(
+    mut reader: impl Read,
+    needles: &[(&[u8], NativePixelDataKind); 3],
+    path: &Path,
+) -> Result<Option<NativePixelDataKind>> {
     let mut carried = Vec::<u8>::new();
     let mut chunk = [0_u8; 8192];
 
     loop {
-        let read = file
+        let read = reader
             .read(&mut chunk)
             .with_context(|| format!("failed to read {}", path.display()))?;
         if read == 0 {
@@ -1197,7 +1230,7 @@ fn build_label(patient_id: &str, modality: &str, study_date: &str, fallback: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{build_entry, split_dicom_values, EntryInspection};
+    use super::{build_entry, read_discovery_metadata, split_dicom_values, EntryInspection};
     use dicom_core::value::DataSetSequence;
     use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
     use dicom_dictionary_std::{tags, uids};
@@ -1408,6 +1441,14 @@ mod tests {
                 )
                 .expect("file meta");
             object.write_to_file(&path).expect("write fixture");
+
+            let metadata = read_discovery_metadata(&path).expect("read discovery metadata");
+            let pixel_tag = match expected_kind {
+                NativePixelDataKind::Integer => tags::PIXEL_DATA,
+                NativePixelDataKind::Float32 => tags::FLOAT_PIXEL_DATA,
+                NativePixelDataKind::Float64 => tags::DOUBLE_FLOAT_PIXEL_DATA,
+            };
+            assert!(metadata.element(pixel_tag).is_err());
 
             let EntryInspection::Selected(file) = build_entry(&path).expect("inspect fixture")
             else {

@@ -292,6 +292,9 @@ installation and VS Code Electron integration can also use network/cache state;
   complete HTTP boundary.
 - Generated DICOM fixtures exercise real discovery and codec paths. Integration
   tests do not mock the DICOM layer.
+- Discovery stops metadata parsing at the earliest standard pixel-data tag and
+  scans native or deflated streams incrementally to classify the payload. It
+  does not retain integer, float, or double-float pixel values in the catalog.
 - Frontend state helpers, cache policy, windowing, registry shaping, and API
   wrappers are tested as TypeScript modules.
 - Python unit tests isolate subprocess policy; `python-integration` adds the real
