@@ -15,6 +15,7 @@ from scripts.compatibility.run import (
     frame_time_observation,
     normalized_report,
     icc_profile_observation,
+    lossy_metrics_observation,
     metadata_observation,
     nm_dimensions_observation,
     overlay_display_observation,
@@ -530,6 +531,27 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("decode_rle_lossless_pixels", PROBED_CAPABILITIES)
         self.assertIn("render_color", PROBED_CAPABILITIES)
         self.assertIn("render_palette_color", PROBED_CAPABILITIES)
+
+    def test_lossy_metrics_use_manifest_recipe_and_suite_tolerance(self) -> None:
+        expected = {
+            "recipe": {"recipe_parameters": {"pixel_values": [255, 0, 0, 255]}},
+            "validation": {"internal": [{
+                "name": "jpeg_baseline_decoded_frame_tolerance",
+                "message": "JPEG Baseline decoded samples are within +/-10 of the native source frame.",
+            }]},
+        }
+        observed = lossy_metrics_observation(bytes([250, 4, 1, 255]), expected)
+
+        self.assertEqual(observed["maximum_absolute_error"], {"observed": 5, "limit": 10.0})
+        self.assertAlmostEqual(observed["overall_rmse"]["observed"], (42 / 4) ** 0.5)
+        self.assertEqual(
+            observed["overall_rmse"]["limit_basis"],
+            "implied_by_suite_maximum_absolute_error_limit",
+        )
+        self.assertTrue(observed["passed"])
+
+        failed = lossy_metrics_observation(bytes([244, 0, 0, 255]), expected)
+        self.assertFalse(failed["passed"])
 
     def test_grayscale_capabilities_are_backed_by_display_and_raw_probes(self) -> None:
         self.assertTrue(

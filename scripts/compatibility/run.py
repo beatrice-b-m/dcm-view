@@ -244,6 +244,42 @@ def raw_header_observation(headers: dict[str, str], image: dict[str, Any]) -> di
     }
 
 
+def lossy_metrics_observation(payload: bytes, expected: dict[str, Any]) -> dict[str, Any]:
+    recipe = ((expected.get("recipe") or {}).get("recipe_parameters") or {})
+    reference = recipe.get("pixel_values")
+    tolerance = None
+    for validation in (expected.get("validation") or {}).get("internal") or []:
+        if validation.get("name") != "jpeg_baseline_decoded_frame_tolerance":
+            continue
+        match = re.search(r"within \+/-([0-9]+(?:\.[0-9]+)?)", validation.get("message") or "")
+        if match:
+            tolerance = float(match.group(1))
+            break
+    if not isinstance(reference, list) or not all(isinstance(value, int) for value in reference):
+        return {"passed": False, "error": "manifest lacks integer recipe pixel values"}
+    if tolerance is None:
+        return {"passed": False, "error": "manifest lacks a JPEG Baseline tolerance"}
+    observed = list(payload)
+    if len(observed) != len(reference):
+        return {
+            "passed": False,
+            "expected_sample_count": len(reference),
+            "observed_sample_count": len(observed),
+        }
+    errors = [abs(actual - declared) for actual, declared in zip(observed, reference)]
+    maximum_error = max(errors, default=0)
+    rmse = math.sqrt(sum(error * error for error in errors) / len(errors)) if errors else 0.0
+    return {
+        "evidence_scope": "decoded_raw_samples_against_manifest_recipe",
+        "sample_count": len(errors),
+        "maximum_absolute_error": {"observed": maximum_error, "limit": tolerance},
+        "overall_rmse": {
+            "observed": rmse,
+            "limit": tolerance,
+            "limit_basis": "implied_by_suite_maximum_absolute_error_limit",
+        },
+        "passed": maximum_error <= tolerance and rmse <= tolerance,
+    }
 def _tag_key(value: str) -> str:
     return f"({value.strip().strip('()').upper()})"
 
@@ -1637,6 +1673,11 @@ def probe_case(
                 and raw_second["headers"].get("x-cache") == "HIT"
             )
             checks["raw_headers"] = raw_header_observation(raw_first["headers"], image)
+            if transfer_syntax := (expected.get("dicom") or {}).get("transfer_syntax_uid"):
+                if transfer_syntax in LOSSY_TRANSFER_SYNTAXES and raw_first["status"] == 200:
+                    checks["lossy_metrics"] = lossy_metrics_observation(
+                        raw_first["body"], expected
+                    )
             if "interpret_pet_activity" in expected_capabilities:
                 checks["pet_activity"] = pet_activity_observation(
                     tag_payload,
@@ -1762,6 +1803,7 @@ def _finish_result(
             "lossless_frame_hash",
             "lossless_frame_hashes",
             "raw_headers",
+            "lossy_metrics",
             "nm_dimensions",
             "pet_activity",
             "frame_time",
