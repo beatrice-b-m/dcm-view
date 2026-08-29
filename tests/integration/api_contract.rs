@@ -10,6 +10,7 @@ use dcmview::api::contracts::{
 };
 use dcmview::server;
 use dcmview::types::WindowPreset;
+use dicom_dictionary_std::uids;
 use serde_json::Value;
 use std::collections::HashMap;
 use tempfile::tempdir;
@@ -177,6 +178,10 @@ async fn every_declared_endpoint_matches_its_runtime_contract() {
         center: 1500.0,
         width: 3000.0,
     });
+    entry.sop_class_uid = uids::VL_WHOLE_SLIDE_MICROSCOPY_IMAGE_STORAGE.to_string();
+    entry.series_metadata.dimension_organization_type = Some("TILED_FULL".to_string());
+    entry.series_metadata.total_pixel_matrix_rows = Some(2);
+    entry.series_metadata.total_pixel_matrix_columns = Some(2);
     let test_server = TestServer::new(server::router(support::app_state(vec![entry])));
     let annotation_body = EmbedRoiAnnotations::empty();
 
