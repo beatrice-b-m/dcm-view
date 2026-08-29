@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 
 const MAX_COMPANIONS: usize = 64;
 const MAX_RELATIONSHIPS: usize = 128;
+const MAX_FOCAL_METADATA_SCAN: usize = 4_096;
 
 pub fn frame_context(
     source: &FileEntry,
@@ -180,10 +181,11 @@ fn sparse_placement(
         warnings.push("Total Pixel Matrix dimensions are missing or invalid".to_string());
         return unavailable("unavailable");
     };
-    let Some(frame_group) = sequence_items(object, tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
-        .get(frame as usize)
-        .copied()
-    else {
+    let Some(frame_group) = sequence_item(
+        object,
+        tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE,
+        frame as usize,
+    ) else {
         warnings.push("selected frame has no Per-Frame Functional Group metadata".to_string());
         return unavailable("unavailable");
     };
@@ -227,7 +229,14 @@ fn sparse_placement(
             .and_then(|index| index.try_into().ok())
     });
     let z_offset_slide = read_number(position, tags::Z_OFFSET_IN_SLIDE_COORDINATE_SYSTEM);
-    let focal_index = z_offset_slide.and_then(|z| sparse_focal_index(object, z));
+    let focal_index = if file.frame_count as usize > MAX_FOCAL_METADATA_SCAN {
+        warnings.push(format!(
+            "focal-plane index omitted because metadata scan is bounded to {MAX_FOCAL_METADATA_SCAN} frames"
+        ));
+        None
+    } else {
+        z_offset_slide.and_then(|z| sparse_focal_index(object, z))
+    };
     Placement {
         source: "declared_per_frame",
         rectangle: Some(WsiTileRectangle {
@@ -256,8 +265,13 @@ fn sparse_focal_index(
     if !selected_z.is_finite() {
         return None;
     }
-    let mut offsets = sequence_items(object, tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
-        .into_iter()
+    let groups = object
+        .element(tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
+        .ok()?
+        .items()?;
+    let mut offsets = groups
+        .iter()
+        .take(MAX_FOCAL_METADATA_SCAN)
         .filter_map(|group| {
             let position = sequence_items(group, tags::PLANE_POSITION_SLIDE_SEQUENCE)
                 .first()
@@ -342,7 +356,8 @@ fn pyramid_level(source: &FileEntry, files: &[FileEntry]) -> Option<u32> {
 }
 
 fn companions(source: &FileEntry, files: &[FileEntry]) -> (Vec<WsiCompanionSummary>, bool) {
-    let mut matches = files
+    let mut matches = Vec::new();
+    for file in files
         .iter()
         .filter(|file| file.index != source.index)
         .filter(|file| classify_sop_class(&file.sop_class_uid) == ObjectKind::WholeSlideMicroscopy)
@@ -355,13 +370,17 @@ fn companions(source: &FileEntry, files: &[FileEntry]) -> (Vec<WsiCompanionSumma
                     && source.series_metadata.container_identifier
                         == file.series_metadata.container_identifier)
         })
-        .map(|file| WsiCompanionSummary {
+    {
+        matches.push(WsiCompanionSummary {
             file_index: file.index,
             sop_instance_uid: file.sop_instance_uid.clone(),
             image_type_role: file.series_metadata.image_type.get(2).cloned(),
             pyramid_uid: file.series_metadata.pyramid_uid.clone(),
-        })
-        .collect::<Vec<_>>();
+        });
+        if matches.len() > MAX_COMPANIONS {
+            break;
+        }
+    }
     matches.sort_by_key(|item| item.file_index);
     let truncated = matches.len() > MAX_COMPANIONS;
     matches.truncate(MAX_COMPANIONS);
@@ -425,6 +444,14 @@ fn sequence_items(
         .and_then(|element| element.items())
         .map(|items| items.iter().collect())
         .unwrap_or_default()
+}
+
+fn sequence_item(
+    object: &InMemDicomObject<StandardDataDictionary>,
+    tag: Tag,
+    index: usize,
+) -> Option<&InMemDicomObject<StandardDataDictionary>> {
+    object.element(tag).ok()?.items()?.get(index)
 }
 
 fn read_string(object: &InMemDicomObject<StandardDataDictionary>, tag: Tag) -> Option<String> {
