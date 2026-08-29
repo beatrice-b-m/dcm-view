@@ -4,6 +4,7 @@ use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
 use dicom_core::header::HasLength;
 use dicom_core::Tag;
 use dicom_dictionary_std::StandardDataDictionary;
+use dicom_encoding::text::{SpecificCharacterSet, TextCodec};
 use dicom_object::{open_file, InMemDicomObject};
 use std::path::Path;
 
@@ -18,7 +19,8 @@ pub(crate) fn build_tag_tree(path: &Path) -> Result<Vec<TagNode>> {
     let object = open_file(path)
         .with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
         .into_inner();
-    Ok(serialize_object_tags(&object, 0))
+    let text_codec = declared_text_codec(&object);
+    Ok(serialize_object_tags(&object, 0, text_codec.as_ref()))
 }
 
 pub(crate) fn build_selected_tag(
@@ -34,7 +36,8 @@ pub(crate) fn build_selected_tag(
     let object = open_file(path)
         .with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
         .into_inner();
-    select_from_object(&object, &steps, offset, limit)
+    let text_codec = declared_text_codec(&object);
+    select_from_object(&object, &steps, offset, limit, text_codec.as_ref())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +86,7 @@ fn select_from_object(
     steps: &[TagPathStep],
     offset: usize,
     limit: usize,
+    text_codec: Option<&SpecificCharacterSet>,
 ) -> Result<TagNode> {
     let TagPathStep::Tag(tag) = steps[0] else {
         bail!("tag path must begin with a tag");
@@ -91,7 +95,7 @@ fn select_from_object(
         .element(tag)
         .map_err(|_| anyhow!("tag ({:04X},{:04X}) not found", tag.0, tag.1))?;
     if steps.len() == 1 {
-        return serialize_selected_element(element, offset, limit);
+        return serialize_selected_element(element, offset, limit, text_codec);
     }
     let TagPathStep::Item(item_index) = steps[1] else {
         bail!("tag path must include a sequence item index after a tag");
@@ -106,19 +110,20 @@ fn select_from_object(
             tag.1
         )
     })?;
-    select_from_object(item, &steps[2..], offset, limit)
+    select_from_object(item, &steps[2..], offset, limit, text_codec)
 }
 
 fn serialize_selected_element(
     element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
     offset: usize,
     limit: usize,
+    text_codec: Option<&SpecificCharacterSet>,
 ) -> Result<TagNode> {
     if format!("{}", element.header().vr()) != "SQ" {
         if offset != 0 {
             bail!("tag page offset applies only to sequence values");
         }
-        return Ok(serialize_element(element, 0));
+        return Ok(serialize_element(element, 0, text_codec));
     }
     let items = element
         .items()
@@ -130,7 +135,7 @@ fn serialize_selected_element(
         .iter()
         .skip(offset)
         .take(limit)
-        .map(|item| serialize_object_tags(item, 1))
+        .map(|item| serialize_object_tags(item, 1, text_codec))
         .collect::<Vec<_>>();
     let truncated = offset > 0 || offset.saturating_add(serialized_items.len()) < total;
     Ok(TagNode {
@@ -151,16 +156,18 @@ fn serialize_selected_element(
 fn serialize_object_tags(
     object: &InMemDicomObject<StandardDataDictionary>,
     depth: usize,
+    text_codec: Option<&SpecificCharacterSet>,
 ) -> Vec<TagNode> {
     object
         .iter()
-        .map(|element| serialize_element(element, depth))
+        .map(|element| serialize_element(element, depth, text_codec))
         .collect()
 }
 
 fn serialize_element(
     element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
     depth: usize,
+    text_codec: Option<&SpecificCharacterSet>,
 ) -> TagNode {
     let tag = element.header().tag;
     let tag_repr = format!("({:04X},{:04X})", tag.0, tag.1);
@@ -170,7 +177,7 @@ fn serialize_element(
         .map(|entry| entry.alias().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    let value = serialize_tag_value(element, tag_repr.as_str(), &vr_repr, depth);
+    let value = serialize_tag_value(element, tag_repr.as_str(), &vr_repr, depth, text_codec);
 
     TagNode {
         tag: tag_repr,
@@ -185,6 +192,7 @@ fn serialize_tag_value(
     tag_repr: &str,
     vr_repr: &str,
     depth: usize,
+    text_codec: Option<&SpecificCharacterSet>,
 ) -> TagValue {
     if tag_repr == "(7FE0,0010)" {
         return binary_value_from_element(element);
@@ -192,7 +200,7 @@ fn serialize_tag_value(
 
     if vr_repr == "SQ" {
         return match element.items() {
-            Some(items) => serialize_sequence_items(items, depth),
+            Some(items) => serialize_sequence_items(items, depth, text_codec),
             None => TagValue::Error {
                 message: "sequence item decoding failed".to_string(),
             },
@@ -203,7 +211,7 @@ fn serialize_tag_value(
         return binary_value_from_element(element);
     }
 
-    let string_value = match element.to_str() {
+    let mut string_value = match element.to_str() {
         Ok(value) => value.to_string(),
         Err(error) => {
             return TagValue::Error {
@@ -211,6 +219,7 @@ fn serialize_tag_value(
             };
         }
     };
+    string_value = decode_escaped_text(string_value, text_codec);
 
     if is_numeric_vr(vr_repr) {
         let mut numbers = string_value
@@ -243,6 +252,7 @@ fn serialize_tag_value(
 fn serialize_sequence_items(
     items: &[InMemDicomObject<StandardDataDictionary>],
     depth: usize,
+    text_codec: Option<&SpecificCharacterSet>,
 ) -> TagValue {
     let total = items.len();
     let depth_limited = depth >= TAG_SEQUENCE_DEPTH_LIMIT;
@@ -259,7 +269,7 @@ fn serialize_sequence_items(
     let serialized_items = items
         .iter()
         .take(TAG_SEQUENCE_ITEM_LIMIT)
-        .map(|item| serialize_object_tags(item, depth + 1))
+        .map(|item| serialize_object_tags(item, depth + 1, text_codec))
         .collect();
 
     TagValue::Sequence {
@@ -267,6 +277,30 @@ fn serialize_sequence_items(
         truncated: item_limited,
         total: item_limited.then_some(total),
     }
+}
+
+fn declared_text_codec(
+    object: &InMemDicomObject<StandardDataDictionary>,
+) -> Option<SpecificCharacterSet> {
+    let declaration = object
+        .element(dicom_dictionary_std::tags::SPECIFIC_CHARACTER_SET)
+        .ok()?
+        .to_str()
+        .ok()?;
+    declaration
+        .split(['\\', ';'])
+        .map(str::trim)
+        .filter(|component| !component.is_empty())
+        .find_map(SpecificCharacterSet::from_code)
+}
+
+fn decode_escaped_text(value: String, text_codec: Option<&SpecificCharacterSet>) -> String {
+    if !value.contains('\u{1b}') {
+        return value;
+    }
+    text_codec
+        .and_then(|codec| codec.decode(value.as_bytes()).ok())
+        .unwrap_or(value)
 }
 
 fn format_tag_text_preview(raw: &str) -> String {
@@ -309,4 +343,34 @@ fn is_numeric_vr(vr_repr: &str) -> bool {
         vr_repr,
         "US" | "SS" | "UL" | "SL" | "FL" | "FD" | "DS" | "IS"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_iso_2022_person_name_extension_sequences() {
+        let codec =
+            SpecificCharacterSet::from_code("ISO 2022 IR 87").expect("ISO 2022 IR 87 codec");
+        let encoded = concat!(
+            "Yamada^Tarou=\u{1b}$B;3ED\u{1b}(B^",
+            "\u{1b}$BB@O:\u{1b}(B=",
+            "\u{1b}$B$d$^$@\u{1b}(B^",
+            "\u{1b}$B$?$m$&\u{1b}(B"
+        );
+
+        assert_eq!(
+            decode_escaped_text(encoded.to_string(), Some(&codec)),
+            "Yamada^Tarou=山田^太郎=やまだ^たろう"
+        );
+    }
+
+    #[test]
+    fn preserves_text_when_no_extension_sequence_is_present() {
+        assert_eq!(
+            decode_escaped_text("Doe^Jane".to_string(), None),
+            "Doe^Jane"
+        );
+    }
 }
