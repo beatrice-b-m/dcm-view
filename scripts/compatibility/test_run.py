@@ -76,6 +76,12 @@ class RunnerTests(unittest.TestCase):
         tags[1]["value"]["value"] = "Wrong^Name"
         self.assertFalse(metadata_observation(summary, info, tags, expected)["passed"])
 
+        metadata_only = {**expected, "image": {}}
+        summary["frame_count"] = 1
+        info["frame_count"] = 1
+        tags[1]["value"]["value"] = "Wang^XiaoDong"
+        self.assertTrue(metadata_observation(summary, info, tags, metadata_only)["passed"])
+
     def test_wsi_observation_proves_selected_tile_without_reconstruction(self) -> None:
         expected = {
             "image": {"rows": 2, "columns": 2},

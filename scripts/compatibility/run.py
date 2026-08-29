@@ -304,24 +304,26 @@ def metadata_observation(
     dicom = expected.get("dicom") or {}
     uids = expected.get("uids") or {}
     image = expected.get("image") or {}
-    summary_expected = {
+    summary_expected: dict[str, Any] = {
         "sop_instance_uid": uids.get("sop_instance_uid"),
         "study_instance_uid": uids.get("study_instance_uid"),
         "series_instance_uid": uids.get("series_instance_uid"),
         "sop_class_uid": dicom.get("sop_class_uid"),
         "transfer_syntax_uid": dicom.get("transfer_syntax_uid"),
         "modality": dicom.get("modality"),
-        "frame_count": image.get("frames", 0),
-        "rows": image.get("rows", 0),
-        "columns": image.get("columns", 0),
     }
-    info_expected = {
+    info_expected: dict[str, Any] = {
         "sop_class_uid": dicom.get("sop_class_uid"),
         "transfer_syntax_uid": dicom.get("transfer_syntax_uid"),
-        "frame_count": image.get("frames", 0),
-        "rows": image.get("rows", 0),
-        "columns": image.get("columns", 0),
     }
+    if image:
+        image_fields = {
+            "frame_count": image.get("frames"),
+            "rows": image.get("rows"),
+            "columns": image.get("columns"),
+        }
+        summary_expected.update(image_fields)
+        info_expected.update(image_fields)
 
     def compare_fields(source: dict[str, Any], declared: dict[str, Any]) -> dict[str, Any]:
         return {
