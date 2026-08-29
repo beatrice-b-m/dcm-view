@@ -5,7 +5,8 @@ Release automation spans two GitHub Actions workflows and one Azure pipeline:
 - `.github/workflows/ci.yml` runs frontend, Rust, Python, packaging, and VS Code
   checks on Linux, with Rust coverage on macOS and Windows
 - `.github/workflows/release.yml` builds tagged release artifacts for Linux,
-  macOS Intel, macOS Apple Silicon, and Windows x64
+  macOS Intel, macOS Apple Silicon, and Windows x64, then publishes approved
+  releases to PyPI, Homebrew, and Open VSX when configured
 - `azure-pipelines/vscode-marketplace.yml` publishes VS Code Marketplace
   packages from GitHub Release assets
 
@@ -13,8 +14,9 @@ Release automation spans two GitHub Actions workflows and one Azure pipeline:
 
 - **GitHub Releases** are the canonical binary artifacts
 - **PyPI wheels** are the preferred Python install path when `PUBLISH_PYPI=1`
-- **VSIX files** are target-specific Marketplace packages attached to GitHub
-  Releases and published by Azure Pipelines
+- **VSIX files** are target-specific editor packages attached to GitHub Releases,
+  published to the VS Code Marketplace by Azure Pipelines, and published to Open
+  VSX for Cursor by GitHub Actions
 - **Homebrew** formula generation is always part of the release job; publication
   to a separate tap is conditional on `HOMEBREW_TAP_REPOSITORY`
 
@@ -30,6 +32,9 @@ current stable Rust toolchain.
 Optional release publishing is gated behind repository settings:
 
 - `PUBLISH_PYPI=1` enables the PyPI publish job
+- `PUBLISH_OPEN_VSX=1` enables the Open VSX publish job; this must be a
+  repository-level Actions variable because the job condition is evaluated
+  before GitHub declares its environment
 - `HOMEBREW_TAP_REPOSITORY` points to the separate tap repo, for example `your-org/homebrew-tap`
 - `HOMEBREW_TAP_TOKEN` is a token with push access to the tap repo
 
@@ -45,6 +50,21 @@ VS Code Marketplace publishing is handled in Azure DevOps:
 
 The Azure pipeline uses Microsoft Entra ID with workload identity federation and
 publishes only VSIX assets that already exist on the GitHub Release.
+
+Open VSX publishing is handled by the `publish-open-vsx` job in GitHub Actions:
+
+- Open VSX namespace: `beatricebm`
+- GitHub environment: `open-vsx`
+- Environment secret: `OPEN_VSX_PAT`
+- Repository variable: `PUBLISH_OPEN_VSX=1`
+
+The environment should require maintainer approval. After approval, the job
+downloads the target-specific `vscode-vsix` artifact from the same workflow run
+and publishes each platform package with the pinned `ovsx` CLI. The workflow
+passes `OPEN_VSX_PAT` to the CLI as `OVSX_PAT` and uses `--skip-duplicate` so a
+partially completed release can be retried safely. Generate a dedicated CI token
+from the Open VSX account settings, store it only in the protected environment,
+and rotate or revoke it if its exposure is suspected.
 
 ## Homebrew tap publication checklist
 
@@ -120,11 +140,11 @@ The release workflow will:
   Releases
 - publish the VSIX artifacts to GitHub Releases
 - render `packaging/homebrew/dcmview.rb`
-- optionally publish to PyPI and the configured tap repo
+- optionally publish to PyPI, Open VSX, and the configured tap repo
 - trigger the Azure pipeline, which waits for the GitHub Release VSIX assets and
   publishes them to the VS Code Marketplace after `vscode-marketplace` approval
 
-## VS Code Marketplace packages
+## Editor marketplace packages
 
 The VSIX packaging job downloads the same platform archives produced by the
 release build matrix and runs:
@@ -150,3 +170,11 @@ bundled-binary issues.
 The Azure Marketplace pipeline is tag-triggered, but the publish deployment is
 bound to the `vscode-marketplace` environment. Its approval check provides the
 final manual gate without requiring a separate manually triggered release flow.
+
+The GitHub Open VSX job runs only when the repository-level
+`PUBLISH_OPEN_VSX` variable equals `1`. It is independently bound to the
+`open-vsx` environment, so its required-review rule gates publication without
+coupling Cursor availability to the Azure deployment. After a successful first
+publication, confirm that Open VSX lists all four target platforms and that
+Cursor can find `beatricebm.dcmview`; Cursor's additional security scan may
+delay marketplace visibility.
