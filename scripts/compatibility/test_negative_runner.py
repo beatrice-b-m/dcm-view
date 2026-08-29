@@ -17,6 +17,12 @@ class NegativeRunnerTests(unittest.TestCase):
     def test_classifies_discovery_skip_and_bounded_decode_error(self) -> None:
         self.assertEqual(classify(False, None), "clean_rejection")
         self.assertEqual(classify(True, {"status": 500, "json": {"error": "pixel decode failed"}}), "decode_failure")
+        token_error = {"status": 500, "json": {"error": "Could not read data set token"}}
+        self.assertEqual(classify(True, token_error, "dataset_parser"), "parse_failure")
+        self.assertEqual(
+            classify(True, token_error, "encapsulated_value_parser"),
+            "decode_failure",
+        )
 
     def test_drain_discards_bytes_past_per_stream_limit(self) -> None:
         process = object.__new__(BoundedProcess)

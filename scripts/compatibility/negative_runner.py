@@ -21,7 +21,11 @@ def acceptable_outcomes(entry: dict[str, Any]) -> set[str]:
     return {value for step in steps for value in step.get("acceptable_outcomes", []) if isinstance(value, str)}
 
 
-def classify(discovered: bool, response: dict[str, Any] | None) -> str:
+def classify(
+    discovered: bool,
+    response: dict[str, Any] | None,
+    expected_failure_layer: str | None = None,
+) -> str:
     if not discovered:
         return "clean_rejection"
     assert response is not None
@@ -29,6 +33,12 @@ def classify(discovered: bool, response: dict[str, Any] | None) -> str:
         return "accepted_with_bounded_warning"
     error = response.get("json") or {}
     text = json.dumps(error, sort_keys=True).lower()
+    if "data set token" in text or "dataset token" in text:
+        return (
+            "parse_failure"
+            if expected_failure_layer == "dataset_parser"
+            else "decode_failure"
+        )
     if "decode" in text or "pixel" in text:
         return "decode_failure"
     if "parse" in text or "dicom" in text:
@@ -53,7 +63,9 @@ def run_case(entry: dict[str, Any], binary: Path, healthy: Path, viewer_root: Pa
         if malformed_row is not None:
             endpoint = f"/api/file/{malformed_row['index']}/frame/0" if malformed_row.get("has_pixels") else f"/api/file/{malformed_row['index']}/tags"
             response = bounded_get(base_url, endpoint, args.request_timeout, args.max_response_bytes)
-        outcome = classify(malformed_row is not None, response)
+        mutation_steps = entry["expected_contract"].get("negative_evidence", {}).get("mutation_steps", [])
+        expected_failure_layer = mutation_steps[-1].get("expected_failure_layer") if mutation_steps else None
+        outcome = classify(malformed_row is not None, response, expected_failure_layer)
         recovery = None if healthy_row is None else bounded_get(base_url, f"/api/file/{healthy_row['index']}/tags", args.request_timeout, args.max_response_bytes)
         permitted = acceptable_outcomes(entry)
         policy_statuses = entry["policy"].get("expected_unsupported", {}).get("statuses", [])
