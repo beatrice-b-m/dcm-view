@@ -55,7 +55,7 @@ pub fn semantic_context(
             SemanticContext::ParametricMap(parametric_map_context(&object, files, &resolved))
         }
         ObjectKind::RadiationTherapy if source.sop_class_uid == "1.2.840.10008.5.1.4.1.1.481.2" => {
-            SemanticContext::RtDose(rt_dose_context(source, &object, files, &resolved))
+            SemanticContext::RtDose(Box::new(rt_dose_context(source, &object, files, &resolved)))
         }
         _ => SemanticContext::NotApplicable {
             reason: "semantic context is only defined for SEG, Parametric Map, and RT Dose"

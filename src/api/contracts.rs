@@ -579,7 +579,7 @@ pub struct SemanticContextResponse {
 pub enum SemanticContext {
     Segmentation(SegmentationContext),
     ParametricMap(ParametricMapContext),
-    RtDose(RtDoseContext),
+    RtDose(Box<RtDoseContext>),
     NotApplicable { reason: String },
 }
 
