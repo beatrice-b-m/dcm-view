@@ -13,11 +13,11 @@ DICOM conformance certificate or a clinical validation.
 - Corpus lock SHA-256:
   `69e49a9f9a0640e42110219dfa14f8494e5ac0686d4b9bfd3ff1c3e2d85eeaba`.
 - Support policy SHA-256:
-  `55155658127605f1a5c29731ef3bf44dd8a89bc9ae4ae02f5f05db32d9cca769`.
+  `10e8fa0d64d04c29dad73dc06b11ebe858621882fdc3a3dfff5f1af7678046ae`.
 - Frozen worklist file SHA-256:
-  `ae488f48a2e81f9fa583a47bff079d5f1c75c6cf2187787c1248d2643f8ee288`.
+  `f32ab1bbb92da2d251b5870f059082e54db2f1264637762a96bfec1fcad7dd3c`.
 - Frozen worklist content SHA-256:
-  `4a38e1198b83c318f7a22da691974087c4f471cf97580bbfeac0f519abe3b16b`.
+  `6cdffef5e0784763c44c361a7b60be80c46f4982b7b19620ec897b36c4008d18`.
 
 The prepared profiles contained 169 physical/152 logical valid cases, one
 legacy case, 15 negative cases, 139 physical files across eight stress cases
@@ -36,18 +36,24 @@ SHA-256 `d786790ada524228e3f287c7cda6741025eb21d6a48a7dd4e586c586896efbee`.
 
 | Profile | Result | Evidence |
 |---|---|---|
-| Valid (`all`) | 169/169 execution-safe; 126 verified, 43 explicitly unverified; zero compatibility failures, crashes, timeouts, flaky results, or unavailable cases | `artifacts/compatibility/2026-08-28/handoff-all/` |
-| Legacy | 1/1 execution-safe and verified | `artifacts/compatibility/2026-08-28/handoff-legacy/` |
-| Negative | 15/15 passed the declared bounded failure-layer and healthy-recovery assertions | `artifacts/compatibility/2026-08-28/handoff-negative/report.json` |
-| Stress | 139/139 files passed; bounded execution, resource measurements, error recovery, shutdown, and cancellation assertions passed | `artifacts/compatibility/2026-08-28/handoff-stress/report.json` |
-| Fuzz | 64 deterministic candidates, 243 mutations, and 37,829 target operations; all 64 were clean rejections, zero unacceptable outcomes, and zero retained payloads | `artifacts/compatibility/2026-08-28/handoff-fuzz/report.json` |
+| Valid (`all`) | 169/169 execution-safe; base runner: 125 verified, 43 explicitly unverified, one metadata failure; fail-closed evidence: 156 passed, three expected unsupported, and ten failed; zero crashes, timeouts, flaky results, or unavailable cases | `artifacts/compatibility/2026-08-28/handoff-reviewed-all/` |
+| Legacy | 1/1 execution-safe and verified | `artifacts/compatibility/2026-08-28/handoff-reviewed-legacy/` |
+| Negative | 15/15 passed the declared bounded failure-layer and healthy-recovery assertions | `artifacts/compatibility/2026-08-28/handoff-reviewed-negative/report.json` |
+| Stress | 139/139 files passed; bounded execution, resource measurements, error recovery, shutdown, and observed in-progress discovery cancellation assertions passed | `artifacts/compatibility/2026-08-28/handoff-reviewed-stress/report.json` |
+| Fuzz | 64 deterministic candidates, 243 mutations, and 37,829 target operations; all 64 were clean rejections, zero unacceptable outcomes, and zero retained payloads | `artifacts/compatibility/2026-08-28/handoff-reviewed-fuzz/report.json` |
 
 The valid and legacy directories contain the detailed report, normalized
 report, evidence report, viewer process logs, and SHA-256 artifact index. The
 valid artifact-index file itself has SHA-256
-`1380cb720709148f92ba62641fc1beeb9ea7ad0d28c4ff53eb1fed03dea3c880`;
+`2243793070c038577187e2699502c15f451e07d9a968e872c0b29f4e65f9c6a6`;
 the legacy index has
-`4f9b4abc7e729319a9cc649f9a6da3ece8fca3f680fa3f3dcc70186b4e3e62b9`.
+`225fc4f76421ab5269adffdaf483a88966bb5889df5d05c40f65f4099bbe62cf`.
+
+The ten fail-closed valid-profile results expose evidence that is absent or
+incorrect rather than treating it as a pass: seven series-geometry claims,
+one JPEG Baseline lossy-metric claim, one ISO 2022 person-name decode, and one
+metadata-only renderer classification. These are retained as actionable
+compatibility gaps.
 
 ## Browser acceptance
 
@@ -64,9 +70,9 @@ artifact.
 
 ## Intentional limitations
 
-The 43 unverified valid-corpus results are explicit policy outcomes where the
-suite does not provide a sufficient oracle for the capability; they are not
-silent passes. Current boundaries remain:
+The base runner's 43 unverified valid-corpus results remain explicit outcomes,
+not silent passes. When a policy-selected assertion lacks evidence, the
+fail-closed evidence report records a failure. Current boundaries remain:
 
 - Semantic context is conservative metadata interpretation for SEG,
   Parametric Map, and RT Dose. It does not establish clinical correctness, and
