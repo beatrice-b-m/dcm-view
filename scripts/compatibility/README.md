@@ -92,8 +92,9 @@ path/SOP identity and pixel payload hashes remain available for comparison.
 
 Negative, stress, and fuzz qualification are deliberately separate from the
 valid-corpus campaign. Each command is bounded, writes a machine-readable
-summary plus logs and a SHA-256 artifact index, and launches only the supplied
-viewer binary.
+report with bounded output evidence, and launches only the supplied viewer
+binary. The valid-corpus runner additionally writes process logs and a SHA-256
+artifact index.
 
 Run the 15 isolated negative cases with a known-good recovery object:
 
