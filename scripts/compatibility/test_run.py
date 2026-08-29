@@ -402,8 +402,42 @@ class RunnerTests(unittest.TestCase):
         )
 
     def test_prepared_overlay_and_selected_wsi_tile_have_exact_oracles(self) -> None:
-        overlay = [(255, 255, 255, 255), (85, 85, 85, 255), (170, 170, 170, 255), (255, 255, 255, 255)]
+        overlay = [(255, 255, 255, 255)] * 4
         self.assertEqual(validate_visual("2x2_cr_overlay_lut_gradient", overlay)["status"], "passed")
+
+    def test_visual_oracles_distinguish_frame_order_from_luminance_order(self) -> None:
+        ascending = [(value, value, value, 255) for value in (0, 85, 170, 255)]
+        self.assertEqual(
+            validate_visual(
+                "2x2x2_monochrome_i16_rle_lossless_gradient_reversed", ascending
+            )["status"],
+            "passed",
+        )
+
+    def test_visual_oracles_match_ultrasound_and_projection_patterns(self) -> None:
+        ultrasound = [
+            0, 16, 32, 48,
+            16, 64, 80, 64,
+            32, 80, 255, 80,
+            48, 64, 80, 64,
+        ]
+        projection = [
+            0, 16, 32, 48,
+            16, 64, 96, 64,
+            32, 96, 255, 96,
+            48, 64, 96, 64,
+        ]
+        to_pixels = lambda values: [(value, value, value, 255) for value in values]
+        self.assertEqual(
+            validate_visual("four_frame_moving_ultrasound_echo", to_pixels(ultrasound))["status"],
+            "passed",
+        )
+        self.assertEqual(
+            validate_visual(
+                "single_plane_synthetic_angiographic_projection", to_pixels(projection)
+            )["status"],
+            "passed",
+        )
         red_tile = [(255, 0, 0, 255)] * 4
         self.assertEqual(
             validate_visual("4x4_tiled_full_red_green_blue_white_quadrants", red_tile)["status"],

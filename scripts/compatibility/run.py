@@ -123,9 +123,14 @@ ASCENDING_GRAYSCALE_PATTERNS = {
     "1x1_monochrome_u16_rle_lossless_tiny_maximum",
     "1x2_monochrome_rle_lossless_odd_fragment",
     "2x2_monochrome_u8_rle_lossless_with_padding_value",
-    "four_frame_moving_ultrasound_echo",
-    "single_plane_synthetic_angiographic_projection",
-    "single_plane_synthetic_radiofluoroscopic_projection",
+    "2x2x2_monochrome_i16_rle_lossless_gradient_reversed",
+    "3x3_monochrome_i16_odd_rle_lossless_centered_gradient",
+    "2x2x2_monochrome_i16_rle_lossless_signed_padding_reversed",
+    "2x2_monochrome_i16_rle_lossless_with_signed_padding_value",
+    "2x2x2_monochrome_rle_lossless_gradient_reversed",
+    "2x2x2_monochrome_u16_rle_lossless_gradient_reversed",
+    "2x2x2_monochrome_u16_rle_lossless_padding_reversed",
+    "2x2x2_monochrome_u8_rle_lossless_padding_reversed",
     "two_frame_fractional_probability_segmentation",
     "2x2x3_monochrome_rle_lossless_literal_repeat_reverse",
     "two_identical_pet_activity_frames_at_distinct_z_positions",
@@ -156,13 +161,6 @@ DESCENDING_GRAYSCALE_PATTERNS = {
     "2x3_inverse_monochrome_i16_rect_rle_lossless_centered_gradient",
     "2x3_inverse_monochrome_u16_rect_rle_lossless_gradient",
     "2x2_inverse_monochrome_u8_rle_lossless_with_padding_value",
-    "2x2x2_monochrome_i16_rle_lossless_gradient_reversed",
-    "3x3_monochrome_i16_odd_rle_lossless_centered_gradient",
-    "2x2x2_monochrome_i16_rle_lossless_signed_padding_reversed",
-    "2x2_monochrome_i16_rle_lossless_with_signed_padding_value",
-    "2x2x2_monochrome_u16_rle_lossless_gradient_reversed",
-    "2x2x2_monochrome_u16_rle_lossless_padding_reversed",
-    "2x2x2_monochrome_u8_rle_lossless_padding_reversed",
 }
 LOSSY_TRANSFER_SYNTAXES = {
     "1.2.840.10008.1.2.4.50",
@@ -732,7 +730,28 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
         return {"status": "not_declared", "pattern": None}
     luminance = [round(0.2126 * r + 0.7152 * g + 0.0722 * b, 3) for r, g, b, _ in pixels]
     if pattern == "2x2_cr_overlay_lut_gradient":
-        passed = len(pixels) == 4 and [pixel[0] for pixel in pixels] == [255, 85, 170, 255] and all(r == g == b for r, g, b, _ in pixels)
+        # The fixture's modality LUT maps stored values to 0, 1024, 2048,
+        # and 4095, while its four-entry VOI LUT starts at zero. The latter
+        # therefore clamps the final three inputs to white, and the diagonal
+        # overlay raises the first input to white as well.
+        passed = len(pixels) == 4 and [pixel[0] for pixel in pixels] == [255] * 4 and all(r == g == b for r, g, b, _ in pixels)
+    elif pattern == "four_frame_moving_ultrasound_echo":
+        passed = [pixel[0] for pixel in pixels] == [
+            0, 16, 32, 48,
+            16, 64, 80, 64,
+            32, 80, 255, 80,
+            48, 64, 80, 64,
+        ] and all(r == g == b for r, g, b, _ in pixels)
+    elif pattern in {
+        "single_plane_synthetic_angiographic_projection",
+        "single_plane_synthetic_radiofluoroscopic_projection",
+    }:
+        passed = [pixel[0] for pixel in pixels] == [
+            0, 16, 32, 48,
+            16, 64, 96, 64,
+            32, 96, 255, 96,
+            48, 64, 96, 64,
+        ] and all(r == g == b for r, g, b, _ in pixels)
     elif pattern == "2x2_monochrome_gradient":
         passed = len(luminance) == 4 and luminance == sorted(luminance)
     elif pattern in ASCENDING_GRAYSCALE_PATTERNS:
