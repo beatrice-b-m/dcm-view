@@ -53,6 +53,7 @@ PROBED_CAPABILITIES = {
     "decode_native_pixels",
     "open_file",
     "read_metadata",
+    "read_rt_image",
     "render_grayscale",
     "render_native_pixels",
     "render_compressed_pixels",

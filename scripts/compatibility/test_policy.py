@@ -23,6 +23,22 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(PolicyError, "no policy outcome"):
             resolve(self.policy, {"case_id": "x/y"}, "unknown")
 
+    def test_rt_image_with_pixels_uses_pixel_inspection_policy(self) -> None:
+        row = {
+            "case_id": "non-image/rt/image_linked",
+            "dicom": {
+                "sop_class_uid": "1.2.840.10008.5.1.4.1.1.481.1",
+                "transfer_syntax_uid": "1.2.840.10008.1.2.1",
+            },
+            "image": {"bits_allocated": 8},
+        }
+        rule = resolve(self.policy, row, "all")
+
+        self.assertEqual(rule["id"], "rt_image_pixel_inspection")
+        self.assertEqual(rule["classification"], "pixel_faithful_interactive")
+        self.assertIn("raw_lossless_all_frames", rule["required_assertions"])
+        self.assertIn("reference_closure", rule["conditional_assertions"])
+
 
 if __name__ == "__main__":
     unittest.main()
