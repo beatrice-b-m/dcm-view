@@ -12,12 +12,16 @@ from scripts.compatibility.run import (
     PROBED_CAPABILITIES,
     canonical_raw_bytes,
     deterministic_navigation_frames,
+    frame_time_observation,
     normalized_report,
     icc_profile_observation,
     metadata_observation,
+    nm_dimensions_observation,
     overlay_display_observation,
+    pet_activity_observation,
     pixel_geometry_observation,
     png_pixels,
+    projection_geometry_observation,
     reference_observation,
     raw_header_observation,
     semantic_context_observations,
@@ -376,6 +380,101 @@ class RunnerTests(unittest.TestCase):
                 ["interpret_pixel_geometry"], {"pixel_geometry": observed}
             ),
         )
+
+    def test_specialized_geometry_capabilities_emit_exact_tag_and_raw_evidence(self) -> None:
+        def node(tag: str, value: object) -> dict:
+            kind = "numbers" if isinstance(value, list) else "number" if isinstance(value, (int, float)) else "string"
+            return {"tag": f"({tag})", "value": {"type": kind, "value": value}}
+
+        nm_expected = {"expected_nm_multiframe": {
+            "image_type": ["ORIGINAL", "PRIMARY", "STATIC", "EMISSION"],
+            "counts_accumulated": 904,
+            "actual_frame_duration_ms": 1000,
+            "energy_window_vector": [1, 1, 2, 2],
+            "number_of_energy_windows": 2,
+            "detector_vector": [1, 2, 1, 2],
+            "number_of_detectors": 2,
+        }}
+        nm_tags = [
+            node("0008,0008", "ORIGINAL; PRIMARY; STATIC; EMISSION"),
+            node("0018,0070", 904), node("0018,1242", 1000),
+            node("0054,0010", [1, 1, 2, 2]), node("0054,0011", 2),
+            node("0054,0020", [1, 2, 1, 2]), node("0054,0021", 2),
+        ]
+        nm = nm_dimensions_observation(nm_tags, nm_expected)
+        self.assertTrue(nm["exact_evidence"])
+        self.assertNotIn(
+            "interpret_nm_dimensions",
+            unprobed_capabilities(["interpret_nm_dimensions"], {"nm_dimensions": nm}),
+        )
+
+        us_expected = {"expected_us_multiframe": {
+            "image_type": ["ORIGINAL", "PRIMARY", "ABDOMINAL", "0001"],
+            "frame_time_ms": 100.0,
+            "frame_relative_times_ms": [0.0, 100.0, 200.0, 300.0],
+            "color_data_present": False,
+            "lossy_image_compression": "00",
+        }}
+        us_tags = [
+            node("0008,0008", "ORIGINAL; PRIMARY; ABDOMINAL; 0001"),
+            node("0018,1063", 100.0), node("0028,0014", 0),
+            node("0028,2110", "00"),
+        ]
+        frame_time = frame_time_observation({"frame_count": 4}, us_tags, us_expected)
+        self.assertTrue(frame_time["exact_evidence"])
+
+        projection_expected = {"expected_xa_projection": {
+            "image_type": ["ORIGINAL", "PRIMARY", "SINGLE PLANE"],
+            "body_part_examined": "HEART", "kvp": 80.0,
+            "distance_source_to_detector_mm": 1200.0,
+            "distance_source_to_patient_mm": 800.0,
+            "estimated_radiographic_magnification_factor": 1.5,
+            "exposure_mas": 4, "radiation_setting": "GR",
+            "imager_pixel_spacing_mm": [0.2, 0.2],
+            "pixel_intensity_relationship": "LIN",
+            "lossy_image_compression": "00",
+            "positioner_primary_angle_degrees": 15.0,
+            "positioner_secondary_angle_degrees": -10.0,
+        }}
+        projection_tags = [
+            node("0008,0008", "ORIGINAL; PRIMARY; SINGLE PLANE"),
+            node("0018,0015", "HEART"), node("0018,0060", 80.0),
+            node("0018,1110", 1200.0), node("0018,1111", 800.0),
+            node("0018,1114", 1.5), node("0018,1152", 4),
+            node("0018,1155", "GR"), node("0018,1164", [0.2, 0.2]),
+            node("0028,1040", "LIN"), node("0028,2110", "00"),
+            node("0018,1510", 15.0), node("0018,1511", -10.0),
+        ]
+        self.assertTrue(
+            projection_geometry_observation(projection_tags, projection_expected)["exact_evidence"]
+        )
+
+        pet_expected = {
+            "image": {"bits_allocated": 16, "pixel_representation": 0},
+            "expected_pet_activity": {
+                "image_type": ["ORIGINAL", "PRIMARY"],
+                "actual_frame_duration_ms": 60000,
+                "corrected_image": ["DCAL"], "rescale_intercept": 0.0,
+                "rescale_slope": 2.5, "number_of_slices": 1,
+                "series_type": ["STATIC", "IMAGE"], "units": "BQML",
+                "counts_source": "EMISSION", "decay_correction": "NONE",
+                "frame_reference_time_ms": 30000.0,
+                "dose_calibration_factor": 1.0, "image_index": 1,
+                "stored_values": [0, 100, 200, 400],
+                "activity_values_bqml": [0.0, 250.0, 500.0, 1000.0],
+            },
+        }
+        pet_tags = [
+            node("0008,0008", "ORIGINAL; PRIMARY"), node("0018,1242", 60000),
+            node("0028,0051", "DCAL"), node("0028,1052", 0.0),
+            node("0028,1053", 2.5), node("0054,0081", 1),
+            node("0054,1000", "STATIC; IMAGE"), node("0054,1001", "BQML"),
+            node("0054,1002", "EMISSION"), node("0054,1102", "NONE"),
+            node("0054,1300", 30000.0), node("0054,1322", 1.0),
+            node("0054,1330", 1),
+        ]
+        pet = pet_activity_observation(pet_tags, struct.pack("<4H", 0, 100, 200, 400), pet_expected)
+        self.assertTrue(pet["exact_evidence"])
 
     def test_pixel_aspect_ratio_manifest_variant_uses_vertical_horizontal_extent(self) -> None:
         expected = {

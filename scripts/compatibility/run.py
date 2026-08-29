@@ -69,7 +69,11 @@ PROBED_CAPABILITIES = {
     "organize_series_by_study_and_frame_of_reference",
 }
 CONDITIONAL_CAPABILITY_CHECKS = {
+    "interpret_frame_time": "frame_time",
+    "interpret_nm_dimensions": "nm_dimensions",
+    "interpret_pet_activity": "pet_activity",
     "interpret_pixel_geometry": "pixel_geometry",
+    "interpret_projection_geometry": "projection_geometry",
     "read_overlay_plane": "overlay_display",
     "resolve_frame_references": "references",
     "resolve_references": "references",
@@ -1111,6 +1115,171 @@ def pixel_geometry_observation(
     }
 
 
+def _expected_tag_value(value: Any) -> Any:
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return "; ".join(value)
+    return value
+
+
+def _exact_tag_observation(
+    tags: Any, fields: list[tuple[str, str, Any]]
+) -> dict[str, Any]:
+    tag_index = {
+        row.get("tag"): row for row in tags or [] if isinstance(row, dict)
+    }
+    results = []
+    for name, tag, expected in fields:
+        node = tag_index.get(_tag_key(tag))
+        observed = _tag_scalar(node) if isinstance(node, dict) else None
+        expected = _expected_tag_value(expected)
+        results.append(
+            {
+                "field": name,
+                "tag": _tag_key(tag),
+                "expected": expected,
+                "observed": observed,
+                "passed": observed == expected,
+            }
+        )
+    exact = bool(results) and all(row["passed"] for row in results)
+    return {
+        "evidence_scope": "declared_manifest_values_against_tag_api",
+        "results": results,
+        "exact_evidence": exact,
+        "passed": exact,
+    }
+
+
+def nm_dimensions_observation(tags: Any, expected: dict[str, Any]) -> dict[str, Any]:
+    nm = expected.get("expected_nm_multiframe") or {}
+    return _exact_tag_observation(
+        tags,
+        [
+            ("image_type", "0008,0008", nm.get("image_type")),
+            ("counts_accumulated", "0018,0070", nm.get("counts_accumulated")),
+            ("actual_frame_duration_ms", "0018,1242", nm.get("actual_frame_duration_ms")),
+            ("energy_window_vector", "0054,0010", nm.get("energy_window_vector")),
+            ("number_of_energy_windows", "0054,0011", nm.get("number_of_energy_windows")),
+            ("detector_vector", "0054,0020", nm.get("detector_vector")),
+            ("number_of_detectors", "0054,0021", nm.get("number_of_detectors")),
+        ],
+    )
+
+
+def frame_time_observation(
+    file_summary: dict[str, Any], tags: Any, expected: dict[str, Any]
+) -> dict[str, Any]:
+    ultrasound = expected.get("expected_us_multiframe") or {}
+    observation = _exact_tag_observation(
+        tags,
+        [
+            ("image_type", "0008,0008", ultrasound.get("image_type")),
+            ("frame_time_ms", "0018,1063", ultrasound.get("frame_time_ms")),
+            ("color_data_present", "0028,0014", int(bool(ultrasound.get("color_data_present")))),
+            ("lossy_image_compression", "0028,2110", ultrasound.get("lossy_image_compression")),
+        ],
+    )
+    frame_count = file_summary.get("frame_count")
+    frame_time = ultrasound.get("frame_time_ms")
+    observed_relative_times = (
+        [index * frame_time for index in range(frame_count)]
+        if isinstance(frame_count, int) and isinstance(frame_time, (int, float))
+        else None
+    )
+    derived = {
+        "field": "frame_relative_times_ms",
+        "expected": ultrasound.get("frame_relative_times_ms"),
+        "observed": observed_relative_times,
+        "passed": observed_relative_times == ultrasound.get("frame_relative_times_ms"),
+    }
+    observation["results"].append(derived)
+    observation["exact_evidence"] = observation["passed"] = all(
+        row["passed"] for row in observation["results"]
+    )
+    return observation
+
+
+def projection_geometry_observation(tags: Any, expected: dict[str, Any]) -> dict[str, Any]:
+    projection = expected.get("expected_xa_projection") or expected.get("expected_xrf_projection") or {}
+    fields = [
+        ("image_type", "0008,0008", projection.get("image_type")),
+        ("body_part_examined", "0018,0015", projection.get("body_part_examined")),
+        ("kvp", "0018,0060", projection.get("kvp")),
+        ("distance_source_to_detector_mm", "0018,1110", projection.get("distance_source_to_detector_mm")),
+        ("distance_source_to_patient_mm", "0018,1111", projection.get("distance_source_to_patient_mm")),
+        ("estimated_radiographic_magnification_factor", "0018,1114", projection.get("estimated_radiographic_magnification_factor")),
+        ("exposure_mas", "0018,1152", projection.get("exposure_mas")),
+        ("radiation_setting", "0018,1155", projection.get("radiation_setting")),
+        ("imager_pixel_spacing_mm", "0018,1164", projection.get("imager_pixel_spacing_mm")),
+        ("pixel_intensity_relationship", "0028,1040", projection.get("pixel_intensity_relationship")),
+        ("lossy_image_compression", "0028,2110", projection.get("lossy_image_compression")),
+    ]
+    if "expected_xa_projection" in expected:
+        fields.extend(
+            [
+                ("positioner_primary_angle_degrees", "0018,1510", projection.get("positioner_primary_angle_degrees")),
+                ("positioner_secondary_angle_degrees", "0018,1511", projection.get("positioner_secondary_angle_degrees")),
+            ]
+        )
+    else:
+        fields.append(("column_angulation_degrees", "0018,1450", projection.get("column_angulation_degrees")))
+    return _exact_tag_observation(tags, fields)
+
+
+def _decoded_integer_samples(payload: bytes, image: dict[str, Any]) -> list[int] | None:
+    bits_allocated = image.get("bits_allocated")
+    signed = image.get("pixel_representation") == 1
+    if bits_allocated not in {8, 16, 32} or len(payload) % (bits_allocated // 8):
+        return None
+    width = bits_allocated // 8
+    return [
+        int.from_bytes(payload[offset : offset + width], "little", signed=signed)
+        for offset in range(0, len(payload), width)
+    ]
+
+
+def pet_activity_observation(
+    tags: Any, raw_payload: bytes | None, expected: dict[str, Any]
+) -> dict[str, Any]:
+    pet = expected.get("expected_pet_activity") or {}
+    observation = _exact_tag_observation(
+        tags,
+        [
+            ("image_type", "0008,0008", pet.get("image_type")),
+            ("actual_frame_duration_ms", "0018,1242", pet.get("actual_frame_duration_ms")),
+            ("corrected_image", "0028,0051", pet.get("corrected_image")),
+            ("rescale_intercept", "0028,1052", pet.get("rescale_intercept")),
+            ("rescale_slope", "0028,1053", pet.get("rescale_slope")),
+            ("number_of_slices", "0054,0081", pet.get("number_of_slices")),
+            ("series_type", "0054,1000", pet.get("series_type")),
+            ("units", "0054,1001", pet.get("units")),
+            ("counts_source", "0054,1002", pet.get("counts_source")),
+            ("decay_correction", "0054,1102", pet.get("decay_correction")),
+            ("frame_reference_time_ms", "0054,1300", pet.get("frame_reference_time_ms")),
+            ("dose_calibration_factor", "0054,1322", pet.get("dose_calibration_factor")),
+            ("image_index", "0054,1330", pet.get("image_index")),
+        ],
+    )
+    stored = _decoded_integer_samples(raw_payload or b"", expected.get("image") or {})
+    slope = pet.get("rescale_slope")
+    intercept = pet.get("rescale_intercept")
+    activity = (
+        [sample * slope + intercept for sample in stored]
+        if stored is not None and isinstance(slope, (int, float)) and isinstance(intercept, (int, float))
+        else None
+    )
+    observation["results"].extend(
+        [
+            {"field": "stored_values", "expected": pet.get("stored_values"), "observed": stored, "passed": stored == pet.get("stored_values")},
+            {"field": "activity_values_bqml", "expected": pet.get("activity_values_bqml"), "observed": activity, "passed": activity == pet.get("activity_values_bqml")},
+        ]
+    )
+    observation["exact_evidence"] = observation["passed"] = all(
+        row["passed"] for row in observation["results"]
+    )
+    return observation
+
+
 def unprobed_capabilities(
     expected_capabilities: list[str], checks: dict[str, Any]
 ) -> list[str]:
@@ -1354,6 +1523,17 @@ def probe_case(
             tags["json"] if tags["status"] == 200 else None,
             expected,
         )
+        tag_payload = tags["json"] if tags["status"] == 200 else None
+        if "interpret_nm_dimensions" in expected_capabilities:
+            checks["nm_dimensions"] = nm_dimensions_observation(tag_payload, expected)
+        if "interpret_frame_time" in expected_capabilities:
+            checks["frame_time"] = frame_time_observation(
+                file_summary, tag_payload, expected
+            )
+        if "interpret_projection_geometry" in expected_capabilities:
+            checks["projection_geometry"] = projection_geometry_observation(
+                tag_payload, expected
+            )
         expected_references = expected.get("references") or []
         if expected_references:
             reference_response = request("references", f"/api/file/{index}/references")
@@ -1457,6 +1637,12 @@ def probe_case(
                 and raw_second["headers"].get("x-cache") == "HIT"
             )
             checks["raw_headers"] = raw_header_observation(raw_first["headers"], image)
+            if "interpret_pet_activity" in expected_capabilities:
+                checks["pet_activity"] = pet_activity_observation(
+                    tag_payload,
+                    raw_first["body"] if raw_first["status"] == 200 else None,
+                    expected,
+                )
             if entry["policy"]["classification"] == "controlled_unsupported":
                 expected_statuses = set(
                     (entry["policy"].get("expected_unsupported") or {}).get("statuses", [])
@@ -1576,6 +1762,10 @@ def _finish_result(
             "lossless_frame_hash",
             "lossless_frame_hashes",
             "raw_headers",
+            "nm_dimensions",
+            "pet_activity",
+            "frame_time",
+            "projection_geometry",
             "pixel_geometry",
             "references",
             "overlay_display",

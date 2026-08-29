@@ -28,6 +28,21 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(evidence["presentation_checks"])
         self.assertEqual(evidence["normalized_display_hash"], {"passed": True})
 
+    def test_specialized_geometry_evidence_satisfies_series_assertion(self) -> None:
+        from scripts.compatibility.reports import assertion_evidence
+
+        evidence = assertion_evidence({
+            "series_navigation": {"mapped": True, "capabilities": {}},
+            "frame_time": {"passed": True, "exact_evidence": True},
+        })
+        self.assertEqual(evidence["series_navigation"], {"passed": True})
+
+        failed = assertion_evidence({
+            "series_navigation": {"mapped": True, "capabilities": {}},
+            "projection_geometry": {"passed": False, "exact_evidence": False},
+        })
+        self.assertEqual(failed["series_navigation"], {"passed": False})
+
     def test_error_envelope_alone_is_not_recovery_evidence(self) -> None:
         from scripts.compatibility.reports import assertion_evidence
         evidence = assertion_evidence({"error_envelope": True})

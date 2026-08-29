@@ -22,8 +22,21 @@ def _passed(value: Any) -> bool:
 def assertion_evidence(observations: dict[str, Any]) -> dict[str, Any]:
     series = observations.get("series_navigation")
     series_capabilities = (series or {}).get("capabilities") or {}
-    series_evidence = None if not series_capabilities else {
-        "passed": bool((series or {}).get("mapped")) and all(_passed(value) for value in series_capabilities.values())
+    specialized_geometry = [
+        observations[key]
+        for key in (
+            "nm_dimensions",
+            "pet_activity",
+            "frame_time",
+            "projection_geometry",
+            "pixel_geometry",
+        )
+        if key in observations
+    ]
+    series_checks = list(series_capabilities.values()) + specialized_geometry
+    series_evidence = None if not series_checks else {
+        "passed": bool((series or {}).get("mapped"))
+        and all(_passed(value) for value in series_checks)
     }
     presentation = [observations.get(key) for key in ("visual", "overlay_display", "display_shutter", "icc_profile") if key in observations]
     visual = observations.get("visual")
