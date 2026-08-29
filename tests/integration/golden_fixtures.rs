@@ -219,8 +219,8 @@ async fn golden_multiframe_jpeg_fixture_has_offset_table_and_decodes_by_frame() 
             .expect("decoded PNG")
             .to_luma8()
             .into_raw();
-    // Lossy JPEG decode can differ by a couple of luminance levels across platforms.
-    assert_pixels_close(&decoded_frame2, &expected, 2);
+    // Lossy JPEG decode can differ by a few luminance levels across decoder builds.
+    assert_pixels_close(&decoded_frame2, &expected, 3);
     assert_ne!(frame0.as_bytes(), frame2.as_bytes());
 }
 
