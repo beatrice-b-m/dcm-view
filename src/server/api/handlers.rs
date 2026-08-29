@@ -4,12 +4,12 @@ use crate::api::contracts::{
     DiscoveryResult, EmbedRoiAnnotations, FileSummary, FilesResponse, FrameInfo, FrameQuery,
     HealthResponse, ReferenceCatalogResponse, ReferenceMatchSummary, ReferenceSummary,
     ReferenceTargetSummary, SemanticContextResponse, SeriesCatalogResponse, TagNode, TagQuery,
-    ViewerIdentity, CACHE_HEADER, CACHE_HIT, CACHE_MISS, EXPORT_CONTENT_DISPOSITION_HEADER,
-    EXPORT_CONTENT_DISPOSITION_VALUE, RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS,
-    RAW_FRAME_HEADER_DEFAULT_WC, RAW_FRAME_HEADER_DEFAULT_WW,
-    RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION, RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
-    RAW_FRAME_HEADER_RESCALE_INTERCEPT, RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS,
-    RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
+    ViewerIdentity, WsiFrameContextResponse, CACHE_HEADER, CACHE_HIT, CACHE_MISS,
+    EXPORT_CONTENT_DISPOSITION_HEADER, EXPORT_CONTENT_DISPOSITION_VALUE,
+    RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS, RAW_FRAME_HEADER_DEFAULT_WC,
+    RAW_FRAME_HEADER_DEFAULT_WW, RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
+    RAW_FRAME_HEADER_PIXEL_REPRESENTATION, RAW_FRAME_HEADER_RESCALE_INTERCEPT,
+    RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS, RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
 };
 use crate::pixels::{self, FrameRequest, RawFrameRequest};
 use crate::references::{self, ReferenceCandidate};
@@ -159,6 +159,35 @@ pub(super) async fn semantic_context(
     let context = task::spawn_blocking(move || crate::semantic::semantic_context(&source, &files))
         .await
         .map_err(|error| ApiError::internal(format!("semantic context task failed: {error}")))?
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(context))
+}
+
+pub(super) async fn wsi_context(
+    State(state): State<AppState>,
+    path: Result<Path<(usize, u32)>, PathRejection>,
+) -> Result<Json<WsiFrameContextResponse>, ApiError> {
+    let Path((index, frame)) = path.map_err(error::path_rejection)?;
+    let source = state
+        .registry()
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    if frame >= source.frame_count {
+        return Err(error::pixel_error(
+            crate::pixels::PixelError::FrameOutOfRange,
+        ));
+    }
+    if crate::object_kind::classify_sop_class(&source.sop_class_uid)
+        != crate::object_kind::ObjectKind::WholeSlideMicroscopy
+    {
+        return Err(ApiError::bad_request(
+            "WSI context is only available for Whole Slide Microscopy objects",
+        ));
+    }
+    let files = state.registry().files_snapshot();
+    let context = task::spawn_blocking(move || crate::wsi::frame_context(&source, frame, &files))
+        .await
+        .map_err(|error| ApiError::internal(format!("WSI context task failed: {error}")))?
         .map_err(|error| ApiError::internal(error.to_string()))?;
     Ok(Json(context))
 }

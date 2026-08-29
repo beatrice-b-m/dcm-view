@@ -9,3 +9,4 @@ pub mod series;
 pub mod server;
 pub mod tunnel;
 pub mod types;
+pub mod wsi;

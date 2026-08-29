@@ -5,7 +5,7 @@ use crate::api::contracts::{
     self as api_contracts, ApiEndpointContract, ApiEndpointSpec, ApiMethod, ApiOperation,
     EmbedRoiAnnotations, ErrorResponse, FilesResponse, FrameInfo, HealthResponse,
     ReferenceCatalogResponse, SemanticContextResponse, SeriesCatalogResponse, TagNode,
-    API_ENDPOINTS, API_PREFIX,
+    WsiFrameContextResponse, API_ENDPOINTS, API_PREFIX,
 };
 use crate::server::web;
 use crate::server::RequestActivity;
@@ -71,6 +71,7 @@ json_handler_response!(
     SeriesCatalogResponse,
     ReferenceCatalogResponse,
     SemanticContextResponse,
+    WsiFrameContextResponse,
     FrameInfo,
     Vec<TagNode>,
     TagNode,
@@ -231,6 +232,23 @@ fn register_api_endpoint(
                     |state: State<AppState>, path: Result<Path<usize>, PathRejection>| async move {
                         let response: handler_result_type!(api_contracts::FileSemanticContext) =
                             handlers::semantic_context(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
+        ApiOperation::FileWsiContext => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileWsiContext>(endpoint);
+            require_no_query::<api_contracts::FileWsiContext>();
+            require_no_request::<api_contracts::FileWsiContext>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: Result<Path<(usize, u32)>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileWsiContext) =
+                            handlers::wsi_context(state, path).await;
                         response
                     },
                 ),

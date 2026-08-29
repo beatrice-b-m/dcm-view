@@ -249,6 +249,20 @@ define_api_endpoints! {
         error_type: ErrorResponse,
         success_status: 200
     },
+    API_ENDPOINT_FILE_WSI_CONTEXT => {
+        operation: FileWsiContext,
+        id: "fileWsiContext",
+        method: Get,
+        path: "/file/{index}/frame/{frame}/wsi-context",
+        query_type: NoQuery,
+        request_type: NoRequest,
+        request_media_type: None,
+        response_type: WsiFrameContextResponse,
+        response_media_type: "application/json",
+        response_headers_type: NoResponseHeaders,
+        error_type: ErrorResponse,
+        success_status: 200
+    },
     API_ENDPOINT_FILE_FRAME => {
         operation: FileFrame,
         id: "fileFrame",
@@ -661,6 +675,70 @@ pub struct DoseGridGeometry {
     pub image_orientation_patient: Option<[f64; 6]>,
     pub pixel_spacing: Option<[f64; 2]>,
     pub grid_frame_offsets: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WsiFrameContextResponse {
+    pub source_file_index: usize,
+    pub frame_index: u32,
+    pub tile_frame_path: String,
+    pub positioning_status: String,
+    pub position_source: String,
+    pub tiling_status: String,
+    pub total_pixel_matrix: Option<WsiTotalPixelMatrix>,
+    pub tile_rectangle: Option<WsiTileRectangle>,
+    /// Zero-based tile row within the matrix grid.
+    pub tile_row: Option<u64>,
+    /// Zero-based tile column within the matrix grid.
+    pub tile_column: Option<u64>,
+    pub pyramid_uid: Option<String>,
+    /// Zero is the highest-resolution declared matrix in this pyramid.
+    pub pyramid_level: Option<u32>,
+    pub optical_path: Option<WsiOpticalPath>,
+    pub focal_plane: Option<WsiFocalPlane>,
+    pub image_type_role: Option<String>,
+    pub companions: Vec<WsiCompanionSummary>,
+    pub companions_truncated: bool,
+    pub relationships: Vec<ReferenceSummary>,
+    pub relationships_truncated: bool,
+    pub reconstruction_claimed: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WsiTotalPixelMatrix {
+    pub rows: u64,
+    pub columns: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WsiTileRectangle {
+    /// Zero-based column offset in the Total Pixel Matrix.
+    pub x: u64,
+    /// Zero-based row offset in the Total Pixel Matrix.
+    pub y: u64,
+    pub width: u64,
+    pub height: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WsiOpticalPath {
+    pub index: Option<u32>,
+    pub identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WsiFocalPlane {
+    pub index: Option<u32>,
+    pub z_offset_slide: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WsiCompanionSummary {
+    pub file_index: usize,
+    pub sop_instance_uid: String,
+    pub image_type_role: Option<String>,
+    pub pyramid_uid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
