@@ -210,6 +210,7 @@ fn frame_geometry_value<const N: usize>(
 impl From<&FileEntry> for FileSummary {
     fn from(value: &FileEntry) -> Self {
         let support = crate::pixels::classify_pixel_support(value);
+        let raw_windowing_reason = raw_windowing_incompatibility(&value.series_metadata);
         Self {
             index: value.index,
             path: value.path.display().to_string(),
@@ -239,6 +240,8 @@ impl From<&FileEntry> for FileSummary {
                 }
             },
             support_reason: support.reason_id().map(ToString::to_string),
+            raw_windowing_compatible: raw_windowing_reason.is_none(),
+            raw_windowing_reason: raw_windowing_reason.map(ToString::to_string),
             has_pixels: value.has_pixels,
             frame_count: value.frame_count,
             rows: value.rows,
@@ -250,6 +253,55 @@ impl From<&FileEntry> for FileSummary {
             transfer_syntax_uid: value.transfer_syntax_uid.clone(),
             default_window: value.default_window,
         }
+    }
+}
+
+fn raw_windowing_incompatibility(metadata: &SeriesMetadata) -> Option<&'static str> {
+    if metadata.native_pixel.modality_lut.is_some() {
+        Some("client raw windowing is disabled because a Modality LUT is declared")
+    } else if metadata.native_pixel.voi_lut.is_some() {
+        Some("client raw windowing is disabled because a VOI LUT is declared")
+    } else if !metadata.presentation.overlay_planes.is_empty() {
+        Some("client raw windowing is disabled because an overlay plane is declared")
+    } else if metadata.presentation.rectangular_shutter.is_some() {
+        Some("client raw windowing is disabled because a display shutter is declared")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod raw_windowing_tests {
+    use super::{raw_windowing_incompatibility, DicomLut, OverlayPlane, SeriesMetadata};
+
+    #[test]
+    fn disables_raw_windowing_for_unrepresented_presentation_semantics() {
+        let mut metadata = SeriesMetadata::default();
+        assert_eq!(raw_windowing_incompatibility(&metadata), None);
+
+        metadata.native_pixel.voi_lut = Some(DicomLut {
+            first_mapped_value: 0,
+            bits_per_entry: 8,
+            entries: vec![0, 255],
+        });
+        assert!(raw_windowing_incompatibility(&metadata)
+            .expect("VOI LUT reason")
+            .contains("VOI LUT"));
+
+        metadata.native_pixel.voi_lut = None;
+        metadata.presentation.overlay_planes.push(OverlayPlane {
+            group: 0x6000,
+            rows: 1,
+            columns: 1,
+            origin: [1, 1],
+            overlay_type: "G".to_string(),
+            number_of_frames: 1,
+            image_frame_origin: 1,
+            data: vec![1],
+        });
+        assert!(raw_windowing_incompatibility(&metadata)
+            .expect("overlay reason")
+            .contains("overlay"));
     }
 }
 

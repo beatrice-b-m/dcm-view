@@ -499,6 +499,10 @@ pub struct FileSummary {
     pub object_kind: String,
     pub support_state: SupportState,
     pub support_reason: Option<String>,
+    /// Whether client-side raw windowing preserves every declared presentation transform.
+    pub raw_windowing_compatible: bool,
+    /// Stable explanation when the frontend must retain the server-rendered presentation path.
+    pub raw_windowing_reason: Option<String>,
     pub has_pixels: bool,
     pub frame_count: u32,
     pub rows: u32,
