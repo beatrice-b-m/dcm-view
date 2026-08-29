@@ -11,7 +11,10 @@ use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
 use super::icc::select_icc_profile;
 use super::render::apply_monochrome1_inversion;
-use super::window::{apply_window, resolve_window_with_mode};
+use super::window::{
+    apply_padding_background, apply_window, exclude_padding_samples, read_pixel_padding_range,
+    resolve_window_with_mode,
+};
 
 pub(crate) async fn decode_jp2_fragment_to_png(
     file: FileEntry,
@@ -54,17 +57,27 @@ fn decode_jp2_fragment_to_png_blocking(
         // Grayscale — the common medical imaging case
         let width = comps[0].width();
         let height = comps[0].height();
-        let rescaled_samples: Vec<f64> = comps[0]
-            .data()
+        let stored_samples: Vec<f64> = comps[0].data().iter().map(|&value| value as f64).collect();
+        let rescaled_samples: Vec<f64> = stored_samples
             .iter()
-            .map(|&value| value as f64 * file.rescale_slope + file.rescale_intercept)
+            .map(|value| value * file.rescale_slope + file.rescale_intercept)
             .collect();
+        let padding_mask =
+            read_pixel_padding_range(&object, crate::types::NativePixelDataKind::Integer)
+                .map(|padding| padding.mask(&stored_samples));
+        let unpadded = padding_mask
+            .as_deref()
+            .map(|mask| exclude_padding_samples(&rescaled_samples, mask));
+        let window_source = unpadded
+            .as_deref()
+            .filter(|samples| !samples.is_empty())
+            .unwrap_or(&rescaled_samples);
         let resolved_window = resolve_window_with_mode(
             window_mode,
             requested_wc,
             requested_ww,
             file.default_window,
-            &rescaled_samples,
+            window_source,
         )
         .ok_or_else(|| anyhow!("JP2 decode failed: could not resolve window"))?;
         let mut windowed = apply_window(
@@ -72,6 +85,9 @@ fn decode_jp2_fragment_to_png_blocking(
             resolved_window.center,
             resolved_window.width.max(1.0),
         );
+        if let Some(mask) = padding_mask.as_deref() {
+            apply_padding_background(&mut windowed, mask);
+        }
         apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
         let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, windowed)
             .ok_or_else(|| anyhow!("JP2 decoded buffer size mismatch"))?;

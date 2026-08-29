@@ -16,4 +16,5 @@ mod integration {
     mod support;
     mod tags_endpoint;
     mod tunnel_lifecycle;
+    mod wsi_context;
 }
