@@ -21,6 +21,8 @@ module:
 | HTTP runtime | `src/server/` | Listener/runtime, route registration, handlers, state, registry, activity tracking, tags, and embedded assets. |
 | Pixel service | `src/pixels/` | Typed display/raw requests, cache behavior, transfer-syntax classification, decoding, rendering, and `PixelError`. |
 | DICOM references | `src/references.rs` | Bounded extraction of typed instance relationships without implying target presence or semantic rendering. |
+| Semantic context | `src/semantic.rs` | Conservative SEG, Parametric Map, and RT Dose metadata interpretation layered beside unchanged pixel preview. |
+| WSI tile context | `src/wsi.rs` | Bounded positioning of one selected WSI tile without stitching or Total Pixel Matrix reconstruction. |
 | DICOM discovery | `src/loader.rs` | Progressive events, cancellation, reports, metadata filters, and `FileEntry` construction. |
 | Frontend client | `frontend/src/api.ts` | Typed fetch wrappers over generated endpoint metadata and wire types. |
 | Cross-language generation | `scripts/generate_frontend_types.py` | Checked-in `frontend/src/generated/api-types.ts` derived from the Rust HTTP contract. |
@@ -118,7 +120,7 @@ frames and uses the same prepare-then-render cache path as manual navigation.
 flowchart LR
     contract["api/contracts.rs<br/>typed endpoint registry"] --> routes["server/api/routes.rs<br/>typed registration"]
     routes --> handlers["server/api/handlers.rs"]
-    handlers --> services["registry, pixels, tags,<br/>annotations"]
+    handlers --> services["registry, pixels, tags,<br/>annotations, semantics, WSI"]
     handlers --> responses["declared status, media,<br/>headers, JSON errors"]
     contract --> generator["generate_frontend_types.py"]
     generator --> generated["generated/api-types.ts"]
@@ -167,6 +169,15 @@ The executable contract is kept consistent by three layers:
   SOP/Series identity. Declared one-based frame numbers remain visible while
   local navigation matches contain only validated zero-based frames; missing
   targets remain explicit empty matches.
+- `/api/file/{index}/semantic-context` reads declared SEG, Parametric Map, and
+  RT Dose meaning without modifying decoded pixels. Pixel preview remains the
+  default, reference geometry must match before an overlay is offered, and
+  absent or incompatible metadata is reported explicitly rather than inferred.
+- `/api/file/{index}/wsi/frame/{frame}` returns bounded placement metadata for
+  one selected tile. TILED_FULL uses deterministic raster placement;
+  TILED_SPARSE uses per-frame plane positions. The contract exposes matrix,
+  optical-path, focal-plane, and warning data but never promises stitching or
+  slide reconstruction.
 - `/api/file/{index}/tags/select` traverses explicit tag/item paths against the
   original object and pages sequence items, allowing targeted retrieval beyond
   legacy tag-tree preview caps.
@@ -183,6 +194,10 @@ The executable contract is kept consistent by three layers:
 - Unsupported transfer syntaxes and raw layouts are `422`; missing pixels and
   out-of-range frames are `404`; decode failures are request-scoped `500`
   responses and do not stop the server.
+- DICOMDIR is recognized by Media Storage Directory SOP Class and skipped with
+  the stable `unsupported_media_directory` discovery reason while recursive
+  discovery continues for ordinary objects. File-set hierarchy parsing and
+  DICOM media support are intentionally not advertised.
 
 Display cache keys include file, frame, normalized window parameters, and
 window mode. Full-dynamic mode ignores explicit window values. Raw cache keys
@@ -335,6 +350,17 @@ installation and VS Code Electron integration can also use network/cache state;
   outside-opening replacement was exercised. ICC evidence compares the
   decompressed PNG `iCCP` bytes to the manifest size and SHA-256, while leaving
   numeric color transformation and optical-path mapping explicitly unprobed.
+- `scripts/compatibility` freezes verified, manifest-selected inputs from the
+  pinned read-only `dicom-test-suite` checkout into immutable worklists. The
+  valid and legacy HTTP campaigns, isolated negative runner, stress baseline,
+  and payload-free deterministic fuzz qualification produce separate bounded
+  reports and SHA-256 artifact indexes. They are local opt-in workflows, not
+  CI, scheduled, external-fixture, or release integration.
+- Real-browser acceptance uses the actual Svelte app and fixture server to
+  exercise canvas/network behavior: metadata-only and unsupported states,
+  pixel-preview/semantic-context switching, typed references, SEG/Parametric
+  Map/RT Dose context, WSI positioning, cine, windowing, viewport transforms,
+  file switching, and recovery after request errors.
 - `python/tests/test_check_profiles.py` locks the documented
   `quick`/`core`/`e2e` composition and the exact independent `external` command
   without launching toolchains.
