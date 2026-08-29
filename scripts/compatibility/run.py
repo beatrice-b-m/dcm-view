@@ -180,10 +180,29 @@ RAW_HEADERS = (
 )
 
 
-def canonical_raw_bytes(payload: bytes, image: dict[str, Any]) -> bytes:
+def canonical_raw_bytes(
+    payload: bytes,
+    image: dict[str, Any],
+    transfer_syntax_uid: Optional[str] = None,
+) -> bytes:
     """Normalize decoded samples to the suite's stored-bit byte convention."""
     bits_allocated = image.get("bits_allocated")
     bits_stored = image.get("bits_stored")
+    if bits_allocated == 1 and transfer_syntax_uid == "1.2.840.10008.1.2.8.1":
+        pixel_count = math.prod(
+            value
+            for value in (
+                image.get("rows"),
+                image.get("columns"),
+                image.get("samples_per_pixel"),
+            )
+            if isinstance(value, int)
+        )
+        if pixel_count == len(payload) and all(sample in {0, 1} for sample in payload):
+            packed = bytearray((pixel_count + 7) // 8)
+            for index, sample in enumerate(payload):
+                packed[index // 8] |= sample << (index % 8)
+            return bytes(packed)
     if (
         isinstance(bits_allocated, int)
         and isinstance(bits_stored, int)
@@ -1242,7 +1261,9 @@ def probe_case(
             transfer_syntax = (expected.get("dicom") or {}).get("transfer_syntax_uid")
             if expected_hashes and transfer_syntax not in LOSSY_TRANSFER_SYNTAXES:
                 first_canonical_hash = (
-                    hashlib.sha256(canonical_raw_bytes(raw_first["body"], image)).hexdigest()
+                    hashlib.sha256(
+                        canonical_raw_bytes(raw_first["body"], image, transfer_syntax)
+                    ).hexdigest()
                     if raw_first["status"] == 200 else None
                 )
                 checks["lossless_frame_hash"] = {
@@ -1260,7 +1281,7 @@ def probe_case(
                         RAW_HEADERS,
                     )
                     observed_hashes.append(hashlib.sha256(
-                        canonical_raw_bytes(raw_frame["body"], image)
+                        canonical_raw_bytes(raw_frame["body"], image, transfer_syntax)
                     ).hexdigest() if raw_frame["status"] == 200 else None)
                 checks["lossless_frame_hashes"] = {
                     "expected": expected_hashes,

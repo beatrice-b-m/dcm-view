@@ -123,6 +123,20 @@ class RunnerTests(unittest.TestCase):
             expanded,
         )
 
+    def test_canonical_raw_bytes_packs_deflated_image_frame_samples(self) -> None:
+        expanded = bytes((1, 0, 0, 1))
+        image = {
+            "bits_allocated": 1,
+            "bits_stored": 1,
+            "rows": 2,
+            "columns": 2,
+            "samples_per_pixel": 1,
+        }
+        self.assertEqual(
+            canonical_raw_bytes(expanded, image, "1.2.840.10008.1.2.8.1"),
+            b"\x09",
+        )
+
     def test_raw_headers_match_declared_image_organization(self) -> None:
         image = {
             "rows": 2,
