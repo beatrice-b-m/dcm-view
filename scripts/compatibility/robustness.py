@@ -100,6 +100,13 @@ class BoundedProcess:
             "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
         }
 
+    def logs(self) -> dict[str, Any]:
+        return {
+            "stdout": bytes(self._stdout), "stderr": bytes(self._stderr),
+            "stdout_discarded_bytes": self._discarded["stdout"],
+            "stderr_discarded_bytes": self._discarded["stderr"],
+        }
+
 
 class PeakRssSampler:
     """Best-effort process RSS sampler; unsupported platforms report null."""
@@ -138,14 +145,6 @@ class PeakRssSampler:
             if value is not None:
                 self.peak_bytes = max(self.peak_bytes or 0, value)
             self._stop.wait(self.interval)
-
-    def logs(self) -> dict[str, Any]:
-        return {
-            "stdout": bytes(self._stdout), "stderr": bytes(self._stderr),
-            "stdout_discarded_bytes": self._discarded["stdout"],
-            "stderr_discarded_bytes": self._discarded["stderr"],
-        }
-
 
 def bounded_get(base_url: str, path: str, timeout: float, max_body_bytes: int) -> dict[str, Any]:
     started = time.monotonic()
