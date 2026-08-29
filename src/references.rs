@@ -945,9 +945,15 @@ mod tests {
 
         let mut total = 0;
         for (relative_path, expected) in cases {
-            let path = ["extended", "extended-deflate"]
+            let path = ["", "extended", "extended-deflate"]
                 .into_iter()
-                .map(|profile| root.join(profile).join(relative_path))
+                .map(|profile| {
+                    if profile.is_empty() {
+                        root.join(relative_path)
+                    } else {
+                        root.join(profile).join(relative_path)
+                    }
+                })
                 .find(|path| path.is_file())
                 .unwrap_or_else(|| root.join("extended").join(relative_path));
             let edges = super::extract_reference_edges(&path)
