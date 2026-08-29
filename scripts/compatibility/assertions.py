@@ -61,7 +61,7 @@ CAPABILITY_GROUPS = {
     "frame_navigation": {"navigate_multiframe", "parse_multiframe_functional_groups"},
     "series_geometry": {"sort_series_by_geometry", "interpret_pixel_geometry", "interpret_gantry_tilt", "organize_series_by_study_and_frame_of_reference"},
     "reference_closure": {"resolve_references", "resolve_frame_references"},
-    "wsi_tile_position": {"reconstruct_total_pixel_matrix", "reconstruct_sparse_total_pixel_matrix", "reconstruct_optical_path_matrices"},
+    "wsi_tile_position": {"reconstruct_total_pixel_matrix", "reconstruct_sparse_total_pixel_matrix", "reconstruct_optical_path_matrices", "reconstruct_wsi_pyramid"},
     "segmentation_context": {"parse_segmentation", "reconstruct_wsi_tile_segmentation"},
     "rwvm_mapping": {"apply_real_world_value_mapping", "read_real_world_value_mapping"},
     "parametric_map_context": {"read_image_measurement"},

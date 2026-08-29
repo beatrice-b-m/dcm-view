@@ -26,6 +26,7 @@ from scripts.compatibility.run import (
     validate_report,
     validate_visual,
     unprobed_capabilities,
+    wsi_context_observations,
 )
 
 
@@ -50,6 +51,24 @@ def grayscale_png(
 
 
 class RunnerTests(unittest.TestCase):
+    def test_wsi_observation_proves_selected_tile_without_reconstruction(self) -> None:
+        expected = {
+            "image": {"rows": 2, "columns": 2},
+            "expected_wsi_tiled_full": {"tiling": {"implicit_frame_positions": [
+                {"frame_number": 2, "row_position": 1, "column_position": 3}
+            ]}},
+        }
+        payload = {
+            "frame_index": 1, "positioning_status": "positioned",
+            "tile_rectangle": {"x": 2, "y": 0, "width": 2, "height": 2},
+            "total_pixel_matrix": {"rows": 4, "columns": 4},
+            "tile_row": 0, "tile_column": 1, "reconstruction_claimed": False,
+        }
+        observed = wsi_context_observations([payload], expected)
+        self.assertTrue(observed["wsi_position"]["exact_evidence"])
+        self.assertTrue(observed["wsi_minimap"]["passed"])
+        self.assertFalse(observed["wsi_minimap"]["neighboring_tiles_decoded"])
+
     def test_segmentation_semantic_observation_checks_declared_frame_closure(self) -> None:
         expected = {"expected_semantics": {
             "segmentation_type": "BINARY", "segmentation_fractional_type": None,

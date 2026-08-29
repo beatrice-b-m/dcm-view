@@ -66,13 +66,16 @@ PROBED_CAPABILITIES = {
     "parse_multiframe_functional_groups",
     "interpret_gantry_tilt",
     "organize_series_by_study_and_frame_of_reference",
-    "reconstruct_wsi_pyramid",
 }
 CONDITIONAL_CAPABILITY_CHECKS = {
     "interpret_pixel_geometry": "pixel_geometry",
     "read_overlay_plane": "overlay_display",
     "resolve_frame_references": "references",
     "resolve_references": "references",
+    "reconstruct_total_pixel_matrix": "wsi_position",
+    "reconstruct_sparse_total_pixel_matrix": "wsi_position",
+    "reconstruct_optical_path_matrices": "wsi_position",
+    "reconstruct_wsi_pyramid": "wsi_position",
 }
 
 
@@ -263,6 +266,63 @@ def semantic_context_observations(
         observations["semantic_context"] = {"passed": False, "observed_kind": kind}
     observations["semantic_raw_identity"] = {"passed": default_ok}
     return observations
+
+
+def wsi_context_observations(
+    payloads: list[dict[str, Any]], expected: dict[str, Any]
+) -> dict[str, Any]:
+    image = expected.get("image") or {}
+    full = expected.get("expected_wsi_tiled_full") or {}
+    sparse = expected.get("expected_wsi_tiled_sparse") or {}
+    multiple = expected.get("expected_wsi_multiple_optical_paths") or {}
+    exact_positions = {
+        row["frame_number"] - 1: row
+        for row in (full.get("tiling") or {}).get("implicit_frame_positions", [])
+    }
+    exact_positions.update({
+        row["frame_number"] - 1: row
+        for row in sparse.get("per_frame_functional_groups", [])
+    })
+    optical_by_frame: dict[int, str] = {}
+    for path in multiple.get("optical_paths", []):
+        start, end = path.get("frame_ordinal_range", [0, -1])
+        for frame in range(max(start - 1, 0), max(end, 0)):
+            optical_by_frame[frame] = path.get("identifier")
+
+    position_results = []
+    minimap_results = []
+    for payload in payloads:
+        frame = payload.get("frame_index")
+        rectangle = payload.get("tile_rectangle") or {}
+        matrix = payload.get("total_pixel_matrix") or {}
+        expected_position = exact_positions.get(frame)
+        expected_optical = optical_by_frame.get(frame)
+        positioned = payload.get("positioning_status") == "positioned" and bool(rectangle)
+        exact = True
+        if expected_position is not None:
+            exact = (
+                rectangle.get("x") == expected_position.get("column_position") - 1
+                and rectangle.get("y") == expected_position.get("row_position") - 1
+                and payload.get("tile_row") == (expected_position.get("row_position") - 1) // image.get("rows", 1)
+                and payload.get("tile_column") == (expected_position.get("column_position") - 1) // image.get("columns", 1)
+            )
+        if expected_optical is not None:
+            exact = exact and (payload.get("optical_path") or {}).get("identifier") == expected_optical
+        position_results.append({"frame": frame, "passed": positioned and exact, "observed": payload})
+        inside = (
+            isinstance(matrix.get("rows"), int) and isinstance(matrix.get("columns"), int)
+            and isinstance(rectangle.get("x"), int) and isinstance(rectangle.get("y"), int)
+            and isinstance(rectangle.get("width"), int) and isinstance(rectangle.get("height"), int)
+            and rectangle["x"] >= 0 and rectangle["y"] >= 0
+            and rectangle["x"] + rectangle["width"] <= matrix["columns"]
+            and rectangle["y"] + rectangle["height"] <= matrix["rows"]
+            and payload.get("reconstruction_claimed") is False
+        )
+        minimap_results.append({"frame": frame, "passed": inside})
+    return {
+        "wsi_position": {"exact_evidence": bool(position_results) and all(row["passed"] for row in position_results), "passed": bool(position_results) and all(row["passed"] for row in position_results), "results": position_results},
+        "wsi_minimap": {"passed": bool(minimap_results) and all(row["passed"] for row in minimap_results), "metadata_only": True, "neighboring_tiles_decoded": False, "results": minimap_results},
+    }
 
 
 class CampaignError(RuntimeError):
@@ -980,17 +1040,6 @@ def series_observation(
             "observed_stack_kind": located_stack.get("kind"),
             "passed": located_stack.get("kind") == expected_kind,
         }
-    if "reconstruct_wsi_pyramid" in capabilities:
-        membership = semantics.get("pyramid_membership")
-        expected_kind = (
-            "wsi_companion" if membership == "non_member_companion" else "wsi_pyramid_level"
-        )
-        checks["reconstruct_wsi_pyramid"] = {
-            "expected_stack_kind": expected_kind,
-            "observed_stack_kind": located_stack.get("kind"),
-            "series_stack_kinds": [stack.get("kind") for stack in located_series.get("stacks") or []],
-            "passed": located_stack.get("kind") == expected_kind,
-        }
     return observation
 
 
@@ -1161,6 +1210,16 @@ def probe_case(
                     and canonical_raw_bytes(raw_first["body"], image) == canonical_raw_bytes(semantic_raw["body"], image),
                 }
             checks.update(semantic_checks)
+        if file_summary.get("object_kind") == "whole_slide_microscopy":
+            wsi_payloads = []
+            for wsi_frame in deterministic_navigation_frames(entry["case_id"], frame_count):
+                wsi_response = request(
+                    f"wsi_context_{wsi_frame}",
+                    f"/api/file/{index}/frame/{wsi_frame}/wsi-context",
+                )
+                if wsi_response["status"] == 200 and isinstance(wsi_response["json"], dict):
+                    wsi_payloads.append(wsi_response["json"])
+            checks.update(wsi_context_observations(wsi_payloads, expected))
     except TimeoutError as error:
         errors.append({"code": "case_timeout", "message": str(error)})
         return _finish_result(entry, expected_capabilities, checks, http, errors, started, "timeout")
