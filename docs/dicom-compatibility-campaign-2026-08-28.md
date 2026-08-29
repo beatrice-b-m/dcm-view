@@ -9,7 +9,7 @@ DICOM conformance certificate or a clinical validation.
 ## Frozen inputs
 
 - Read-only sibling dependency: `dicom-test-suite` at commit
-  `28d45a535669083522f5ca5a5a6712fb5015b612`.
+  `28d45eb7ced872c5ce92f920e694acccd49e6478`.
 - Corpus lock SHA-256:
   `69e49a9f9a0640e42110219dfa14f8494e5ac0686d4b9bfd3ff1c3e2d85eeaba`.
 - Support policy SHA-256:
