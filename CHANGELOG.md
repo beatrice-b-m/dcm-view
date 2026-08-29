@@ -50,6 +50,9 @@ diagnostic viewer.
 - Separated display-cache tiers, deduplicated concurrent raw-frame requests,
   and limited the loading indicator to frame work so metadata requests no
   longer obscure an already rendered image.
+- Preserved the flexible pixel viewport when semantic or WSI context is shown,
+  and limited semantic controls to SEG, Parametric Map, and RT Dose objects so
+  unrelated images retain the standard inspection layout.
 - Preserved referenced-frame identity across implicit multiframe targets and
   completed resolved target identities for more reliable in-viewer navigation.
 - Recognized DICOMDIR deterministically as a metadata-only skipped object, and
