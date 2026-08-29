@@ -13,7 +13,12 @@ pub(crate) fn read_encapsulated_fragment_blocking(path: &PathBuf, frame: u32) ->
             path.display()
         )
     })?;
-    let transfer_syntax = collector.read_file_meta()?.transfer_syntax.clone();
+    let transfer_syntax = collector
+        .read_file_meta()?
+        .transfer_syntax
+        .trim_end_matches('\0')
+        .trim()
+        .to_string();
     let mut dataset = InMemDicomObject::new_empty();
     collector.read_dataset_up_to_pixeldata(&mut dataset)?;
     let frame_count = dataset
@@ -45,12 +50,11 @@ pub(crate) fn read_encapsulated_fragment_blocking(path: &PathBuf, frame: u32) ->
     if let Some(offsets) = offsets.as_deref() {
         let index = usize::try_from(frame).context("frame index overflow")?;
         let start = offsets[index];
-        let end = offsets.get(index + 1).copied().or_else(|| {
-            extended_lengths
-                .get(index)
-                .and_then(|length| start.checked_add(*length))
-        });
-        return read_frame_at_offsets(&mut collector, start, end);
+        let end = offsets.get(index + 1).copied();
+        let encoded_length = (!extended_lengths.is_empty())
+            .then(|| extended_lengths.get(index).copied())
+            .flatten();
+        return read_frame_at_offsets(&mut collector, start, end, encoded_length);
     }
 
     read_frame_without_offsets(&mut collector, frame, frame_count, &transfer_syntax)
@@ -83,6 +87,7 @@ fn read_frame_at_offsets(
     collector: &mut DicomCollector<BufReader<File>>,
     target_start: u64,
     target_end: Option<u64>,
+    encoded_length: Option<u64>,
 ) -> Result<Bytes> {
     let mut item_offset = 0_u64;
     let mut frame_data = Vec::new();
@@ -123,6 +128,16 @@ fn read_frame_at_offsets(
     if frame_data.is_empty() {
         return Err(anyhow!("encapsulated frame contains no data"));
     }
+    if let Some(encoded_length) = encoded_length {
+        let encoded_length = usize::try_from(encoded_length)
+            .context("Extended Offset Table frame length exceeds addressable memory")?;
+        if frame_data.len() < encoded_length {
+            return Err(anyhow!(
+                "encapsulated frame is shorter than its Extended Offset Table length"
+            ));
+        }
+        frame_data.truncate(encoded_length);
+    }
     Ok(Bytes::from(frame_data))
 }
 
@@ -132,7 +147,7 @@ fn read_frame_without_offsets(
     frame_count: u32,
     transfer_syntax: &str,
 ) -> Result<Bytes> {
-    let one_fragment_per_frame = transfer_syntax == "1.2.840.10008.1.2.5";
+    let one_fragment_per_frame = transfer_syntax == dicom_dictionary_std::uids::RLE_LOSSLESS;
     let mut current_frame = 0_u32;
     let mut frame_data = Vec::new();
     let mut fragment = Vec::new();
@@ -290,7 +305,7 @@ mod tests {
             DataElement::new(
                 tags::EXTENDED_OFFSET_TABLE_LENGTHS,
                 VR::OV,
-                PrimitiveValue::U64(vec![20, 20].into()),
+                PrimitiveValue::U64(vec![4, 4].into()),
             ),
         ]);
         object.put(DataElement::new(
@@ -319,6 +334,43 @@ mod tests {
                 .unwrap()
                 .as_ref(),
             b"ccdd"
+        );
+    }
+
+    #[test]
+    fn empty_basic_offsets_use_one_rle_fragment_per_frame() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("empty-bot-rle.dcm");
+        let mut object = InMemDicomObject::from_element_iter([
+            DataElement::new(
+                tags::SOP_CLASS_UID,
+                VR::UI,
+                uids::SECONDARY_CAPTURE_IMAGE_STORAGE,
+            ),
+            DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.71004"),
+            DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, "2"),
+        ]);
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PixelFragmentSequence::new_fragments(vec![b"first".to_vec(), b"second".to_vec()]),
+        ));
+        object
+            .with_meta(
+                FileMetaTableBuilder::new()
+                    .transfer_syntax(uids::RLE_LOSSLESS)
+                    .media_storage_sop_class_uid(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
+                    .media_storage_sop_instance_uid("2.25.71004"),
+            )
+            .unwrap()
+            .write_to_file(&path)
+            .unwrap();
+
+        assert_eq!(
+            read_encapsulated_fragment_blocking(&path, 1)
+                .unwrap()
+                .as_ref(),
+            b"second"
         );
     }
 }
