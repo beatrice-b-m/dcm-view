@@ -9,9 +9,9 @@ async fn invalid_jp2_payload_surfaces_server_side_decode_error() {
     let frame = vec![
         0x00, 0x00, 0x00, 0x0c, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a,
     ];
-    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.91", vec![frame.clone()]);
+    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.90", vec![frame.clone()]);
 
-    let file = support::file_entry(path, "1.2.840.10008.1.2.4.91", 1);
+    let file = support::file_entry(path, "1.2.840.10008.1.2.4.90", 1);
     let error = load_frame(
         file,
         new_cache(),
@@ -35,9 +35,9 @@ async fn invalid_jp2_payload_surfaces_server_side_decode_error() {
 async fn invalid_jp2_codestream_surfaces_decode_context() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("jp2-fallback.dcm");
-    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.91", vec![vec![1, 2, 3, 4]]);
+    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.90", vec![vec![1, 2, 3, 4]]);
 
-    let file = support::file_entry(path, "1.2.840.10008.1.2.4.91", 1);
+    let file = support::file_entry(path, "1.2.840.10008.1.2.4.90", 1);
     let error = load_frame(
         file,
         new_cache(),
