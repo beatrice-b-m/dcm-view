@@ -1,7 +1,7 @@
 {
   "name": "dcmview",
   "displayName": "dcmview",
-  "description": "Open DICOM files and folders in dcmview from VS Code.",
+  "description": "Open DICOM files and folders in dcmview from VS Code or Cursor.",
   "version": "0.2.12",
   "publisher": "beatricebm",
   "license": "MIT",
@@ -124,7 +124,7 @@
         "dcmview.terminalInterception.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Route dcmview and dcmview-py commands launched from new integrated terminals into VS Code webview panels."
+          "description": "Route dcmview and dcmview-py commands launched from new integrated terminals into editor webview panels."
         }
       }
     }

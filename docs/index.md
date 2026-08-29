@@ -22,11 +22,11 @@ or metadata unless they are fully de-identified and approved for public use.
   parameters, blocking and non-blocking usage, context managers, VS Code bridge
   behavior, and examples for notebooks and scripts.
 
-## VS Code
+## VS Code And Cursor
 
-- [VS Code extension README](../vscode/README.md): Marketplace extension usage,
-  supported platforms, settings, terminal interception, and bundled binary
-  behavior.
+- [Editor extension README](../vscode/README.md): VS Code Marketplace and Cursor
+  installation, supported platforms, settings, terminal interception, and
+  bundled binary behavior.
 - [VS Code extension local testing](vscode-extension-local-testing.md):
   development workflow for testing the extension from this repository.
 

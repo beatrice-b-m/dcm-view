@@ -29,13 +29,14 @@ loopback binding and SSH forwarding for remote workflows.
   window/level, flips, rotation, tags, and cine playback.
 - Load, edit, and export rectangular ROI annotations without modifying source
   DICOM files.
-- Use the same tool from a shell command, Python script, notebook, or VS Code.
+- Use the same tool from a shell command, Python script, notebook, VS Code, or
+  Cursor.
 - Run as an ephemeral server with no database, config file, or persistent state.
 
 ## Install
 
-The current public install channels are the Python package, GitHub Releases, and
-the VS Code Marketplace extension:
+The current public install channels are the Python package, GitHub Releases,
+the VS Code Marketplace, and Open VSX for Cursor:
 
 | Platform | Recommended channel | Notes |
 |---|---|---|
@@ -44,6 +45,7 @@ the VS Code Marketplace extension:
 | macOS arm64 | `dcmview-py` or GitHub Releases | PyPI wheels bundle the `dcmview` binary. |
 | Windows x64 | `dcmview-py`, GitHub Releases, or VS Code Marketplace | PyPI wheels bundle `dcmview.exe`. |
 | VS Code | VS Code Marketplace | The extension bundles platform-specific binaries for supported hosts. |
+| Cursor | Open VSX | Cursor installs the same target-specific extension packages through its extension marketplace. |
 | Other platforms | Source build | Build the Rust binary locally and point wrappers at it when needed. |
 
 Install the Python package:
@@ -60,8 +62,8 @@ command. If you are using an unsupported platform or a local debug binary, set
 Tagged releases always include a generated Homebrew formula. Publishing that
 formula to a tap is conditional on the maintainers configuring a separate tap
 repository; this repository does not currently advertise a public tap command.
-Use PyPI, the VS Code extension, GitHub Releases, or a source build unless a
-release announcement names a working tap.
+Use PyPI, the VS Code or Cursor extension, GitHub Releases, or a source build
+unless a release announcement names a working tap.
 
 Source builds are available for contributors and unsupported platforms:
 
@@ -183,15 +185,16 @@ The module CLI mirrors the Rust options:
 python -m dcmview_py --no-browser --timeout 120 ./study_dir
 ```
 
-## VS Code
+## VS Code and Cursor
 
-The VS Code extension opens DICOM files or folders in a webview backed by the
-same local `dcmview` server. It can also intercept `dcmview`, `dcmview-py`, and
-`python -m dcmview_py` launches from new integrated terminals so terminal-based
-workflows appear inside VS Code.
+The editor extension opens DICOM files or folders in a webview backed by the
+same local `dcmview` server in VS Code and Cursor. It can also intercept
+`dcmview`, `dcmview-py`, and `python -m dcmview_py` launches from new integrated
+terminals so terminal-based workflows appear inside the editor.
 
-See the [VS Code extension README](vscode/README.md) for supported platforms,
-settings, terminal interception behavior, and local testing notes.
+See the [editor extension README](vscode/README.md) for install channels,
+supported platforms, settings, terminal interception behavior, and local
+testing notes.
 
 ## Viewer Features
 
