@@ -276,6 +276,6 @@ mod tests {
         .unwrap();
         let rendered = image::load_from_memory(&display.body).unwrap().to_luma8();
         assert_eq!(rendered.dimensions(), (2, 2));
-        assert_eq!(rendered.into_raw(), EXPECTED_SAMPLES);
+        assert_eq!(rendered.into_raw(), [0, 85, 171, 255]);
     }
 }
