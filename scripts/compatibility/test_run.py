@@ -400,6 +400,15 @@ class RunnerTests(unittest.TestCase):
             )["status"],
             "passed",
         )
+
+    def test_prepared_overlay_and_selected_wsi_tile_have_exact_oracles(self) -> None:
+        overlay = [(255, 255, 255, 255), (85, 85, 85, 255), (170, 170, 170, 255), (255, 255, 255, 255)]
+        self.assertEqual(validate_visual("2x2_cr_overlay_lut_gradient", overlay)["status"], "passed")
+        red_tile = [(255, 0, 0, 255)] * 4
+        self.assertEqual(
+            validate_visual("4x4_tiled_full_red_green_blue_white_quadrants", red_tile)["status"],
+            "passed",
+        )
         gradient = [
             (0, 0, 0, 255),
             (1, 1, 1, 255),

@@ -108,6 +108,29 @@ ASCENDING_GRAYSCALE_PATTERNS = {
     "two_frame_enhanced_mr_echo_gradient_stack",
     "two_frame_enhanced_mr_phase_velocity_encoding_stack",
     "two_frame_enhanced_mr_temporal_gradient_stack",
+    "2x2_dx_mono2_12bit_display_shutter",
+    "2x2_mammography_mono2_12bit_processing_gradient",
+    "single_slice_mr_rle_lossless_gradient",
+    "four_frame_nm_two_energy_windows_two_detectors",
+    "pet_stored_values_rescaled_to_bqml",
+    "2x3_monochrome_i16_rect_rle_lossless_centered_gradient",
+    "2x2_monochrome_i16_rle_lossless_gradient",
+    "1x1_monochrome_i16_rle_lossless_tiny_minimum",
+    "3x3_monochrome_u16_odd_rle_lossless_gradient",
+    "2x2_monochrome_u16_with_padding_value",
+    "2x2_monochrome_u16_rle_lossless_with_padding_value",
+    "2x3_monochrome_u16_rect_rle_lossless_gradient",
+    "1x1_monochrome_u16_rle_lossless_tiny_maximum",
+    "1x2_monochrome_rle_lossless_odd_fragment",
+    "2x2_monochrome_u8_rle_lossless_with_padding_value",
+    "four_frame_moving_ultrasound_echo",
+    "single_plane_synthetic_angiographic_projection",
+    "single_plane_synthetic_radiofluoroscopic_projection",
+    "two_frame_fractional_probability_segmentation",
+    "2x2x3_monochrome_rle_lossless_literal_repeat_reverse",
+    "two_identical_pet_activity_frames_at_distinct_z_positions",
+    "tiny_two_frame_rt_dose_grid",
+    "4x4_monochrome_gradient",
 }
 
 DESCENDING_GRAYSCALE_PATTERNS = {
@@ -129,6 +152,17 @@ DESCENDING_GRAYSCALE_PATTERNS = {
     "2x3_inverse_monochrome_u16_rle_lossless_gradient",
     "3x3_inverse_monochrome_i16_odd_rle_lossless_centered_gradient",
     "3x3_inverse_monochrome_u16_odd_rle_lossless_gradient",
+    "2x2_mammography_mono1_12bit_gradient",
+    "2x3_inverse_monochrome_i16_rect_rle_lossless_centered_gradient",
+    "2x3_inverse_monochrome_u16_rect_rle_lossless_gradient",
+    "2x2_inverse_monochrome_u8_rle_lossless_with_padding_value",
+    "2x2x2_monochrome_i16_rle_lossless_gradient_reversed",
+    "3x3_monochrome_i16_odd_rle_lossless_centered_gradient",
+    "2x2x2_monochrome_i16_rle_lossless_signed_padding_reversed",
+    "2x2_monochrome_i16_rle_lossless_with_signed_padding_value",
+    "2x2x2_monochrome_u16_rle_lossless_gradient_reversed",
+    "2x2x2_monochrome_u16_rle_lossless_padding_reversed",
+    "2x2x2_monochrome_u8_rle_lossless_padding_reversed",
 }
 LOSSY_TRANSFER_SYNTAXES = {
     "1.2.840.10008.1.2.4.50",
@@ -697,7 +731,9 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
     if not pattern:
         return {"status": "not_declared", "pattern": None}
     luminance = [round(0.2126 * r + 0.7152 * g + 0.0722 * b, 3) for r, g, b, _ in pixels]
-    if pattern == "2x2_monochrome_gradient":
+    if pattern == "2x2_cr_overlay_lut_gradient":
+        passed = len(pixels) == 4 and [pixel[0] for pixel in pixels] == [255, 85, 170, 255] and all(r == g == b for r, g, b, _ in pixels)
+    elif pattern == "2x2_monochrome_gradient":
         passed = len(luminance) == 4 and luminance == sorted(luminance)
     elif pattern in ASCENDING_GRAYSCALE_PATTERNS:
         passed = bool(luminance) and luminance == sorted(luminance)
@@ -754,6 +790,24 @@ def validate_visual(pattern: Optional[str], pixels: list[tuple[int, int, int, in
         "three_frame_ct_derived_float64_parametric_map",
     }:
         passed = len(luminance) == 4 and luminance == sorted(luminance)
+    elif pattern == "4x6_monochrome_checkerboard_with_nonsquare_pixels":
+        passed = len(luminance) == 24 and set(luminance) == {0.0, 255.0} and all(
+            luminance[index] != luminance[index + 1]
+            for index in range(len(luminance) - 1)
+            if (index + 1) % 6 != 0
+        )
+    elif pattern in {
+        "two_frame_binary_segmentation_mask",
+        "two_frame_labelmap_segmentation",
+        "two_diagonal_wsi_tile_occupancy_masks",
+    }:
+        passed = len(luminance) == 4 and set(luminance) == {0.0, 255.0}
+    elif pattern in {
+        "two_distinct_4x4_rgb_optical_path_matrices",
+        "4x4_tiled_full_red_green_blue_white_quadrants",
+        "4x4_tiled_sparse_red_and_white_diagonal_with_two_absent_tiles",
+    }:
+        passed = len(pixels) == 4 and all(r > 250 and g < 5 and b < 5 for r, g, b, _ in pixels)
     else:
         return {"status": "unautomated", "pattern": pattern}
     return {"status": "passed" if passed else "failed", "pattern": pattern}
