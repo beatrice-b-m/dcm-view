@@ -10,7 +10,7 @@ use super::color::{encode_rgb8_png_with_icc, rgb8_interleaved, ybr_full_to_rgb8}
 use super::encapsulated::read_encapsulated_fragment_blocking;
 use super::error::{PixelError, PixelResult};
 use super::icc::select_icc_profile;
-use super::render::encode_windowed_luminance_png;
+use super::render::{encode_windowed_luminance_png, LuminanceRenderOptions};
 use super::stored_bits::canonicalize_integer_samples;
 
 const RLE_HEADER_LEN: usize = 64;
@@ -84,12 +84,14 @@ fn decode_rle_to_png_blocking(
             encode_windowed_luminance_png(
                 file,
                 &samples,
-                frame,
-                file.rows,
-                file.columns,
-                requested_wc,
-                requested_ww,
-                window_mode,
+                LuminanceRenderOptions {
+                    frame,
+                    rows: file.rows,
+                    columns: file.columns,
+                    requested_wc,
+                    requested_ww,
+                    window_mode,
+                },
             )
             .map_err(PixelError::frame_decode)
         }

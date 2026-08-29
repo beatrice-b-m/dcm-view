@@ -11,16 +11,28 @@ use super::window::{
 };
 use super::{overlay::apply_overlay_planes, shutter::apply_rectangular_shutter};
 
+pub(crate) struct LuminanceRenderOptions {
+    pub(crate) frame: u32,
+    pub(crate) rows: u32,
+    pub(crate) columns: u32,
+    pub(crate) requested_wc: Option<f64>,
+    pub(crate) requested_ww: Option<f64>,
+    pub(crate) window_mode: WindowMode,
+}
+
 pub(crate) fn encode_windowed_luminance_png(
     file: &FileEntry,
     stored: &[f64],
-    frame: u32,
-    rows: u32,
-    columns: u32,
-    requested_wc: Option<f64>,
-    requested_ww: Option<f64>,
-    window_mode: WindowMode,
+    options: LuminanceRenderOptions,
 ) -> Result<Bytes> {
+    let LuminanceRenderOptions {
+        frame,
+        rows,
+        columns,
+        requested_wc,
+        requested_ww,
+        window_mode,
+    } = options;
     let object = dicom_object::open_file(&file.path).ok();
     let padding_mask = object
         .as_ref()

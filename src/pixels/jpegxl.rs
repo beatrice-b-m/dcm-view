@@ -9,7 +9,7 @@ use tokio::task;
 use super::color::encode_rgb8_png_with_icc;
 use super::error::{PixelError, PixelResult};
 use super::icc::select_icc_profile;
-use super::render::encode_windowed_luminance_png;
+use super::render::{encode_windowed_luminance_png, LuminanceRenderOptions};
 
 struct DecodedJpegXlFrame {
     bytes: Vec<u8>,
@@ -166,12 +166,14 @@ fn encode_monochrome(
     encode_windowed_luminance_png(
         file,
         &samples,
-        frame,
-        rows,
-        columns,
-        requested_wc,
-        requested_ww,
-        window_mode,
+        LuminanceRenderOptions {
+            frame,
+            rows,
+            columns,
+            requested_wc,
+            requested_ww,
+            window_mode,
+        },
     )
     .map_err(PixelError::frame_decode)
 }

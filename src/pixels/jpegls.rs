@@ -7,7 +7,7 @@ use dicom_pixeldata::PixelDecoder;
 use tokio::task;
 
 use super::error::{PixelError, PixelResult};
-use super::render::encode_windowed_luminance_png;
+use super::render::{encode_windowed_luminance_png, LuminanceRenderOptions};
 
 struct DecodedJpegLsFrame {
     bytes: Vec<u8>,
@@ -59,12 +59,14 @@ pub(crate) async fn decode_jpeg_ls_to_png(
         encode_windowed_luminance_png(
             &file,
             &samples,
-            frame,
-            decoded.rows,
-            decoded.columns,
-            requested_wc,
-            requested_ww,
-            window_mode,
+            LuminanceRenderOptions {
+                frame,
+                rows: decoded.rows,
+                columns: decoded.columns,
+                requested_wc,
+                requested_ww,
+                window_mode,
+            },
         )
         .map_err(PixelError::frame_decode)
     })
