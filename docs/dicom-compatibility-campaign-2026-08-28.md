@@ -32,22 +32,22 @@ and `0a9448e3f30d3bbe0824592d8d232719198d65936fb1cc773849f1ad60a4b2ab`.
 ## Final campaign results
 
 The final reports used `target/debug/dcmview` version 0.2.11 with binary
-SHA-256 `db1aa8718ad0faf9cc8646946432852f1977b6d67b9ab51b22bc9766594f10cf`.
+SHA-256 `d786790ada524228e3f287c7cda6741025eb21d6a48a7dd4e586c586896efbee`.
 
 | Profile | Result | Evidence |
 |---|---|---|
-| Valid (`all`) | 169/169 execution-safe; 126 verified, 43 explicitly unverified; zero compatibility failures, crashes, timeouts, flaky results, or unavailable cases | `artifacts/compatibility/2026-08-28/final-all-final/` |
-| Legacy | 1/1 execution-safe and verified | `artifacts/compatibility/2026-08-28/final-legacy-final/` |
-| Negative | 15/15 passed the declared bounded failure-layer and healthy-recovery assertions | `artifacts/compatibility/2026-08-28/final-negative-final/report.json` |
-| Stress | 139/139 files passed; bounded execution, resource measurements, error recovery, shutdown, and cancellation assertions passed | `artifacts/compatibility/2026-08-28/final-stress-final/report.json` |
-| Fuzz | 64 deterministic candidates, 243 mutations, and 37,829 target operations; all 64 were clean rejections, zero unacceptable outcomes, and zero retained payloads | `artifacts/compatibility/2026-08-28/final-fuzz-final/report.json` |
+| Valid (`all`) | 169/169 execution-safe; 126 verified, 43 explicitly unverified; zero compatibility failures, crashes, timeouts, flaky results, or unavailable cases | `artifacts/compatibility/2026-08-28/handoff-all/` |
+| Legacy | 1/1 execution-safe and verified | `artifacts/compatibility/2026-08-28/handoff-legacy/` |
+| Negative | 15/15 passed the declared bounded failure-layer and healthy-recovery assertions | `artifacts/compatibility/2026-08-28/handoff-negative/report.json` |
+| Stress | 139/139 files passed; bounded execution, resource measurements, error recovery, shutdown, and cancellation assertions passed | `artifacts/compatibility/2026-08-28/handoff-stress/report.json` |
+| Fuzz | 64 deterministic candidates, 243 mutations, and 37,829 target operations; all 64 were clean rejections, zero unacceptable outcomes, and zero retained payloads | `artifacts/compatibility/2026-08-28/handoff-fuzz/report.json` |
 
 The valid and legacy directories contain the detailed report, normalized
 report, evidence report, viewer process logs, and SHA-256 artifact index. The
 valid artifact-index file itself has SHA-256
-`315fdc64157f38bc08f2be112863aaa0c8489adba813a01065bec170e9a4a037`;
+`1380cb720709148f92ba62641fc1beeb9ea7ad0d28c4ff53eb1fed03dea3c880`;
 the legacy index has
-`079b48b1d6b3e4137cfebb02b520d96f498c72acd50796a46a6870898f25c4be`.
+`4f9b4abc7e729319a9cc649f9a6da3ece8fca3f680fa3f3dcc70186b4e3e62b9`.
 
 ## Browser acceptance
 
