@@ -2,6 +2,14 @@ import type { CodedConceptSummary, SemanticContext } from "../generated/api-type
 
 export type SemanticMode = "pixel_preview" | "semantic_context";
 
+const RT_DOSE_SOP_CLASS_UID = "1.2.840.10008.5.1.4.1.1.481.2";
+
+export function supportsSemanticContext(objectKind: string, sopClassUid: string): boolean {
+	return objectKind === "segmentation"
+		|| objectKind === "parametric_map"
+		|| sopClassUid === RT_DOSE_SOP_CLASS_UID;
+}
+
 export function semanticModeLabel(mode: SemanticMode): string {
 	return mode === "pixel_preview" ? "Pixel Preview" : "Semantic Context";
 }

@@ -4,6 +4,7 @@ import {
 	mappingFormula,
 	semanticKindLabel,
 	semanticModeLabel,
+	supportsSemanticContext,
 } from "./semanticPresentation";
 
 describe("semantic presentation labels", () => {
@@ -16,6 +17,14 @@ describe("semantic presentation labels", () => {
 		expect(semanticKindLabel({ kind: "not_applicable", reason: "not derived" })).toBe(
 			"Generic image",
 		);
+	});
+
+	it("shows semantic controls only for supported derived image types", () => {
+		expect(supportsSemanticContext("segmentation", "seg")).toBe(true);
+		expect(supportsSemanticContext("parametric_map", "pm")).toBe(true);
+		expect(supportsSemanticContext("radiation_therapy", "1.2.840.10008.5.1.4.1.1.481.2")).toBe(true);
+		expect(supportsSemanticContext("classic_image", "ct")).toBe(false);
+		expect(supportsSemanticContext("radiation_therapy", "1.2.840.10008.5.1.4.1.1.481.1")).toBe(false);
 	});
 
 	it("renders declared codes and mappings without inventing missing values", () => {

@@ -16,6 +16,7 @@
 	import OpenImageTabs from "./lib/OpenImageTabs.svelte";
 	import ReferenceNavigator from "./lib/ReferenceNavigator.svelte";
 	import SemanticContextPanel from "./lib/SemanticContextPanel.svelte";
+	import { supportsSemanticContext } from "./lib/semanticPresentation";
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
@@ -721,15 +722,19 @@
 				{#if activeFile === null}
 					<div class="empty-viewer">Open a file from the sidebar</div>
 				{:else}
-					<ReferenceNavigator
-						fileIndex={activeFile.index}
-						files={filesResponse.files}
-						onopenreference={openReferenceTarget}
-					/>
-					<SemanticContextPanel fileIndex={activeFile.index} {currentFrame} />
-					{#if activeFile.object_kind === "whole_slide_microscopy"}
-						<WsiTileContext fileIndex={activeFile.index} frame={currentFrame} />
-					{/if}
+					<div class="viewer-context">
+						<ReferenceNavigator
+							fileIndex={activeFile.index}
+							files={filesResponse.files}
+							onopenreference={openReferenceTarget}
+						/>
+						{#if supportsSemanticContext(activeFile.object_kind, activeFile.sop_class_uid)}
+							<SemanticContextPanel fileIndex={activeFile.index} {currentFrame} />
+						{/if}
+						{#if activeFile.object_kind === "whole_slide_microscopy"}
+							<WsiTileContext fileIndex={activeFile.index} frame={currentFrame} />
+						{/if}
+					</div>
 					<ImageViewport
 						{activeFile}
 						bind:currentFrame
@@ -952,6 +957,10 @@
 		min-width: 0;
 		min-height: 0;
 		background: var(--surface-viewport);
+	}
+
+	.viewer-context {
+		min-width: 0;
 	}
 
 	.empty-viewer,
