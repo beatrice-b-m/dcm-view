@@ -10,6 +10,65 @@ diagnostic viewer.
 
 ## Unreleased
 
+## 0.2.11 - 2026-08-28
+
+### Semantic And Whole-Slide Context
+
+- Added an explicit semantic-context view for DICOM Segmentation, Parametric
+  Map, and RT Dose objects. The viewer now summarizes declared segments,
+  real-world value mappings, dose scaling and geometry, and resolved source
+  references while keeping the stored-pixel preview distinct from interpreted
+  metadata.
+- Added selected-frame positioning context for Whole Slide Microscopy images,
+  including tile coordinates, Total Pixel Matrix location, pyramid level,
+  optical path, focal plane, companion objects, and a compact minimap.
+- Kept these features deliberately conservative: incompatible or ambiguous SEG
+  geometry disables overlay eligibility, and WSI support positions the selected
+  tile without claiming to stitch or reconstruct the full slide.
+
+### Display And Decoding Fidelity
+
+- Corrected DICOM LINEAR window boundaries and made server-rendered PNGs and
+  browser-side raw rendering use the same presentation rules.
+- Applied pixel-padding ranges and presentation processing consistently after
+  native and compressed decoding, including JPEG, JPEG-LS, JPEG 2000, JPEG XL,
+  RLE, and deflated paths.
+- Preserved decoded JPEG color channels, normalized one-bit raw samples, and
+  rejected lossy transfer syntaxes when their decoding path could not meet the
+  declared fidelity contract.
+- Improved encapsulated multiframe extraction for empty Basic Offset Tables,
+  Extended Offset Tables, and fragment-spanning frames, while preserving
+  lossless JPEG 2000 raw sample layouts.
+- Decoded multi-valued Specific Character Set declarations and ISO 2022
+  extension sequences more reliably in tags and discovery metadata.
+
+### Viewer Reliability And API Changes
+
+- Added generated API contracts for semantic context, WSI frame context, and
+  raw-windowing safety. The viewer now falls back to server presentation when
+  client-side windowing cannot safely reproduce the DICOM pipeline.
+- Separated display-cache tiers, deduplicated concurrent raw-frame requests,
+  and limited the loading indicator to frame work so metadata requests no
+  longer obscure an already rendered image.
+- Preserved referenced-frame identity across implicit multiframe targets and
+  completed resolved target identities for more reliable in-viewer navigation.
+- Recognized DICOMDIR deterministically as a metadata-only skipped object, and
+  rejected malformed discovery metadata without aborting the wider scan.
+
+### Compatibility Qualification
+
+- Added a versioned support policy, pinned corpus inputs, assertion-backed
+  evidence, and reproducible valid, legacy, negative, stress, and bounded fuzz
+  profiles for compatibility testing.
+- The resolved campaign completed 169 valid objects, one legacy object, 15
+  negative cases, 139 stress files, and 24,465 deterministic fuzz operations
+  without crashes, timeouts, unacceptable outcomes, or failed required
+  assertions. Results describe research-inspection behavior, not clinical
+  validation or a DICOM conformance certificate.
+- Documented the frozen inputs, results, browser acceptance matrix, and
+  intentional support boundaries in
+  [`docs/dicom-compatibility-campaign-2026-08-28.md`](docs/dicom-compatibility-campaign-2026-08-28.md).
+
 ## 0.2.10 - 2026-08-28
 
 ### Major Feature Additions
