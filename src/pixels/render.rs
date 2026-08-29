@@ -6,24 +6,32 @@ use image::{ImageBuffer, ImageFormat, Luma};
 use std::io::Cursor;
 
 use super::window::{
-    apply_padding_background, apply_window, exclude_padding_samples, read_pixel_padding_range,
-    resolve_window_with_mode,
+    apply_modality_transform, apply_padding_background, apply_voi_lut_if_selected, apply_window,
+    exclude_padding_samples, read_pixel_padding_range, resolve_window_with_mode,
 };
+use super::{overlay::apply_overlay_planes, shutter::apply_rectangular_shutter};
 
 pub(crate) fn encode_windowed_luminance_png(
     file: &FileEntry,
     stored: &[f64],
-    rescaled: Vec<f64>,
+    frame: u32,
     rows: u32,
     columns: u32,
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
     window_mode: WindowMode,
 ) -> Result<Bytes> {
-    let padding_mask = dicom_object::open_file(&file.path)
-        .ok()
-        .and_then(|object| read_pixel_padding_range(&object, NativePixelDataKind::Integer))
+    let object = dicom_object::open_file(&file.path).ok();
+    let padding_mask = object
+        .as_ref()
+        .and_then(|object| read_pixel_padding_range(object, NativePixelDataKind::Integer))
         .map(|padding| padding.mask(stored));
+    let rescaled = apply_modality_transform(
+        stored,
+        file.series_metadata.native_pixel.modality_lut.as_ref(),
+        file.rescale_slope,
+        file.rescale_intercept,
+    );
     let unpadded = padding_mask
         .as_deref()
         .map(|mask| exclude_padding_samples(&rescaled, mask));
@@ -31,23 +39,47 @@ pub(crate) fn encode_windowed_luminance_png(
         .as_deref()
         .filter(|samples| !samples.is_empty())
         .unwrap_or(&rescaled);
-    let resolved_window = resolve_window_with_mode(
+    let mut windowed = if let Some(values) = apply_voi_lut_if_selected(
         window_mode,
         requested_wc,
         requested_ww,
         file.default_window,
-        window_source,
-    )
-    .ok_or_else(|| anyhow!("compressed decode failed: could not resolve window"))?;
-    let mut windowed = apply_window(
+        file.series_metadata.native_pixel.voi_lut.as_ref(),
         &rescaled,
-        resolved_window.center,
-        resolved_window.width.max(1.0),
-    );
+    ) {
+        values
+    } else {
+        let resolved_window = resolve_window_with_mode(
+            window_mode,
+            requested_wc,
+            requested_ww,
+            file.default_window,
+            window_source,
+        )
+        .ok_or_else(|| anyhow!("compressed decode failed: could not resolve window"))?;
+        apply_window(
+            &rescaled,
+            resolved_window.center,
+            resolved_window.width.max(1.0),
+        )
+    };
     if let Some(mask) = padding_mask.as_deref() {
         apply_padding_background(&mut windowed, mask);
     }
     apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
+    apply_rectangular_shutter(
+        &mut windowed,
+        rows,
+        columns,
+        file.series_metadata.presentation.rectangular_shutter,
+    );
+    apply_overlay_planes(
+        &mut windowed,
+        rows,
+        columns,
+        frame,
+        &file.series_metadata.presentation.overlay_planes,
+    );
 
     let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)
         .ok_or_else(|| anyhow!("compressed decode failed: windowed buffer size mismatch"))?;

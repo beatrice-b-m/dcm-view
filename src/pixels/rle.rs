@@ -81,14 +81,10 @@ fn decode_rle_to_png_blocking(
                 file.bits_allocated,
                 file.pixel_representation,
             )?;
-            let rescaled = samples
-                .iter()
-                .map(|value| value * file.rescale_slope + file.rescale_intercept)
-                .collect();
             encode_windowed_luminance_png(
                 file,
                 &samples,
-                rescaled,
+                frame,
                 file.rows,
                 file.columns,
                 requested_wc,
@@ -514,6 +510,44 @@ mod tests {
     use dicom_dictionary_std::{tags, uids};
     use dicom_object::{FileMetaTableBuilder, InMemDicomObject};
     use tempfile::tempdir;
+
+    #[tokio::test]
+    #[ignore = "requires the independently generated prepared DICOM corpus"]
+    async fn prepared_rle_overlay_applies_modality_voi_and_overlay_pipeline() {
+        let root = std::env::var_os("DCMVIEW_PREPARED_CORPUS")
+            .map(std::path::PathBuf::from)
+            .expect("set DCMVIEW_PREPARED_CORPUS to the generated suite directory");
+        let relative = "classic/cr/overlay_modality_voi_rle_lossless/instance.dcm";
+        let path = [root.join(relative), root.join("core").join(relative)]
+            .into_iter()
+            .find(|path| path.is_file())
+            .expect("prepared RLE CR fixture");
+        let mut report = crate::loader::discover(
+            &[path],
+            crate::loader::DiscoverOptions {
+                recursive: false,
+                filters: Vec::new(),
+            },
+        )
+        .await
+        .expect("discover prepared RLE CR");
+        let file = report.files.pop().expect("prepared RLE CR file entry");
+
+        let display = super::decode_rle_to_png(
+            file,
+            0,
+            None,
+            None,
+            WindowMode::Default,
+        )
+        .await
+        .expect("render prepared RLE CR");
+        let pixels = image::load_from_memory(&display)
+            .expect("decode prepared RLE PNG")
+            .to_luma8()
+            .into_raw();
+        assert_eq!(pixels, [255, 255, 255, 255]);
+    }
 
     fn literal(values: &[u8]) -> Vec<u8> {
         assert!(!values.is_empty() && values.len() <= 128);

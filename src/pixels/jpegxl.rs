@@ -44,6 +44,7 @@ pub(crate) async fn decode_jpeg_xl_to_png(
                 encode_monochrome(
                     &file,
                     samples,
+                    frame,
                     decoded.rows,
                     decoded.columns,
                     requested_wc,
@@ -68,6 +69,7 @@ pub(crate) async fn decode_jpeg_xl_to_png(
                 encode_monochrome(
                     &file,
                     samples,
+                    frame,
                     decoded.rows,
                     decoded.columns,
                     requested_wc,
@@ -154,20 +156,17 @@ fn decode_frame(file: &FileEntry, frame: u32) -> Result<DecodedJpegXlFrame> {
 fn encode_monochrome(
     file: &FileEntry,
     samples: Vec<f64>,
+    frame: u32,
     rows: u32,
     columns: u32,
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
     window_mode: WindowMode,
 ) -> PixelResult<Bytes> {
-    let rescaled = samples
-        .iter()
-        .map(|value| value * file.rescale_slope + file.rescale_intercept)
-        .collect();
     encode_windowed_luminance_png(
         file,
         &samples,
-        rescaled,
+        frame,
         rows,
         columns,
         requested_wc,

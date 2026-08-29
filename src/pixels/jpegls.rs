@@ -56,14 +56,10 @@ pub(crate) async fn decode_jpeg_ls_to_png(
                 )));
             }
         };
-        let rescaled = samples
-            .iter()
-            .map(|value| value * file.rescale_slope + file.rescale_intercept)
-            .collect();
         encode_windowed_luminance_png(
             &file,
             &samples,
-            rescaled,
+            frame,
             decoded.rows,
             decoded.columns,
             requested_wc,

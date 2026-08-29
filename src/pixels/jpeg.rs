@@ -73,11 +73,11 @@ fn decode_compressed_frame_to_png_blocking(
         ));
     }
 
-    let (stored, rescaled, rows, columns) = decoded_luminance_samples(file, &decoded, frame)?;
+    let (stored, rows, columns) = decoded_luminance_samples(file, &decoded, frame)?;
     encode_windowed_luminance_png(
         file,
         &stored,
-        rescaled,
+        frame,
         rows,
         columns,
         requested_wc,
@@ -90,7 +90,7 @@ fn decoded_luminance_samples(
     file: &FileEntry,
     decoded: &dicom_pixeldata::DecodedPixelData<'_>,
     frame: u32,
-) -> Result<(Vec<f64>, Vec<f64>, u32, u32)> {
+) -> Result<(Vec<f64>, u32, u32)> {
     let bits_allocated = decoded.bits_allocated() as u32;
     let signed = file.pixel_representation == 1;
     let raw_samples = match bits_allocated {
@@ -123,12 +123,7 @@ fn decoded_luminance_samples(
         }
     };
 
-    let rescaled = raw_samples
-        .iter()
-        .map(|value| value * file.rescale_slope + file.rescale_intercept)
-        .collect::<Vec<_>>();
-
-    Ok((raw_samples, rescaled, decoded.rows(), decoded.columns()))
+    Ok((raw_samples, decoded.rows(), decoded.columns()))
 }
 
 pub(crate) async fn read_raw_jpeg_samples(

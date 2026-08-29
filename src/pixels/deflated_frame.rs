@@ -33,14 +33,10 @@ pub(crate) async fn decode_deflated_binary_frame_to_png(
             .iter()
             .map(|sample| f64::from(*sample))
             .collect::<Vec<_>>();
-        let rescaled = samples
-            .iter()
-            .map(|sample| sample * file.rescale_slope + file.rescale_intercept)
-            .collect();
         encode_windowed_luminance_png(
             &file,
             &samples,
-            rescaled,
+            frame,
             decoded.rows,
             decoded.columns,
             requested_wc,
