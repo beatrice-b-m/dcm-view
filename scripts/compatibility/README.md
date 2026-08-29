@@ -69,9 +69,11 @@ small visual patterns are checked from decoded PNG pixels where an explicit
 validator exists.
 
 Presentation evidence follows the same exact-contract rule. The prepared
-2-by-2 diagonal overlay cases mark `read_overlay_plane` as probed only when the
-declared overlay pixels are white and the two non-overlay pixels remain
-distinct. The prepared rectangular shutter opening covers the full image, so
+2-by-2 diagonal overlay cases use full-dynamic display mode and mark
+`read_overlay_plane` as probed only when the declared overlay pixels are white
+and the two non-overlay pixels retain their exact expected grayscale values.
+This isolates overlay evidence from VOI/windowing behavior. The prepared
+rectangular shutter opening covers the full image, so
 the report records its bounds and a passing display non-regression check but
 keeps `apply_display_shutter` explicitly unprobed: there are no outside-opening
 pixels with which to prove replacement. When a manifest supplies an exact ICC
@@ -85,3 +87,56 @@ normalized report for reproducibility comparison, and a SHA-256 artifact index.
 The normalized form removes transient registry indices and omits body hashes and
 sizes only for index-bearing series and reference JSON responses. Stable
 path/SOP identity and pixel payload hashes remain available for comparison.
+
+## Robustness profiles
+
+Negative, stress, and fuzz qualification are deliberately separate from the
+valid-corpus campaign. Each command is bounded, writes a machine-readable
+summary plus logs and a SHA-256 artifact index, and launches only the supplied
+viewer binary.
+
+Run the 15 isolated negative cases with a known-good recovery object:
+
+```bash
+python scripts/compatibility/negative_runner.py \
+  --worklist /outside/negative-worklist.json \
+  --binary target/debug/dcmview \
+  --healthy-file tests/fixtures/valid-uncompressed.dcm \
+  --output /outside/negative-run-1
+```
+
+Every case must terminate within its deadline, match its declared failure
+layer, avoid a crash, and leave a fresh viewer able to serve the healthy file.
+
+Record the suite stress baseline independently:
+
+```bash
+python scripts/compatibility/stress_runner.py \
+  --worklist /outside/stress-worklist.json \
+  --binary target/debug/dcmview \
+  --output /outside/stress-run-1
+```
+
+The stress runner records discovery, concurrency, frame latency, cache behavior,
+and bounded output. It reports observations rather than inventing performance
+thresholds that are absent from the pinned suite.
+
+The suite fuzz profile contains qualification evidence but no reusable payload
+corpus. Run deterministic, payload-disciplined mutations from an explicit seed:
+
+```bash
+python scripts/compatibility/fuzz_runner.py \
+  --worklist /outside/fuzz-worklist.json \
+  --binary target/debug/dcmview \
+  --healthy-file tests/fixtures/valid-uncompressed.dcm \
+  --seed-file tests/fixtures/valid-uncompressed.dcm \
+  --output /outside/fuzz-run-1
+```
+
+Candidate count, mutation count, input bytes, target operations, wall time,
+process output, response size, and retained failing artifacts are all capped.
+Generated payloads are not retained when every candidate is rejected cleanly.
+
+These workflows remain local and opt-in. They are not wired into CI, scheduled
+jobs, or the release process, and the pinned `dicom-test-suite` checkout is
+always treated as read-only input.
