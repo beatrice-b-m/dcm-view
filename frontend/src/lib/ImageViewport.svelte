@@ -53,6 +53,7 @@
 	import {
 		renderRawFrameToRgba,
 		resolveDisplayWindow,
+		selectWindowingPipeline,
 		validateRenderableRawFrame,
 	} from "./rawWindowing";
 	import { DEFAULT_ORIENTATION, type ActiveTool, type ImageOrientation } from "./viewerTools";
@@ -259,13 +260,11 @@
 	});
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
 	const isDragging = $derived(dragState !== null);
-	const pipelineMode = $derived<PipelineMode>(
-		activeTool === "window_level"
-			? rawWindowLevelFallbackByFile[activeFile.index]
-				? "server_wl"
-				: "diagnostic_wl"
-			: "cine",
-	);
+	const pipelineMode = $derived<PipelineMode>(selectWindowingPipeline(
+		activeTool === "window_level",
+		rawWindowLevelFallbackByFile[activeFile.index] ?? false,
+		activeFile.raw_windowing_compatible,
+	));
 
 	const displayWindow = $derived(
 		pipelineMode === "diagnostic_wl" && currentRawFrame
@@ -1776,6 +1775,9 @@ function startDisplayPrefetch(
 			<span>image {navigationPosition + 1} / {navigationFrameCount}</span>
 			<span>source frame {currentFrame + 1} / {activeFile.frame_count}</span>
 			<span>W: {Math.round(displayWindow.ww)} · C: {Math.round(displayWindow.wc)}</span>
+			{#if activeTool === "window_level" && !activeFile.raw_windowing_compatible}
+				<span class="presentation-path" title={activeFile.raw_windowing_reason ?? undefined}>server presentation retained</span>
+			{/if}
 		</div>
 		<div class="roi-list">
 			<div class="roi-list-title">

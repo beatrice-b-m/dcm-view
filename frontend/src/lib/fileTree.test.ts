@@ -32,6 +32,8 @@ function file(overrides: Partial<FileSummary>): FileSummary {
 		object_kind: "classic_image",
 		support_state: "renderable",
 		support_reason: null,
+		raw_windowing_compatible: true,
+		raw_windowing_reason: null,
 		has_pixels: true,
 		frame_count: 1,
 		rows: 512,

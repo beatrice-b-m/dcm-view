@@ -5,6 +5,7 @@ import {
 	computePercentileWindow,
 	renderRawFrameToRgba,
 	resolveDisplayWindow,
+	selectWindowingPipeline,
 	validateRenderableRawFrame,
 } from "./rawWindowing";
 
@@ -190,5 +191,14 @@ describe("validateRenderableRawFrame", () => {
 		expect(validateRenderableRawFrame(invalidRepresentation)).toBe(
 			"Unsupported PixelRepresentation: 2",
 		);
+	});
+});
+
+describe("selectWindowingPipeline", () => {
+	it("keeps presentation-sensitive files on server rendering", () => {
+		expect(selectWindowingPipeline(true, false, false)).toBe("server_wl");
+		expect(selectWindowingPipeline(true, true, true)).toBe("server_wl");
+		expect(selectWindowingPipeline(true, false, true)).toBe("diagnostic_wl");
+		expect(selectWindowingPipeline(false, false, false)).toBe("cine");
 	});
 });

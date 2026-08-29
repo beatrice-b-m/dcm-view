@@ -8,6 +8,17 @@ export type ResolvedWindow = {
 
 export const MAX_RENDER_PIXELS = 20_000_000;
 
+export type WindowingPipeline = "cine" | "diagnostic_wl" | "server_wl";
+
+export function selectWindowingPipeline(
+	windowLevelActive: boolean,
+	requestFallback: boolean,
+	presentationCompatible: boolean,
+): WindowingPipeline {
+	if (!windowLevelActive) return "cine";
+	return requestFallback || !presentationCompatible ? "server_wl" : "diagnostic_wl";
+}
+
 const PLATFORM_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 type SampleReader = {
