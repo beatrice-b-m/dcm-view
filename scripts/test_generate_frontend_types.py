@@ -37,6 +37,10 @@ class GenerateFrontendTypesTests(unittest.TestCase):
 		self.assertIn("response: SemanticContextResponse;", output)
 		self.assertIn('({ kind: "segmentation" } & SegmentationContext)', output)
 		self.assertIn("context: SemanticContext;", output)
+		self.assertIn("fileWsiContext: {", output)
+		self.assertIn("response: WsiFrameContextResponse;", output)
+		self.assertIn("tile_rectangle: WsiTileRectangle | null;", output)
+		self.assertIn("reconstruction_claimed: boolean;", output)
 		self.assertEqual(
 			output.count("error: ErrorResponse;"),
 			len(generator.parse_api_endpoints(self.source)),

@@ -50,6 +50,14 @@ export interface ApiEndpointTypes {
 		responseHeaders: never;
 		error: ErrorResponse;
 	};
+	fileWsiContext: {
+		params: { index: number; frame: number };
+		query: never;
+		request: never;
+		response: WsiFrameContextResponse;
+		responseHeaders: never;
+		error: ErrorResponse;
+	};
 	fileFrame: {
 		params: { index: number; frame: number };
 		query: FrameQuery;
@@ -184,6 +192,18 @@ export const API_ENDPOINTS = {
 		requestType: null,
 		requestMediaType: null,
 		responseType: "SemanticContextResponse",
+		responseMediaType: "application/json",
+		responseHeadersType: null,
+		errorType: "ErrorResponse",
+		successStatus: 200,
+	},
+	fileWsiContext: {
+		method: "GET",
+		path: "/api/file/{index}/frame/{frame}/wsi-context",
+		queryType: null,
+		requestType: null,
+		requestMediaType: null,
+		responseType: "WsiFrameContextResponse",
 		responseMediaType: "application/json",
 		responseHeadersType: null,
 		errorType: "ErrorResponse",
@@ -574,6 +594,59 @@ export interface DoseGridGeometry {
 	image_orientation_patient: [number, number, number, number, number, number] | null;
 	pixel_spacing: [number, number] | null;
 	grid_frame_offsets: number[];
+}
+
+export interface WsiFrameContextResponse {
+	source_file_index: number;
+	frame_index: number;
+	tile_frame_path: string;
+	positioning_status: string;
+	position_source: string;
+	tiling_status: string;
+	total_pixel_matrix: WsiTotalPixelMatrix | null;
+	tile_rectangle: WsiTileRectangle | null;
+	tile_row: number | null;
+	tile_column: number | null;
+	pyramid_uid: string | null;
+	pyramid_level: number | null;
+	optical_path: WsiOpticalPath | null;
+	focal_plane: WsiFocalPlane | null;
+	image_type_role: string | null;
+	companions: WsiCompanionSummary[];
+	companions_truncated: boolean;
+	relationships: ReferenceSummary[];
+	relationships_truncated: boolean;
+	reconstruction_claimed: boolean;
+	warnings: string[];
+}
+
+export interface WsiTotalPixelMatrix {
+	rows: number;
+	columns: number;
+}
+
+export interface WsiTileRectangle {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+export interface WsiOpticalPath {
+	index: number | null;
+	identifier: string | null;
+}
+
+export interface WsiFocalPlane {
+	index: number | null;
+	z_offset_slide: number | null;
+}
+
+export interface WsiCompanionSummary {
+	file_index: number;
+	sop_instance_uid: string;
+	image_type_role: string | null;
+	pyramid_uid: string | null;
 }
 
 export interface DiscoveryResult {
