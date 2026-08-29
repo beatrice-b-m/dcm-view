@@ -193,6 +193,78 @@ def deterministic_navigation_frames(case_id: str, frame_count: int) -> list[int]
     return sorted({0, frame_count // 2, frame_count - 1, random_index})
 
 
+def semantic_context_observations(
+    payload: Any, expected: dict[str, Any]
+) -> dict[str, Any]:
+    semantics = expected.get("expected_semantics") or {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("context"), dict):
+        return {"semantic_context": {"passed": False, "error": "missing semantic payload"}}
+    context = payload["context"]
+    kind = context.get("kind")
+    observations: dict[str, Any] = {}
+    default_ok = payload.get("default_mode") == "pixel_preview"
+    if kind == "segmentation":
+        declared_segments = {row.get("number") for row in context.get("segments", [])}
+        mappings = context.get("frame_mappings", [])
+        expected_frames = semantics.get("referenced_frame_numbers") or []
+        observed_frames = sorted({frame for row in mappings for frame in row.get("source_frame_numbers", [])})
+        segment_context = (
+            context.get("segmentation_type") == semantics.get("segmentation_type")
+            and context.get("segmentation_fractional_type") == semantics.get("segmentation_fractional_type")
+            and context.get("maximum_fractional_value") == semantics.get("maximum_fractional_value")
+            and len(context.get("segments", [])) == semantics.get("segment_sequence_items")
+        )
+        closure = (
+            bool(mappings)
+            and all(row.get("segment_number") in declared_segments for row in mappings)
+            and observed_frames == expected_frames
+            and all(row.get("source_sop_instance_uid") == semantics.get("source_sop_instance_uid") for row in mappings)
+        )
+        overlay = context.get("overlay") or {}
+        observations.update({
+            "segmentation_context": {"passed": segment_context, "observed": context},
+            "segment_reference_closure": {"passed": closure, "expected_frames": expected_frames, "observed_frames": observed_frames},
+            "segmentation_overlay": {"passed": isinstance(overlay.get("eligible"), bool) and bool(overlay.get("reason")), "observed": overlay},
+        })
+    elif kind == "parametric_map":
+        expected_mapping = semantics.get("real_world_value_mapping") or {}
+        mappings = context.get("mappings") or []
+        mapping = mappings[0] if mappings else {}
+        units = mapping.get("units") or {}
+        quantity = mapping.get("quantity") or {}
+        observations.update({
+            "parametric_context": {"passed": context.get("stored_value_type") == semantics.get("sample_type"), "observed": context},
+            "rwvm": {"passed": bool(mappings)
+                     and mapping.get("label") == expected_mapping.get("lut_label")
+                     and mapping.get("slope") == expected_mapping.get("slope")
+                     and mapping.get("intercept") == expected_mapping.get("intercept")
+                     and units.get("value") == (expected_mapping.get("units") or {}).get("code_value")
+                     and quantity.get("value") == (expected_mapping.get("quantity_definition") or {}).get("code_value"),
+                     "observed": mappings},
+            "stored_mapped": {"passed": default_ok and context.get("displayed_value_kind") in {"stored", "mapped"}, "default_mode": payload.get("default_mode"), "semantic_value_kind": context.get("displayed_value_kind")},
+        })
+    elif kind == "rt_dose":
+        expected_dose = semantics.get("rt_dose") or {}
+        try:
+            expected_scaling = float(expected_dose["dose_grid_scaling"])
+        except (KeyError, TypeError, ValueError):
+            expected_scaling = None
+        geometry = context.get("geometry") or {}
+        overlay = context.get("overlay") or {}
+        observations.update({
+            "dose_context": {"passed": context.get("dose_units") == expected_dose.get("dose_units")
+                             and context.get("dose_type") == expected_dose.get("dose_type")
+                             and context.get("dose_summation_type") == expected_dose.get("dose_summation_type")
+                             and "grid_frame_offsets" in geometry, "observed": context},
+            "dose_scaling": {"passed": expected_scaling is not None and context.get("dose_grid_scaling") == expected_scaling, "expected": expected_scaling, "observed": context.get("dose_grid_scaling")},
+            "dose_overlay": {"passed": isinstance(overlay.get("eligible"), bool) and bool(overlay.get("reason")), "observed": overlay},
+        })
+    else:
+        observations["semantic_context"] = {"passed": False, "observed_kind": kind}
+    observations["semantic_raw_identity"] = {"passed": default_ok}
+    return observations
+
+
 class CampaignError(RuntimeError):
     """Raised when a campaign invariant cannot be established."""
 
@@ -945,6 +1017,7 @@ def probe_case(
         checks["pixel_geometry"] = pixel_geometry_observation(file_summary, expected)
     http: dict[str, Any] = {"series_catalog": series_http}
     errors: list[dict[str, Any]] = []
+    raw_first: dict[str, Any] | None = None
 
     def request(name: str, path: str, headers: tuple[str, ...] = ()) -> dict[str, Any]:
         if time.monotonic() - started >= case_timeout:
@@ -1074,6 +1147,20 @@ def probe_case(
                 }
         else:
             checks["metadata_only_response"] = invalid["status"] == 404
+        if entry["policy"].get("semantic_context_assertions"):
+            semantic = request("semantic_context", f"/api/file/{index}/semantic-context")
+            semantic_checks = semantic_context_observations(
+                semantic["json"] if semantic["status"] == 200 else None, expected
+            )
+            if raw_first is not None and raw_first["status"] == 200:
+                semantic_raw = request("semantic_raw_identity", f"/api/file/{index}/frame/0/raw")
+                semantic_checks["semantic_raw_identity"] = {
+                    "before": hashlib.sha256(canonical_raw_bytes(raw_first["body"], image)).hexdigest(),
+                    "after": hashlib.sha256(canonical_raw_bytes(semantic_raw["body"], image)).hexdigest() if semantic_raw["status"] == 200 else None,
+                    "passed": semantic_raw["status"] == 200
+                    and canonical_raw_bytes(raw_first["body"], image) == canonical_raw_bytes(semantic_raw["body"], image),
+                }
+            checks.update(semantic_checks)
     except TimeoutError as error:
         errors.append({"code": "case_timeout", "message": str(error)})
         return _finish_result(entry, expected_capabilities, checks, http, errors, started, "timeout")

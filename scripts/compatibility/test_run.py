@@ -19,6 +19,7 @@ from scripts.compatibility.run import (
     png_pixels,
     reference_observation,
     raw_header_observation,
+    semantic_context_observations,
     series_observation,
     shutter_display_observation,
     validate_json_schema,
@@ -49,6 +50,42 @@ def grayscale_png(
 
 
 class RunnerTests(unittest.TestCase):
+    def test_segmentation_semantic_observation_checks_declared_frame_closure(self) -> None:
+        expected = {"expected_semantics": {
+            "segmentation_type": "BINARY", "segmentation_fractional_type": None,
+            "maximum_fractional_value": None, "segment_sequence_items": 1,
+            "referenced_frame_numbers": [1, 2], "source_sop_instance_uid": "1.2.source",
+        }}
+        payload = {"default_mode": "pixel_preview", "context": {
+            "kind": "segmentation", "segmentation_type": "BINARY",
+            "segmentation_fractional_type": None, "maximum_fractional_value": None,
+            "segments": [{"number": 1}],
+            "frame_mappings": [
+                {"segment_number": 1, "source_frame_numbers": [1], "source_sop_instance_uid": "1.2.source"},
+                {"segment_number": 1, "source_frame_numbers": [2], "source_sop_instance_uid": "1.2.source"},
+            ],
+            "overlay": {"eligible": False, "reason": "geometry unavailable"},
+        }}
+        observed = semantic_context_observations(payload, expected)
+        self.assertTrue(observed["segmentation_context"]["passed"])
+        self.assertTrue(observed["segment_reference_closure"]["passed"])
+        self.assertTrue(observed["segmentation_overlay"]["passed"])
+
+    def test_parametric_semantic_observation_requires_explicit_rwvm(self) -> None:
+        expected = {"expected_semantics": {"sample_type": "float32", "real_world_value_mapping": {
+            "lut_label": "MAP", "slope": 2.0, "intercept": -1.0,
+            "units": {"code_value": "1"}, "quantity_definition": {"code_value": "Q"},
+        }}}
+        payload = {"default_mode": "pixel_preview", "context": {"kind": "parametric_map",
+            "stored_value_type": "float32", "displayed_value_kind": "mapped", "mappings": [{
+                "label": "MAP", "slope": 2.0, "intercept": -1.0,
+                "units": {"value": "1"}, "quantity": {"value": "Q"},
+            }]}}
+        observed = semantic_context_observations(payload, expected)
+        self.assertTrue(observed["parametric_context"]["passed"])
+        self.assertTrue(observed["rwvm"]["passed"])
+        self.assertTrue(observed["stored_mapped"]["passed"])
+
     def test_canonical_raw_bytes_masks_sign_extension_to_stored_bits(self) -> None:
         sign_extended = struct.pack("<HHHH", 0xFC00, 0xFFFF, 0x0000, 0x03FF)
         expected_stored = struct.pack("<HHHH", 0x0C00, 0x0FFF, 0x0000, 0x03FF)
