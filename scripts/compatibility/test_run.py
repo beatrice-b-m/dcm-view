@@ -100,7 +100,7 @@ class RunnerTests(unittest.TestCase):
             "maximum_fractional_value": None, "segment_sequence_items": 1,
             "referenced_frame_numbers": [1, 2], "source_sop_instance_uid": "1.2.source",
         }}
-        payload = {"default_mode": "pixel_preview", "context": {
+        payload = {"default_mode": "pixel_preview", "pixel_preview_preserves_stored_values": True, "context": {
             "kind": "segmentation", "segmentation_type": "BINARY",
             "segmentation_fractional_type": None, "maximum_fractional_value": None,
             "segments": [{"number": 1}],
@@ -120,8 +120,8 @@ class RunnerTests(unittest.TestCase):
             "lut_label": "MAP", "slope": 2.0, "intercept": -1.0,
             "units": {"code_value": "1"}, "quantity_definition": {"code_value": "Q"},
         }}}
-        payload = {"default_mode": "pixel_preview", "context": {"kind": "parametric_map",
-            "stored_value_type": "float32", "displayed_value_kind": "mapped", "mappings": [{
+        payload = {"default_mode": "pixel_preview", "pixel_preview_preserves_stored_values": True, "context": {"kind": "parametric_map",
+            "stored_value_type": "float32", "displayed_value_kind": "stored", "mappings": [{
                 "label": "MAP", "slope": 2.0, "intercept": -1.0,
                 "units": {"value": "1"}, "quantity": {"value": "Q"},
             }]}}
@@ -129,6 +129,28 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(observed["parametric_context"]["passed"])
         self.assertTrue(observed["rwvm"]["passed"])
         self.assertTrue(observed["stored_mapped"]["passed"])
+
+    def test_semantic_overlay_and_dose_checks_require_declared_safe_state(self) -> None:
+        expected = {"expected_semantics": {
+            "pixel_min": 0, "pixel_max": 700,
+            "rt_dose": {
+                "dose_grid_scaling": "0.001", "dose_units": "GY",
+                "dose_type": "PHYSICAL", "dose_summation_type": "RECORD",
+            },
+        }}
+        payload = {"default_mode": "pixel_preview", "pixel_preview_preserves_stored_values": True, "context": {
+            "kind": "rt_dose", "dose_grid_scaling": 0.001, "dose_units": "GY",
+            "dose_type": "PHYSICAL", "dose_summation_type": "RECORD",
+            "scaling_status": "available", "displayed_value_kind": "mapped",
+            "geometry": {"grid_frame_offsets": [0.0]},
+            "overlay": {"eligible": False, "reason": "geometry incompatible", "source_file_index": None},
+        }}
+        observed = semantic_context_observations(payload, expected)
+        self.assertTrue(observed["dose_scaling"]["passed"])
+        self.assertEqual(observed["dose_scaling"]["expected_mapped_bounds"], [0.0, 0.7])
+        self.assertTrue(observed["dose_overlay"]["passed"])
+        payload["context"]["overlay"] = {"eligible": True, "reason": "eligible", "source_file_index": 4}
+        self.assertFalse(semantic_context_observations(payload, expected)["dose_overlay"]["passed"])
 
     def test_canonical_raw_bytes_masks_sign_extension_to_stored_bits(self) -> None:
         sign_extended = struct.pack("<HHHH", 0xFC00, 0xFFFF, 0x0000, 0x03FF)

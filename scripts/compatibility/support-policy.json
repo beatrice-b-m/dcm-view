@@ -30,19 +30,19 @@
       "id": "segmentation_pixel_preview", "precedence": 850,
       "match": {"sop_class_uids": ["1.2.840.10008.5.1.4.1.1.66.4", "1.2.840.10008.5.1.4.1.1.66.7"]},
       "classification": "pixel_preview", "required_assertions": ["discovery_identity", "metadata_exact", "raw_lossless_all_frames", "display_normalized_pixels", "frame_navigation", "cache_miss_hit"],
-      "semantic_context_assertions": ["segmentation_context", "segment_reference_closure", "segmentation_overlay_eligibility", "semantic_toggle_preserves_raw"], "expected_unsupported": null,
+      "semantic_context_assertions": ["segmentation_context", "segment_reference_closure", "segmentation_overlay_eligibility", "semantic_context_preserves_raw"], "expected_unsupported": null,
       "rationale": "SEG defaults to stored-pixel preview; semantic source alignment is an explicit, validated capability.", "exclusions": ["unvalidated source overlay", "clinical segmentation interpretation"]
     },
     {
       "id": "parametric_map_pixel_preview", "precedence": 850, "match": {"sop_class_uids": ["1.2.840.10008.5.1.4.1.1.30"]},
       "classification": "pixel_preview", "required_assertions": ["discovery_identity", "metadata_exact", "raw_lossless_all_frames", "display_normalized_pixels", "frame_navigation"],
-      "semantic_context_assertions": ["parametric_map_context", "rwvm_mapping", "stored_mapped_identity", "semantic_toggle_preserves_raw"], "expected_unsupported": null,
+      "semantic_context_assertions": ["parametric_map_context", "rwvm_mapping", "stored_mapped_identity", "semantic_context_preserves_raw"], "expected_unsupported": null,
       "rationale": "Parametric maps expose stored floats by default and apply only explicit RWVM in semantic context.", "exclusions": ["inferred mappings", "clinical quantitative interpretation"]
     },
     {
       "id": "rt_dose_pixel_preview", "precedence": 850, "match": {"sop_class_uids": ["1.2.840.10008.5.1.4.1.1.481.2"]},
       "classification": "pixel_preview", "required_assertions": ["discovery_identity", "metadata_exact", "raw_lossless_all_frames", "display_normalized_pixels", "frame_navigation"],
-      "semantic_context_assertions": ["rt_dose_context", "dose_grid_scaling", "dose_overlay_eligibility", "semantic_toggle_preserves_raw"], "expected_unsupported": null,
+      "semantic_context_assertions": ["rt_dose_context", "dose_grid_scaling_metadata", "dose_overlay_eligibility", "semantic_context_preserves_raw"], "expected_unsupported": null,
       "rationale": "RT Dose defaults to stored-pixel preview; scaling and geometry are explicitly labelled context.", "exclusions": ["prescription correctness", "clinical acceptability"]
     },
     {

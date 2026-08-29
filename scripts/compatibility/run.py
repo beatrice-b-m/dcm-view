@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 import zlib
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO, Optional
 
@@ -394,7 +395,10 @@ def semantic_context_observations(
     context = payload["context"]
     kind = context.get("kind")
     observations: dict[str, Any] = {}
-    default_ok = payload.get("default_mode") == "pixel_preview"
+    default_ok = (
+        payload.get("default_mode") == "pixel_preview"
+        and payload.get("pixel_preview_preserves_stored_values") is True
+    )
     if kind == "segmentation":
         declared_segments = {row.get("number") for row in context.get("segments", [])}
         mappings = context.get("frame_mappings", [])
@@ -413,10 +417,17 @@ def semantic_context_observations(
             and all(row.get("source_sop_instance_uid") == semantics.get("source_sop_instance_uid") for row in mappings)
         )
         overlay = context.get("overlay") or {}
+        expected_overlay = semantics.get("overlay_eligible", False)
         observations.update({
             "segmentation_context": {"passed": segment_context, "observed": context},
             "segment_reference_closure": {"passed": closure, "expected_frames": expected_frames, "observed_frames": observed_frames},
-            "segmentation_overlay": {"passed": isinstance(overlay.get("eligible"), bool) and bool(overlay.get("reason")), "observed": overlay},
+            "segmentation_overlay": {
+                "passed": overlay.get("eligible") is expected_overlay
+                and bool(overlay.get("reason"))
+                and ((isinstance(overlay.get("source_file_index"), int)) if expected_overlay else overlay.get("source_file_index") is None),
+                "expected_eligible": expected_overlay,
+                "observed": overlay,
+            },
         })
     elif kind == "parametric_map":
         expected_mapping = semantics.get("real_world_value_mapping") or {}
@@ -433,7 +444,7 @@ def semantic_context_observations(
                      and units.get("value") == (expected_mapping.get("units") or {}).get("code_value")
                      and quantity.get("value") == (expected_mapping.get("quantity_definition") or {}).get("code_value"),
                      "observed": mappings},
-            "stored_mapped": {"passed": default_ok and context.get("displayed_value_kind") in {"stored", "mapped"}, "default_mode": payload.get("default_mode"), "semantic_value_kind": context.get("displayed_value_kind")},
+            "stored_mapped": {"passed": default_ok and context.get("displayed_value_kind") == "stored", "default_mode": payload.get("default_mode"), "semantic_value_kind": context.get("displayed_value_kind")},
         })
     elif kind == "rt_dose":
         expected_dose = semantics.get("rt_dose") or {}
@@ -443,17 +454,43 @@ def semantic_context_observations(
             expected_scaling = None
         geometry = context.get("geometry") or {}
         overlay = context.get("overlay") or {}
+        expected_overlay = semantics.get("overlay_eligible", False)
+        pixel_min = semantics.get("pixel_min")
+        pixel_max = semantics.get("pixel_max")
+        mapped_bounds = (
+            [
+                float(Decimal(str(pixel_min)) * Decimal(str(expected_scaling))),
+                float(Decimal(str(pixel_max)) * Decimal(str(expected_scaling))),
+            ]
+            if expected_scaling is not None and isinstance(pixel_min, (int, float)) and isinstance(pixel_max, (int, float))
+            else None
+        )
         observations.update({
             "dose_context": {"passed": context.get("dose_units") == expected_dose.get("dose_units")
                              and context.get("dose_type") == expected_dose.get("dose_type")
                              and context.get("dose_summation_type") == expected_dose.get("dose_summation_type")
                              and "grid_frame_offsets" in geometry, "observed": context},
-            "dose_scaling": {"passed": expected_scaling is not None and context.get("dose_grid_scaling") == expected_scaling, "expected": expected_scaling, "observed": context.get("dose_grid_scaling")},
-            "dose_overlay": {"passed": isinstance(overlay.get("eligible"), bool) and bool(overlay.get("reason")), "observed": overlay},
+            "dose_scaling": {
+                "passed": expected_scaling is not None
+                and context.get("dose_grid_scaling") == expected_scaling
+                and context.get("scaling_status") == "available"
+                and context.get("displayed_value_kind") == "mapped"
+                and mapped_bounds is not None,
+                "expected": expected_scaling,
+                "observed": context.get("dose_grid_scaling"),
+                "expected_mapped_bounds": mapped_bounds,
+            },
+            "dose_overlay": {
+                "passed": overlay.get("eligible") is expected_overlay
+                and bool(overlay.get("reason"))
+                and ((isinstance(overlay.get("source_file_index"), int)) if expected_overlay else overlay.get("source_file_index") is None),
+                "expected_eligible": expected_overlay,
+                "observed": overlay,
+            },
         })
     else:
         observations["semantic_context"] = {"passed": False, "observed_kind": kind}
-    observations["semantic_raw_identity"] = {"passed": default_ok}
+    observations["semantic_raw_identity"] = {"passed": False, "context_contract_passed": default_ok}
     return observations
 
 
@@ -1478,7 +1515,9 @@ def probe_case(
                 semantic_checks["semantic_raw_identity"] = {
                     "before": hashlib.sha256(canonical_raw_bytes(raw_first["body"], image)).hexdigest(),
                     "after": hashlib.sha256(canonical_raw_bytes(semantic_raw["body"], image)).hexdigest() if semantic_raw["status"] == 200 else None,
-                    "passed": semantic_raw["status"] == 200
+                    "context_contract_passed": semantic_checks["semantic_raw_identity"]["context_contract_passed"],
+                    "passed": semantic_checks["semantic_raw_identity"]["context_contract_passed"]
+                    and semantic_raw["status"] == 200
                     and canonical_raw_bytes(raw_first["body"], image) == canonical_raw_bytes(semantic_raw["body"], image),
                 }
             checks.update(semantic_checks)

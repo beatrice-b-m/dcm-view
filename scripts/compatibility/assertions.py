@@ -42,9 +42,9 @@ ASSERTIONS = {
     "rwvm_mapping": _spec("semantic", "rwvm", "Only explicit compatible Real World Value Mapping is applied."),
     "stored_mapped_identity": _spec("semantic", "stored_mapped", "The UI distinguishes stored from mapped values."),
     "rt_dose_context": _spec("semantic", "dose_context", "Dose units, type, summation, geometry, and references are exact."),
-    "dose_grid_scaling": _spec("semantic", "dose_scaling", "Dose Grid Scaling produces exact mapped values."),
+    "dose_grid_scaling_metadata": _spec("semantic", "dose_scaling", "Dose Grid Scaling and declared mapped bounds are exact."),
     "dose_overlay_eligibility": _spec("semantic", "dose_overlay", "Dose overlay requires compatible frame of reference and geometry."),
-    "semantic_toggle_preserves_raw": _spec("semantic", "semantic_raw_identity", "Changing context mode does not change raw stored pixels."),
+    "semantic_context_preserves_raw": _spec("semantic", "semantic_raw_identity", "Fetching semantic context does not change raw stored pixels."),
     "wsi_tile_position": _spec("navigation", "wsi_position", "Selected frame position, optical path, focal plane, and level match metadata."),
     "wsi_minimap_metadata": _spec("presentation", "wsi_minimap", "Minimap rectangle is computed without decoding neighboring tiles."),
 }
