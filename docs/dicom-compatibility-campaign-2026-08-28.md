@@ -13,11 +13,17 @@ DICOM conformance certificate or a clinical validation.
 - Corpus lock SHA-256:
   `69e49a9f9a0640e42110219dfa14f8494e5ac0686d4b9bfd3ff1c3e2d85eeaba`.
 - Support policy SHA-256:
-  `10e8fa0d64d04c29dad73dc06b11ebe858621882fdc3a3dfff5f1af7678046ae`.
+  `62f1e515dadde1e6fb4c78bf8ed33359acc63bfd6671dd688625f1a3587e1e45`.
 - Frozen worklist file SHA-256:
-  `f32ab1bbb92da2d251b5870f059082e54db2f1264637762a96bfec1fcad7dd3c`.
+  `7e3c761f2f424d5288f9a9dd34ae835d1bc581a5366503a2fb5ac95d1b697e24`.
 - Frozen worklist content SHA-256:
-  `6cdffef5e0784763c44c361a7b60be80c46f4982b7b19620ec897b36c4008d18`.
+  `58334a365a5fa146d83acea2b1bc72a762725904e9193ebcd212405376c3aaa0`.
+
+The resolved immutable worklist is
+`artifacts/compatibility/2026-08-28/worklist-resolved.json`. It supersedes the
+earlier worklist only because the RT Image Storage policy now matches its
+manifest-declared image contract; the pinned suite and prepared corpus bytes
+did not change.
 
 The prepared profiles contained 169 physical/152 logical valid cases, one
 legacy case, 15 negative cases, 139 physical files across eight stress cases
@@ -31,29 +37,34 @@ and `0a9448e3f30d3bbe0824592d8d232719198d65936fb1cc773849f1ad60a4b2ab`.
 
 ## Final campaign results
 
-The final reports used `target/debug/dcmview` version 0.2.11 with binary
-SHA-256 `d786790ada524228e3f287c7cda6741025eb21d6a48a7dd4e586c586896efbee`.
+The resolved reports used `target/debug/dcmview` version 0.2.11 at viewer commit
+`ee3f43c`, with campaign binary SHA-256
+`75c2097836dbae9602b5b729f1686109ecb0b2642b1f27e9adccb3b5580f2a40`.
 
 | Profile | Result | Evidence |
 |---|---|---|
-| Valid (`all`) | 169/169 execution-safe; base runner: 125 verified, 43 explicitly unverified, one metadata failure; fail-closed evidence: 156 passed, three expected unsupported, and ten failed; zero crashes, timeouts, flaky results, or unavailable cases | `artifacts/compatibility/2026-08-28/handoff-reviewed-all/` |
-| Legacy | 1/1 execution-safe and verified | `artifacts/compatibility/2026-08-28/handoff-reviewed-legacy/` |
-| Negative | 15/15 passed the declared bounded failure-layer and healthy-recovery assertions | `artifacts/compatibility/2026-08-28/handoff-reviewed-negative/report.json` |
-| Stress | 139/139 files passed; bounded execution, resource measurements, error recovery, shutdown, and observed in-progress discovery cancellation assertions passed | `artifacts/compatibility/2026-08-28/handoff-reviewed-stress/report.json` |
-| Fuzz | 64 deterministic candidates, 243 mutations, and 37,829 target operations; all 64 were clean rejections, zero unacceptable outcomes, and zero retained payloads | `artifacts/compatibility/2026-08-28/handoff-reviewed-fuzz/report.json` |
+| Valid (`all`) | 169/169 execution-safe; base runner: 132 verified and 37 explicitly unverified; fail-closed evidence: 166 passed, three expected unsupported, and zero failed; zero crashes, timeouts, flaky results, or unavailable cases | `artifacts/compatibility/2026-08-28/resolved-all-run2/` |
+| Legacy | 1/1 execution-safe and verified; fail-closed evidence passed | `artifacts/compatibility/2026-08-28/resolved-legacy/` |
+| Negative | 15/15 passed the declared bounded failure-layer and healthy-recovery assertions | `artifacts/compatibility/2026-08-28/resolved-negative-run2/report.json` |
+| Stress | 139/139 files passed; bounded execution, resource measurements, error recovery, shutdown, and observed in-progress discovery cancellation assertions passed | `artifacts/compatibility/2026-08-28/resolved-stress/report.json` |
+| Fuzz | 64 deterministic candidates, 297 mutations, and 24,465 target operations; all 64 were clean rejections, zero unacceptable outcomes, and zero retained payloads | `artifacts/compatibility/2026-08-28/resolved-fuzz-run2/report.json` |
 
 The valid and legacy directories contain the detailed report, normalized
-report, evidence report, viewer process logs, and SHA-256 artifact index. The
-valid artifact-index file itself has SHA-256
-`2243793070c038577187e2699502c15f451e07d9a968e872c0b29f4e65f9c6a6`;
-the legacy index has
-`225fc4f76421ab5269adffdaf483a88966bb5889df5d05c40f65f4099bbe62cf`.
+report, evidence report, viewer report, process logs, and SHA-256 artifact
+index. The resolved valid artifact-index file itself has SHA-256
+`771f27e2b25e713cf2736eef61b50c8dc98bc8f6602de76fc0c330e5350d620b`.
+The valid detail report has SHA-256
+`86f4aaa6b7ba165dd1b20425a3666b7615704c8c3243f07899ef0ca16c651b72`;
+its fail-closed evidence report has SHA-256
+`6a7ddec49bbe3e66a4f0dca6a65231dadaf8069a52e66b65cfd80688ae42ac5e`.
 
-The ten fail-closed valid-profile results expose evidence that is absent or
-incorrect rather than treating it as a pass: seven series-geometry claims,
-one JPEG Baseline lossy-metric claim, one ISO 2022 person-name decode, and one
-metadata-only renderer classification. These are retained as actionable
-compatibility gaps.
+All ten previously failed valid-profile results now pass their complete
+required assertion sets. The resolution adds exact NM dimension, PET activity,
+ultrasound timing, XA/XRF projection, and non-square pixel evidence; records
+JPEG Baseline maximum absolute error and RMSE against the manifest recipe;
+decodes retained ISO 2022 extension sequences using Specific Character Set;
+and classifies RT Image Storage as pixel-faithful inspection while continuing
+to exclude treatment-planning interpretation.
 
 ## Browser acceptance
 
@@ -70,7 +81,7 @@ artifact.
 
 ## Intentional limitations
 
-The base runner's 43 unverified valid-corpus results remain explicit outcomes,
+The base runner's 37 unverified valid-corpus results remain explicit outcomes,
 not silent passes. When a policy-selected assertion lacks evidence, the
 fail-closed evidence report records a failure. Current boundaries remain:
 
