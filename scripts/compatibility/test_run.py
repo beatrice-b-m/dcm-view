@@ -418,6 +418,19 @@ class RunnerTests(unittest.TestCase):
     def test_prepared_overlay_and_selected_wsi_tile_have_exact_oracles(self) -> None:
         overlay = [(255, 255, 255, 255)] * 4
         self.assertEqual(validate_visual("2x2_cr_overlay_lut_gradient", overlay)["status"], "passed")
+        full_dynamic = [
+            (255, 255, 255, 255),
+            (85, 85, 85, 255),
+            (170, 170, 170, 255),
+            (255, 255, 255, 255),
+        ]
+        expected = {
+            "image": {"rows": 2, "columns": 2},
+            "expected_semantics": {
+                "overlay_pattern": "2x2_diagonal_overlay",
+            },
+        }
+        self.assertTrue(overlay_display_observation(expected, full_dynamic)["passed"])
 
     def test_visual_oracles_distinguish_frame_order_from_luminance_order(self) -> None:
         ascending = [(value, value, value, 255) for value in (0, 85, 170, 255)]

@@ -1211,7 +1211,19 @@ def probe_case(
                         (expected.get("expected_visual_checks") or {}).get("pattern"), pixels
                     )
                     if "read_overlay_plane" in expected_capabilities:
-                        checks["overlay_display"] = overlay_display_observation(expected, pixels)
+                        overlay_response = request(
+                            "overlay_full_dynamic",
+                            f"/api/file/{index}/frame/0?mode=full_dynamic",
+                        )
+                        overlay_pixels: list[tuple[int, int, int, int]] = []
+                        if overlay_response["status"] == 200:
+                            try:
+                                _, _, overlay_pixels = png_pixels(overlay_response["body"])
+                            except (ValueError, zlib.error):
+                                pass
+                        checks["overlay_display"] = overlay_display_observation(
+                            expected, overlay_pixels
+                        )
                     if "apply_display_shutter" in expected_capabilities:
                         checks["display_shutter"] = shutter_display_observation(expected, pixels)
                     if expected.get("expected_icc_profile"):
