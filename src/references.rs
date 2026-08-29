@@ -166,6 +166,9 @@ pub fn resolve_reference_edges(
                 target
                     .series_instance_uid
                     .get_or_insert_with(|| candidate.series_instance_uid.clone());
+                if target.frame_numbers.is_empty() {
+                    target.frame_numbers = (1..=candidate.frame_count).collect();
+                }
             }
             let mut matches = matching_candidates
                 .into_iter()
@@ -174,7 +177,7 @@ pub fn resolve_reference_edges(
                     path: candidate.path.clone(),
                     sop_instance_uid: candidate.sop_instance_uid.clone(),
                     frame_indices: navigable_frame_indices(
-                        &edge.target.frame_numbers,
+                        &target.frame_numbers,
                         candidate.frame_count,
                     ),
                 })
@@ -219,7 +222,7 @@ fn reference_matches_candidate(target: &ReferenceIdentity, candidate: &Reference
 
 fn navigable_frame_indices(frame_numbers: &[u32], frame_count: u32) -> Vec<u32> {
     if frame_numbers.is_empty() {
-        return (frame_count > 0).then_some(0).into_iter().collect();
+        return (0..frame_count).collect();
     }
     let mut indices = Vec::new();
     for frame_number in frame_numbers {
@@ -793,7 +796,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             [3, 7]
         );
-        assert_eq!(resolved[1].matches[0].frame_indices, [0]);
+        assert_eq!(resolved[1].matches[0].frame_indices, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn absent_frame_numbers_mean_every_frame_of_a_unique_instance() {
+        let edge = super::ReferenceEdge {
+            relationship: super::ReferenceRelationship::SourceImage,
+            target: super::ReferenceIdentity {
+                sop_instance_uid: Some("1.2.instance".into()),
+                ..Default::default()
+            },
+        };
+        let candidate = super::ReferenceCandidate {
+            file_index: 2,
+            path: "/scan/source.dcm".into(),
+            sop_class_uid: "1.2.class".into(),
+            sop_instance_uid: "1.2.instance".into(),
+            series_instance_uid: "1.2.series".into(),
+            frame_count: 3,
+        };
+
+        let resolved = super::resolve_reference_edges(&[edge], &[candidate]);
+        assert_eq!(resolved[0].target.frame_numbers, [1, 2, 3]);
+        assert_eq!(resolved[0].matches[0].frame_indices, [0, 1, 2]);
     }
 
     #[test]
