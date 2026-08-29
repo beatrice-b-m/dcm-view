@@ -45,6 +45,7 @@ def _status(result: dict[str, Any], policy: dict[str, Any], assertions: list[dic
         expected = set((policy.get("expected_unsupported") or {}).get("statuses", []))
         return "expected_unsupported" if any(status in expected for status in statuses) else "unexpected_unsupported"
     if any(row["status"] == "failed" for row in assertions): return "failed"
+    if any(row.get("scope") == "semantic_context" and row["status"] == "not_applicable" for row in assertions): return "failed"
     return "passed"
 
 def build_evidence_report(base: dict[str, Any], worklist: dict[str, Any], viewer_commit: str, build_features: list[str]) -> dict[str, Any]:
@@ -53,7 +54,12 @@ def build_evidence_report(base: dict[str, Any], worklist: dict[str, Any], viewer
     for result in base["results"]:
         source = policies[(result["root"], result["case_id"], result["path"])]
         policy = source["policy"]; evidence = assertion_evidence(result["observations"])
-        assertions = [evaluate(name, evidence) for name in policy["required_assertions"]]
+        semantic_ids = set(policy["semantic_context_assertions"])
+        assertions = []
+        for name in policy["required_assertions"] + policy["semantic_context_assertions"]:
+            assertion = evaluate(name, evidence)
+            assertion["scope"] = "semantic_context" if name in semantic_ids else "required"
+            assertions.append(assertion)
         status = _status(result, policy, assertions)
         expected = source["expected_contract"]; dicom = expected.get("dicom") or {}
         results.append({"profile": result["root"], "case_id": result["case_id"], "path": result["path"], "status": status,
