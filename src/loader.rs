@@ -751,12 +751,16 @@ fn valid_discovery_structure(object: &dicom_object::DefaultDicomObject) -> bool 
         .element(tags::SPECIFIC_CHARACTER_SET)
         .ok()
         .and_then(|element| element.to_str().ok())
-        .map(|value| {
-            let value = value.trim();
-            value.is_empty() || SpecificCharacterSet::from_code(value).is_some()
-        })
+        .map(|value| valid_specific_character_set(&value))
         .unwrap_or(true);
     character_set_valid && !has_odd_defined_item_length(object)
+}
+
+fn valid_specific_character_set(value: &str) -> bool {
+    value.split('\\').all(|component| {
+        let component = component.trim();
+        component.is_empty() || SpecificCharacterSet::from_code(component).is_some()
+    })
 }
 
 fn has_odd_defined_item_length(
@@ -1268,7 +1272,10 @@ fn build_label(patient_id: &str, modality: &str, study_date: &str, fallback: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{build_entry, read_discovery_metadata, split_dicom_values, EntryInspection};
+    use super::{
+        build_entry, read_discovery_metadata, split_dicom_values, valid_specific_character_set,
+        EntryInspection,
+    };
     use dicom_core::value::DataSetSequence;
     use dicom_core::{DataElement, PrimitiveValue, Tag, VR};
     use dicom_dictionary_std::{tags, uids};
@@ -1276,6 +1283,16 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::types::NativePixelDataKind;
+
+    #[test]
+    fn validates_each_component_of_multi_valued_character_sets() {
+        assert!(valid_specific_character_set(
+            "\\ISO 2022 IR 87\\ISO 2022 IR 13"
+        ));
+        assert!(!valid_specific_character_set(
+            "ISO_IR 100\\DTS_UNKNOWN_CHARACTER_SET"
+        ));
+    }
 
     #[test]
     fn extracts_classic_enhanced_concatenation_and_wsi_identity() {
