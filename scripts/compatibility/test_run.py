@@ -14,6 +14,7 @@ from scripts.compatibility.run import (
     deterministic_navigation_frames,
     normalized_report,
     icc_profile_observation,
+    metadata_observation,
     overlay_display_observation,
     pixel_geometry_observation,
     png_pixels,
@@ -51,6 +52,30 @@ def grayscale_png(
 
 
 class RunnerTests(unittest.TestCase):
+    def test_metadata_observation_compares_manifest_fields_and_declared_tags(self) -> None:
+        expected = {
+            "dicom": {"modality": "OT", "sop_class_uid": "1.2.class", "transfer_syntax_uid": "1.2.syntax"},
+            "uids": {"sop_instance_uid": "1.2.instance", "study_instance_uid": "1.2.study", "series_instance_uid": "1.2.series"},
+            "image": {"frames": 1, "rows": 2, "columns": 3},
+            "expected_metadata": {
+                "specific_character_sets": ["ISO_IR 192"],
+                "person_names": [{"tag": "0010,0010", "vr": "PN", "decoded_value": "Wang^XiaoDong"}],
+            },
+        }
+        summary = {
+            "modality": "OT", "sop_class_uid": "1.2.class", "transfer_syntax_uid": "1.2.syntax",
+            "sop_instance_uid": "1.2.instance", "study_instance_uid": "1.2.study", "series_instance_uid": "1.2.series",
+            "frame_count": 1, "rows": 2, "columns": 3,
+        }
+        info = {"sop_class_uid": "1.2.class", "transfer_syntax_uid": "1.2.syntax", "frame_count": 1, "rows": 2, "columns": 3}
+        tags = [
+            {"tag": "(0008,0005)", "vr": "CS", "value": {"type": "string", "value": "ISO_IR 192"}},
+            {"tag": "(0010,0010)", "vr": "PN", "value": {"type": "string", "value": "Wang^XiaoDong"}},
+        ]
+        self.assertTrue(metadata_observation(summary, info, tags, expected)["passed"])
+        tags[1]["value"]["value"] = "Wrong^Name"
+        self.assertFalse(metadata_observation(summary, info, tags, expected)["passed"])
+
     def test_wsi_observation_proves_selected_tile_without_reconstruction(self) -> None:
         expected = {
             "image": {"rows": 2, "columns": 2},

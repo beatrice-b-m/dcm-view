@@ -34,7 +34,7 @@ def assertion_evidence(observations: dict[str, Any]) -> dict[str, Any]:
             "normalized_display_hash": observations.get("normalized_display_hash") or normalized_display,
             "presentation_checks": None if not presentation else {"passed": all(_passed(v) for v in presentation)},
             "frame_access": observations.get("frame_access") or observations.get("frame_navigation") or observations.get("png_dimensions"),
-            "series_navigation": series_evidence, "recovery_after_error": observations.get("recovery_after_error") or observations.get("error_envelope"),
+            "series_navigation": series_evidence, "recovery_after_error": observations.get("recovery_after_error"),
             "renderer_absent": observations.get("metadata_only_response")}
 
 def _status(result: dict[str, Any], policy: dict[str, Any], assertions: list[dict[str, Any]]) -> str:

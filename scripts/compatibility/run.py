@@ -239,6 +239,144 @@ def raw_header_observation(headers: dict[str, str], image: dict[str, Any]) -> di
     }
 
 
+def _tag_key(value: str) -> str:
+    return f"({value.strip().strip('()').upper()})"
+
+
+def _tag_scalar(node: dict[str, Any]) -> Any:
+    value = node.get("value") or {}
+    if value.get("type") in {"string", "number", "numbers"}:
+        return value.get("value")
+    return None
+
+
+def _metadata_tag_expectations(expected_metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    expectations: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            tag = value.get("tag")
+            if isinstance(tag, str) and "decoded_value" in value:
+                expectations.append({"tag": _tag_key(tag), "vr": value.get("vr"), "expected": value["decoded_value"]})
+            elif isinstance(tag, str) and "decoded_values" in value:
+                decoded = value["decoded_values"]
+                expected_value: Any = decoded
+                if value.get("vr") not in {"DS", "IS"}:
+                    joined = "; ".join(str(item) for item in decoded)
+                    expected_value = joined[:256] + ("…" if len(joined) > 256 else "")
+                expectations.append({"tag": _tag_key(tag), "vr": value.get("vr"), "expected": expected_value})
+            sequence_tag = value.get("sequence_tag")
+            if isinstance(sequence_tag, str) and isinstance(value.get("decoded_items"), list):
+                expectations.append({
+                    "tag": _tag_key(sequence_tag),
+                    "vr": "SQ",
+                    "expected_items": value["decoded_items"],
+                })
+            creator_tag = value.get("creator_tag")
+            if isinstance(creator_tag, str) and isinstance(value.get("creator_id"), str):
+                expectations.append({
+                    "tag": _tag_key(creator_tag),
+                    "vr": value.get("vr"),
+                    "expected": value["creator_id"],
+                })
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    visit(expected_metadata)
+    for row in expected_metadata.get("empty_type2_attributes", []):
+        expectations.append({"tag": _tag_key(row["tag"]), "vr": row.get("vr"), "expected": ""})
+    character_sets = expected_metadata.get("specific_character_sets")
+    if isinstance(character_sets, list):
+        expectations.append({"tag": "(0008,0005)", "vr": "CS", "expected": "; ".join(str(value) for value in character_sets)})
+    unique = {(row["tag"], row["vr"]): row for row in expectations}
+    return list(unique.values())
+
+
+def metadata_observation(
+    file_summary: dict[str, Any], info: Any, tags: Any, expected: dict[str, Any]
+) -> dict[str, Any]:
+    if not isinstance(info, dict) or not isinstance(tags, list):
+        return {"passed": False, "error": "metadata endpoints did not return typed payloads"}
+    dicom = expected.get("dicom") or {}
+    uids = expected.get("uids") or {}
+    image = expected.get("image") or {}
+    summary_expected = {
+        "sop_instance_uid": uids.get("sop_instance_uid"),
+        "study_instance_uid": uids.get("study_instance_uid"),
+        "series_instance_uid": uids.get("series_instance_uid"),
+        "sop_class_uid": dicom.get("sop_class_uid"),
+        "transfer_syntax_uid": dicom.get("transfer_syntax_uid"),
+        "modality": dicom.get("modality"),
+        "frame_count": image.get("frames", 0),
+        "rows": image.get("rows", 0),
+        "columns": image.get("columns", 0),
+    }
+    info_expected = {
+        "sop_class_uid": dicom.get("sop_class_uid"),
+        "transfer_syntax_uid": dicom.get("transfer_syntax_uid"),
+        "frame_count": image.get("frames", 0),
+        "rows": image.get("rows", 0),
+        "columns": image.get("columns", 0),
+    }
+
+    def compare_fields(source: dict[str, Any], declared: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: {"expected": value, "observed": source.get(key), "passed": source.get(key) == value}
+            for key, value in declared.items()
+            if value is not None
+        }
+
+    summary_results = compare_fields(file_summary, summary_expected)
+    info_results = compare_fields(info, info_expected)
+    tag_index = {row.get("tag"): row for row in tags if isinstance(row, dict)}
+    tag_results = []
+    for expectation in _metadata_tag_expectations(expected.get("expected_metadata") or {}):
+        node = tag_index.get(expectation["tag"])
+        if "expected_items" in expectation:
+            sequence = (node or {}).get("value") or {}
+            items = sequence.get("items") if sequence.get("type") == "sequence" else None
+            observed_items = []
+            if isinstance(items, list):
+                for item in items:
+                    by_keyword = {child.get("keyword"): _tag_scalar(child) for child in item}
+                    observed_items.append({
+                        "code_meaning": by_keyword.get("CodeMeaning"),
+                        "code_value": by_keyword.get("CodeValue"),
+                        "coding_scheme_designator": by_keyword.get("CodingSchemeDesignator"),
+                    })
+            tag_results.append({
+                **expectation,
+                "observed_items": observed_items,
+                "passed": isinstance(node, dict)
+                and node.get("vr") == "SQ"
+                and observed_items == expectation["expected_items"],
+            })
+            continue
+        observed = _tag_scalar(node) if isinstance(node, dict) else None
+        expected_value = expectation["expected"]
+        if expectation["vr"] in {"DS", "IS"} and isinstance(expected_value, list):
+            expected_value = [float(value) for value in expected_value]
+            if len(expected_value) == 1:
+                expected_value = expected_value[0]
+        tag_results.append({
+            **expectation,
+            "expected": expected_value,
+            "observed": observed,
+            "passed": isinstance(node, dict) and node.get("vr") == expectation["vr"] and observed == expected_value,
+        })
+    passed = all(row["passed"] for row in summary_results.values()) and all(row["passed"] for row in info_results.values()) and all(row["passed"] for row in tag_results)
+    return {
+        "passed": passed,
+        "evidence_scope": "manifest_identity_image_fields_and_declared_api_visible_tags",
+        "summary_fields": summary_results,
+        "info_fields": info_results,
+        "declared_tags": tag_results,
+    }
+
+
 def deterministic_navigation_frames(case_id: str, frame_count: int) -> list[int]:
     if frame_count <= 0:
         return []
@@ -1171,7 +1309,12 @@ def probe_case(
         info = request("info", f"/api/file/{index}/info")
         tags = request("tags", f"/api/file/{index}/tags")
         checks["file_info"] = info["status"] == 200 and isinstance(info["json"], dict)
-        checks["tags"] = tags["status"] == 200 and isinstance(tags["json"], list)
+        checks["tags"] = metadata_observation(
+            file_summary,
+            info["json"] if info["status"] == 200 else None,
+            tags["json"] if tags["status"] == 200 else None,
+            expected,
+        )
         expected_references = expected.get("references") or []
         if expected_references:
             reference_response = request("references", f"/api/file/{index}/references")
@@ -1185,6 +1328,12 @@ def probe_case(
             and isinstance(invalid["json"], dict)
             and isinstance(invalid["json"].get("error"), str)
         )
+        recovery = request("recovery_after_error", f"/api/file/{index}/info")
+        checks["recovery_after_error"] = {
+            "passed": recovery["status"] == 200 and isinstance(recovery["json"], dict),
+            "error_status": invalid["status"],
+            "recovery_status": recovery["status"],
+        }
         if has_pixels and frame_count > 0:
             display_first = request(
                 "display_first", f"/api/file/{index}/frame/0", ("x-cache",)
@@ -1269,6 +1418,23 @@ def probe_case(
                 and raw_second["headers"].get("x-cache") == "HIT"
             )
             checks["raw_headers"] = raw_header_observation(raw_first["headers"], image)
+            if entry["policy"]["classification"] == "controlled_unsupported":
+                expected_statuses = set(
+                    (entry["policy"].get("expected_unsupported") or {}).get("statuses", [])
+                )
+                unsupported_responses = [display_first, display_second, raw_first, raw_second]
+                checks["controlled_unsupported"] = {
+                    "passed": bool(expected_statuses)
+                    and all(response["status"] in expected_statuses for response in unsupported_responses)
+                    and all(
+                        isinstance(response.get("json"), dict)
+                        and response["json"].get("code") == "unsupported_transfer_syntax"
+                        and isinstance(response["json"].get("error"), str)
+                        for response in unsupported_responses
+                    ),
+                    "statuses": [response["status"] for response in unsupported_responses],
+                    "codes": [(response.get("json") or {}).get("code") for response in unsupported_responses],
+                }
             expected_hashes = pixel_data.get("frame_hashes") or []
             transfer_syntax = (expected.get("dicom") or {}).get("transfer_syntax_uid")
             if expected_hashes and transfer_syntax not in LOSSY_TRANSFER_SYNTAXES:
@@ -1349,7 +1515,9 @@ def _finish_result(
     statuses = [row["status"] for row in http.values()]
     controlled_gap = any(status == 422 for status in statuses)
     server_failure = any(status >= 500 for status in statuses)
-    required_checks = [checks.get("mapped_after_scan"), checks.get("file_info"), checks.get("tags")]
+    tags = checks.get("tags")
+    tags_passed = tags is True or isinstance(tags, dict) and tags.get("passed") is True
+    required_checks = [checks.get("mapped_after_scan"), checks.get("file_info"), tags_passed]
     if safety != "safe" or server_failure or not all(required_checks):
         compatibility = "failure"
     elif unprobed or controlled_gap:

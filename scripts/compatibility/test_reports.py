@@ -28,6 +28,11 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(evidence["presentation_checks"])
         self.assertEqual(evidence["normalized_display_hash"], {"passed": True})
 
+    def test_error_envelope_alone_is_not_recovery_evidence(self) -> None:
+        from scripts.compatibility.reports import assertion_evidence
+        evidence = assertion_evidence({"error_envelope": True})
+        self.assertIsNone(evidence["recovery_after_error"])
+
     def test_declared_semantic_assertions_require_concrete_evidence(self) -> None:
         worklist = {"suite": {"commit": "a"*40}, "inputs": {"policy_sha256": "b"*64, "manifests": [{"profile": "all", "sha256": "c"*64}]}, "files": [{"manifest_identity": {"profile": "all"}, "case_id": "derived/seg/x", "path": "x.dcm", "expected_contract": {"dicom": {}}, "policy": {"classification": "pixel_preview", "required_assertions": [], "semantic_context_assertions": ["segmentation_context"], "expected_unsupported": None, "rule_id": "seg"}}]}
         base = {"generated_at": "now", "viewer": {"version": "dcmview 1", "sha256": "d"*64, "binary": "/bin/dcmview"}, "run": {"started_at": "a", "completed_at": "b", "command": ["dcmview"], "timeouts_seconds": {"shard": 1}}, "artifacts": [], "results": [{"root": "all", "case_id": "derived/seg/x", "path": "x.dcm", "execution_safety": "safe", "observations": {}, "http": {}, "timings_ms": {"total": 1}, "errors": []}]}
