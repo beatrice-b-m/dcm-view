@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.compatibility.stress_runner import deterministic_frames
+from scripts.compatibility.stress_runner import cache_pressure_frames, deterministic_frames
 
 
 class StressRunnerTests(unittest.TestCase):
@@ -15,6 +15,10 @@ class StressRunnerTests(unittest.TestCase):
     def test_empty_and_single_frame_selections_do_not_duplicate(self) -> None:
         self.assertEqual(deterministic_frames("case", 0), [])
         self.assertEqual(deterministic_frames("case", 1), [0])
+
+    def test_cache_pressure_spans_frame_range_with_a_hard_request_cap(self) -> None:
+        self.assertEqual(cache_pressure_frames(1000, 4), [0, 333, 666, 999])
+        self.assertEqual(cache_pressure_frames(2, 16), [0, 1])
 
 
 if __name__ == "__main__": unittest.main()

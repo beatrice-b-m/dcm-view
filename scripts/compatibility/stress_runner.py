@@ -24,6 +24,13 @@ def deterministic_frames(case_id: str, count: int) -> list[int]:
     return list(dict.fromkeys(candidates))
 
 
+def cache_pressure_frames(count: int, limit: int) -> list[int]:
+    if count <= 0: return []
+    selected = min(count, limit)
+    if selected == 1: return [0]
+    return [(ordinal * (count - 1)) // (selected - 1) for ordinal in range(selected)]
+
+
 def request_frame(base_url: str, index: int, frame: int, args: argparse.Namespace) -> dict[str, Any]:
     return bounded_get(base_url, f"/api/file/{index}/frame/{frame}", args.request_timeout, args.max_response_bytes)
 
@@ -50,6 +57,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             frames = deterministic_frames(entry["case_id"], int(row.get("frame_count", 0))) if row.get("has_pixels") else []
             sequential = [request_frame(base_url, row["index"], frame, args) for frame in frames]
             cache_first = request_frame(base_url, row["index"], 0, args) if frames else None
+            pressure_frames = cache_pressure_frames(int(row.get("frame_count", 0)), args.cache_probe_frames) if frames else []
+            pressure = [request_frame(base_url, row["index"], frame, args) for frame in pressure_frames]
+            cache_after_pressure = request_frame(base_url, row["index"], 0, args) if frames else None
             same: list[dict[str, Any]] = []; different: list[dict[str, Any]] = []
             if frames:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
@@ -57,21 +67,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     different = list(pool.map(lambda frame: request_frame(base_url, row["index"], frame, args), (frames * args.concurrency)[:args.concurrency]))
             invalid = bounded_get(base_url, f"/api/file/{row['index']}/frame/{max(1, int(row.get('frame_count', 0)) + 1)}", args.request_timeout, args.max_response_bytes)
             recovery = bounded_get(base_url, f"/api/file/{row['index']}/tags", args.request_timeout, args.max_response_bytes)
-            statuses = [response["status"] for response in sequential + same + different]
+            statuses = [response["status"] for response in sequential + pressure + same + different]
             observation.update({
                 "frame_selection": frames, "first_and_random_frames": sequential,
-                "cache_repeat": cache_first, "concurrent_same_frame": same, "concurrent_different_frames": different,
+                "cache_repeat": cache_first, "cache_pressure_frames": pressure_frames, "cache_pressure": pressure,
+                "cache_after_pressure": cache_after_pressure, "concurrent_same_frame": same, "concurrent_different_frames": different,
                 "error_probe": invalid, "recovery_probe": recovery,
-                "cache_observed": sorted({response["headers"].get("x-cache") for response in sequential + ([cache_first] if cache_first else []) if response["headers"].get("x-cache")}),
+                "cache_observed": sorted({response["headers"].get("x-cache") for response in sequential + pressure + ([cache_first, cache_after_pressure] if cache_first and cache_after_pressure else []) if response["headers"].get("x-cache")}),
                 "passed": all(status == 200 for status in statuses) and recovery["status"] == 200 and invalid["status"] >= 400,
             }); results.append(observation)
     except Exception as caught:
         error = f"{type(caught).__name__}: {caught}"
     finally:
         peak_rss = rss.stop(); shutdown = process.shutdown(args.shutdown_timeout); logs = process.logs()
+    cancellation_process = BoundedProcess(command, viewer_root, args.max_output_bytes)
+    cancellation_started = time.monotonic()
+    cancellation = cancellation_process.shutdown(args.shutdown_timeout)
+    cancellation["requested_during_discovery"] = True
+    cancellation["total_elapsed_ms"] = round((time.monotonic() - cancellation_started) * 1000, 3)
     measurements = {
         "startup_ms": startup_ms, "discovery_ms": discovery_ms, "peak_rss_bytes": peak_rss,
-        "rss_supported": peak_rss is not None, "shutdown": shutdown,
+        "rss_supported": peak_rss is not None, "shutdown": shutdown, "cancellation": cancellation,
         "total_ms": round((time.monotonic() - started) * 1000, 3),
         "output_discarded_bytes": logs["stdout_discarded_bytes"] + logs["stderr_discarded_bytes"],
     }
@@ -79,10 +95,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     report = {
         "robustness_report_version": "1.0.0", "runner": "stress", "generated_at": utc_now(), "viewer": identity,
         "worklist": {"path": str(args.worklist.resolve()), "content_sha256": worklist["worklist_sha256"]},
-        "bounds": {name: getattr(args, name) for name in ("startup_timeout", "discovery_timeout", "request_timeout", "shutdown_timeout", "max_output_bytes", "max_response_bytes", "concurrency")},
+        "bounds": {name: getattr(args, name) for name in ("startup_timeout", "discovery_timeout", "request_timeout", "shutdown_timeout", "max_output_bytes", "max_response_bytes", "concurrency", "cache_probe_frames")},
         "threshold_policy": "recording_baselines_only", "qualification_contracts": scenarios,
         "measurements": measurements, "results": results, "campaign_error": error,
-        "assertions": {"stress_bounded_execution": complete, "stress_resource_measurements": startup_ms is not None and discovery_ms is not None, "server_recovers_after_error": bool(results) and all(row.get("recovery_probe", {}).get("status") == 200 for row in results)},
+        "assertions": {"stress_bounded_execution": complete and not cancellation["forced"], "stress_resource_measurements": startup_ms is not None and discovery_ms is not None, "server_recovers_after_error": bool(results) and all(row.get("recovery_probe", {}).get("status") == 200 for row in results)},
     }
     write_report(args.output, report); return report
 
@@ -92,8 +108,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--worklist", type=Path, required=True); parser.add_argument("--binary", type=Path, required=True); parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--startup-timeout", type=float, default=30.0); parser.add_argument("--discovery-timeout", type=float, default=120.0); parser.add_argument("--request-timeout", type=float, default=30.0); parser.add_argument("--shutdown-timeout", type=float, default=10.0)
     parser.add_argument("--max-output-bytes", type=int, default=4_194_304); parser.add_argument("--max-response-bytes", type=int, default=134_217_728); parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--cache-probe-frames", type=int, default=16)
     args = parser.parse_args(argv)
     if args.concurrency < 1 or args.concurrency > 32: parser.error("--concurrency must be between 1 and 32")
+    if args.cache_probe_frames < 1 or args.cache_probe_frames > 256: parser.error("--cache-probe-frames must be between 1 and 256")
     return args
 
 
