@@ -35,6 +35,40 @@ def request_frame(base_url: str, index: int, frame: int, args: argparse.Namespac
     return bounded_get(base_url, f"/api/file/{index}/frame/{frame}", args.request_timeout, args.max_response_bytes)
 
 
+def cancellation_probe(
+    process: BoundedProcess, args: argparse.Namespace
+) -> dict[str, Any]:
+    started = time.monotonic()
+    observed_incomplete = False
+    catalog_status = None
+    error = None
+    try:
+        base_url = process.wait_for_url(args.startup_timeout)
+        catalog = bounded_get(
+            base_url, "/api/files", args.request_timeout, args.max_response_bytes
+        )
+        catalog_status = catalog["status"]
+        observed_incomplete = (
+            catalog["status"] == 200
+            and isinstance(catalog.get("json"), dict)
+            and catalog["json"].get("scan_complete") is False
+        )
+        if not observed_incomplete:
+            error = "discovery completed before cancellation state was observed"
+    except Exception as caught:
+        error = f"{type(caught).__name__}: {caught}"
+    shutdown = process.shutdown(args.shutdown_timeout)
+    return {
+        **shutdown,
+        "startup_observed": catalog_status is not None,
+        "catalog_status": catalog_status,
+        "scan_incomplete_observed": observed_incomplete,
+        "requested_during_discovery": observed_incomplete,
+        "error": error,
+        "total_elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     worklist, entries = load_profile(args.worklist.resolve(), "stress_files", "stress")
     scenarios = worklist["models"].get("stress_scenarios", [])
@@ -81,10 +115,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     finally:
         peak_rss = rss.stop(); shutdown = process.shutdown(args.shutdown_timeout); logs = process.logs()
     cancellation_process = BoundedProcess(command, viewer_root, args.max_output_bytes)
-    cancellation_started = time.monotonic()
-    cancellation = cancellation_process.shutdown(args.shutdown_timeout)
-    cancellation["requested_during_discovery"] = True
-    cancellation["total_elapsed_ms"] = round((time.monotonic() - cancellation_started) * 1000, 3)
+    cancellation = cancellation_probe(cancellation_process, args)
     measurements = {
         "startup_ms": startup_ms, "discovery_ms": discovery_ms, "peak_rss_bytes": peak_rss,
         "rss_supported": peak_rss is not None, "shutdown": shutdown, "cancellation": cancellation,
@@ -98,7 +129,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "bounds": {name: getattr(args, name) for name in ("startup_timeout", "discovery_timeout", "request_timeout", "shutdown_timeout", "max_output_bytes", "max_response_bytes", "concurrency", "cache_probe_frames")},
         "threshold_policy": "recording_baselines_only", "qualification_contracts": scenarios,
         "measurements": measurements, "results": results, "campaign_error": error,
-        "assertions": {"stress_bounded_execution": complete and not cancellation["forced"], "stress_resource_measurements": startup_ms is not None and discovery_ms is not None, "server_recovers_after_error": bool(results) and all(row.get("recovery_probe", {}).get("status") == 200 for row in results)},
+        "assertions": {"stress_bounded_execution": complete and cancellation["scan_incomplete_observed"] and not cancellation["forced"], "stress_resource_measurements": startup_ms is not None and discovery_ms is not None, "server_recovers_after_error": bool(results) and all(row.get("recovery_probe", {}).get("status") == 200 for row in results)},
     }
     write_report(args.output, report); return report
 
