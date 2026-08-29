@@ -154,9 +154,21 @@ pub fn resolve_reference_edges(
     edges
         .iter()
         .map(|edge| {
-            let mut matches = candidates
+            let matching_candidates = candidates
                 .iter()
                 .filter(|candidate| reference_matches_candidate(&edge.target, candidate))
+                .collect::<Vec<_>>();
+            let mut target = edge.target.clone();
+            if let [candidate] = matching_candidates.as_slice() {
+                target
+                    .sop_class_uid
+                    .get_or_insert_with(|| candidate.sop_class_uid.clone());
+                target
+                    .series_instance_uid
+                    .get_or_insert_with(|| candidate.series_instance_uid.clone());
+            }
+            let mut matches = matching_candidates
+                .into_iter()
                 .map(|candidate| ReferenceMatch {
                     file_index: candidate.file_index,
                     path: candidate.path.clone(),
@@ -174,7 +186,7 @@ pub fn resolve_reference_edges(
             });
             ResolvedReferenceEdge {
                 relationship: edge.relationship,
-                target: edge.target.clone(),
+                target,
                 matches,
             }
         })
@@ -697,6 +709,36 @@ mod tests {
             Some("1.2.3.series")
         );
         assert_eq!(edges[0].target.frame_numbers, [1, 2]);
+    }
+
+    #[test]
+    fn presentation_state_retains_nested_frame_numbers() {
+        let uid = "1.2.3.5";
+        let referenced_series = item([
+            DataElement::new(tags::SERIES_INSTANCE_UID, VR::UI, "1.2.3.series"),
+            DataElement::new(
+                Tag(0x0008, 0x1140),
+                VR::SQ,
+                DataSetSequence::from(vec![referenced(uid, &["1", "2"])]),
+            ),
+        ]);
+        let object = item([
+            DataElement::new(tags::SOP_CLASS_UID, VR::UI, "1.2.840.10008.5.1.4.1.1.11.1"),
+            DataElement::new(
+                Tag(0x0008, 0x1115),
+                VR::SQ,
+                DataSetSequence::from(vec![referenced_series]),
+            ),
+        ]);
+
+        let edges = extract_reference_edges_from_object(&object);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].target.sop_instance_uid.as_deref(), Some(uid));
+        assert_eq!(edges[0].target.frame_numbers, [1, 2]);
+        assert_eq!(
+            edges[0].target.series_instance_uid.as_deref(),
+            Some("1.2.3.series")
+        );
     }
 
     #[test]
