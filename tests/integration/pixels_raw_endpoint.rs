@@ -265,8 +265,8 @@ async fn raw_endpoint_returns_422_for_multicomponent_jpeg2000() {
 
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("raw-rgb-jp2.dcm");
-    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.91", vec![rgb_jp2]);
-    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.4.91", 1);
+    support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.90", vec![rgb_jp2]);
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.4.90", 1);
     entry.samples_per_pixel = 3;
     entry.photometric_interpretation = "RGB".to_string();
     let test_server = TestServer::new(server::router(support::app_state(vec![entry])));
