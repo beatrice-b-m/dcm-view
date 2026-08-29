@@ -5,7 +5,9 @@ use crate::types::{
     SeriesMetadata,
 };
 use anyhow::{anyhow, Context, Result};
+use dicom_core::header::HasLength;
 use dicom_dictionary_std::{tags, uids};
+use dicom_encoding::text::SpecificCharacterSet;
 use dicom_object::OpenFileOptions;
 use rayon::prelude::*;
 use std::fs::File;
@@ -579,6 +581,9 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         Ok(obj) => obj,
         Err(_) => return Ok(EntryInspection::Skipped(DiscoveryReason::DicomParseFailed)),
     };
+    if !valid_discovery_structure(&obj) {
+        return Ok(EntryInspection::Skipped(DiscoveryReason::DicomParseFailed));
+    }
 
     let transfer_syntax_uid = obj.meta().transfer_syntax().to_string();
     let patient_id = read_str(&obj, "PatientID").unwrap_or_default();
@@ -739,6 +744,32 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
         transfer_syntax_uid,
         default_window,
     })))
+}
+
+fn valid_discovery_structure(object: &dicom_object::DefaultDicomObject) -> bool {
+    let character_set_valid = object
+        .element(tags::SPECIFIC_CHARACTER_SET)
+        .ok()
+        .and_then(|element| element.to_str().ok())
+        .map(|value| {
+            let value = value.trim();
+            value.is_empty() || SpecificCharacterSet::from_code(value).is_some()
+        })
+        .unwrap_or(true);
+    character_set_valid && !has_odd_defined_item_length(object)
+}
+
+fn has_odd_defined_item_length(
+    object: &dicom_object::InMemDicomObject<dicom_dictionary_std::StandardDataDictionary>,
+) -> bool {
+    object.iter().any(|element| {
+        element.items().is_some_and(|items| {
+            items.iter().any(|item| {
+                item.length().get().is_some_and(|length| length % 2 != 0)
+                    || has_odd_defined_item_length(item)
+            })
+        })
+    })
 }
 
 fn read_discovery_metadata(path: &Path) -> Result<dicom_object::DefaultDicomObject> {

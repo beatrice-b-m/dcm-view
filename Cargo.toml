@@ -22,6 +22,7 @@ remote-fixtures = ["dep:dicom-test-files"]
 # DICOM
 dicom-object = "0.9.1"
 dicom-core = "0.9.1"
+dicom-encoding = "0.9.1"
 dicom-dictionary-std = "0.9"
 dicom-pixeldata = { version = "0.9.1", features = ["charls", "image", "jpegxl", "native", "openjp2"] }
 

@@ -587,6 +587,7 @@ dependencies = [
  "csv",
  "dicom-core",
  "dicom-dictionary-std",
+ "dicom-encoding",
  "dicom-object",
  "dicom-pixeldata",
  "dicom-test-files",
