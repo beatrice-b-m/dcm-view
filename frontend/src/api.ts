@@ -15,6 +15,7 @@ import type {
 	TagNode,
 	TagQuery,
 	WindowMode,
+	WsiFrameContextResponse,
 } from "./generated/api-types";
 import {
 	API_ENDPOINTS,
@@ -61,6 +62,9 @@ export type {
 	TagValue,
 	WindowMode,
 	WindowPreset,
+	WsiFrameContextResponse,
+	WsiTileRectangle,
+	WsiTotalPixelMatrix,
 } from "./generated/api-types";
 export type { RawFrame } from "./rawFrame";
 
@@ -120,6 +124,13 @@ export function fetchReferences(fileIndex: number): Promise<ReferenceCatalogResp
 
 export function fetchSemanticContext(fileIndex: number): Promise<SemanticContextResponse> {
 	return requestJsonEndpoint("fileSemanticContext", { index: fileIndex });
+}
+
+export function fetchWsiFrameContext(
+	fileIndex: number,
+	frame: number,
+): Promise<WsiFrameContextResponse> {
+	return requestJsonEndpoint("fileWsiContext", { index: fileIndex, frame });
 }
 
 export function fetchFrameInfo(fileIndex: number): Promise<FrameInfo> {

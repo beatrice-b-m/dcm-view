@@ -19,6 +19,7 @@
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
+	import WsiTileContext from "./lib/WsiTileContext.svelte";
 	import type { CineDirection, CineMode } from "./lib/cinePlayback";
 	import { indexFilesById, resolveFilesById } from "./lib/fileRegistry";
 	import { focusTrapTarget } from "./lib/focusTrap";
@@ -726,6 +727,9 @@
 						onopenreference={openReferenceTarget}
 					/>
 					<SemanticContextPanel fileIndex={activeFile.index} {currentFrame} />
+					{#if activeFile.object_kind === "whole_slide_microscopy"}
+						<WsiTileContext fileIndex={activeFile.index} frame={currentFrame} />
+					{/if}
 					<ImageViewport
 						{activeFile}
 						bind:currentFrame
