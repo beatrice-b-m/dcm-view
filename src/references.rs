@@ -166,7 +166,10 @@ pub fn resolve_reference_edges(
                 target
                     .series_instance_uid
                     .get_or_insert_with(|| candidate.series_instance_uid.clone());
-                if target.frame_numbers.is_empty() {
+                if edge.relationship == ReferenceRelationship::SourceImage
+                    && target.frame_numbers.is_empty()
+                    && candidate.frame_count > 1
+                {
                     target.frame_numbers = (1..=candidate.frame_count).collect();
                 }
             }
