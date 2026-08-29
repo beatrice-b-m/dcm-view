@@ -612,13 +612,19 @@ mod tests {
     fn per_frame_segment_number_overrides_shared_functional_group() {
         let per_frame = group(2);
         let shared = group(1);
-        assert_eq!(referenced_segment_number(&per_frame, Some(&shared)), Some(2));
+        assert_eq!(
+            referenced_segment_number(&per_frame, Some(&shared)),
+            Some(2)
+        );
     }
 
     #[test]
     fn shared_segment_number_applies_when_per_frame_group_omits_it() {
         let per_frame = InMemDicomObject::new_empty();
         let shared = group(1);
-        assert_eq!(referenced_segment_number(&per_frame, Some(&shared)), Some(1));
+        assert_eq!(
+            referenced_segment_number(&per_frame, Some(&shared)),
+            Some(1)
+        );
     }
 }

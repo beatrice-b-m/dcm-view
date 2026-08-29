@@ -533,15 +533,9 @@ mod tests {
         .expect("discover prepared RLE CR");
         let file = report.files.pop().expect("prepared RLE CR file entry");
 
-        let display = super::decode_rle_to_png(
-            file,
-            0,
-            None,
-            None,
-            WindowMode::Default,
-        )
-        .await
-        .expect("render prepared RLE CR");
+        let display = super::decode_rle_to_png(file, 0, None, None, WindowMode::Default)
+            .await
+            .expect("render prepared RLE CR");
         let pixels = image::load_from_memory(&display)
             .expect("decode prepared RLE PNG")
             .to_luma8()
