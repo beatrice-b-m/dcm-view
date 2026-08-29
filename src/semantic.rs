@@ -101,15 +101,16 @@ fn segmentation_context(
         .collect::<Vec<_>>();
 
     let mut frame_mappings = Vec::new();
+    let shared_group = sequence_items(object, tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)
+        .into_iter()
+        .next();
     for (frame_index, frame_group) in
         sequence_items(object, tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
             .into_iter()
             .take(source.frame_count as usize)
             .enumerate()
     {
-        let segment_number = sequence_items(frame_group, tags::SEGMENT_IDENTIFICATION_SEQUENCE)
-            .first()
-            .and_then(|item| read_number(item, tags::REFERENCED_SEGMENT_NUMBER));
+        let segment_number = referenced_segment_number(frame_group, shared_group);
         let source_item = sequence_items(frame_group, tags::DERIVATION_IMAGE_SEQUENCE)
             .into_iter()
             .flat_map(|item| sequence_items(item, tags::SOURCE_IMAGE_SEQUENCE))
@@ -163,6 +164,20 @@ fn segmentation_context(
         references: resolved.iter().map(reference_summary).collect(),
         overlay,
     }
+}
+
+fn referenced_segment_number(
+    frame_group: &InMemDicomObject<StandardDataDictionary>,
+    shared_group: Option<&InMemDicomObject<StandardDataDictionary>>,
+) -> Option<u16> {
+    [Some(frame_group), shared_group]
+        .into_iter()
+        .flatten()
+        .find_map(|group| {
+            sequence_items(group, tags::SEGMENT_IDENTIFICATION_SEQUENCE)
+                .first()
+                .and_then(|item| read_number(item, tags::REFERENCED_SEGMENT_NUMBER))
+        })
 }
 
 fn segmentation_overlay(
@@ -571,4 +586,39 @@ fn fixed_numbers<const N: usize>(
     tag: Tag,
 ) -> Option<[f64; N]> {
     read_numbers::<f64>(object, tag).try_into().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::referenced_segment_number;
+    use dicom_core::{value::DataSetSequence, DataElement, PrimitiveValue, VR};
+    use dicom_dictionary_std::tags;
+    use dicom_object::InMemDicomObject;
+
+    fn group(segment_number: u16) -> InMemDicomObject {
+        let identification = InMemDicomObject::from_element_iter([DataElement::new(
+            tags::REFERENCED_SEGMENT_NUMBER,
+            VR::US,
+            PrimitiveValue::U16(vec![segment_number].into()),
+        )]);
+        InMemDicomObject::from_element_iter([DataElement::new(
+            tags::SEGMENT_IDENTIFICATION_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![identification]),
+        )])
+    }
+
+    #[test]
+    fn per_frame_segment_number_overrides_shared_functional_group() {
+        let per_frame = group(2);
+        let shared = group(1);
+        assert_eq!(referenced_segment_number(&per_frame, Some(&shared)), Some(2));
+    }
+
+    #[test]
+    fn shared_segment_number_applies_when_per_frame_group_omits_it() {
+        let per_frame = InMemDicomObject::new_empty();
+        let shared = group(1);
+        assert_eq!(referenced_segment_number(&per_frame, Some(&shared)), Some(1));
+    }
 }
