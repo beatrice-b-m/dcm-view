@@ -204,10 +204,25 @@ The embedded browser viewer includes:
   presets.
 - Multi-frame controls with previous/next, cine playback, FPS selection, loop,
   and sweep.
+- Study and directory navigation with typed links between locally resolved
+  referenced objects and frames.
+- Default pixel preview plus opt-in declared semantic context for SEG,
+  Parametric Map, and RT Dose. Semantic panels preserve stored pixel display,
+  identify missing or incompatible geometry, and do not claim clinical
+  interpretation.
+- Positioned single-tile WSI inspection with matrix, row/column, optical-path,
+  focal-plane, and minimap context. Tiles are not stitched and the Total Pixel
+  Matrix is not reconstructed.
 - Lazy DICOM tag browsing with filtering, sequence expansion, binary length
   display, resizable columns, and click-to-copy values.
 - Rectangular ROI annotation display and editing, including draw, select, move,
   resize, delete, frame scoping, and CSV export.
+
+DICOMDIR inputs are recognized and skipped with a stable unsupported-media
+reason while recursive discovery continues for ordinary DICOM objects. The
+viewer does not parse the DICOM file-set hierarchy or advertise DICOM media
+support. Unsupported transfer syntaxes and out-of-scope object classes remain
+request- or object-scoped so a failure does not poison later viewing.
 
 Common shortcuts:
 
