@@ -253,6 +253,40 @@ jobs:
         with:
           packages-dir: python-dist
 
+  publish-open-vsx:
+    if: vars.PUBLISH_OPEN_VSX == '1'
+    needs: release
+    runs-on: ubuntu-22.04
+    environment:
+      name: open-vsx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: vscode/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: vscode-vsix
+          path: open-vsx-dist
+      - name: Install Open VSX publisher dependencies
+        run: npm --prefix vscode ci
+      - name: Publish target-specific VSIX artifacts to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OPEN_VSX_PAT }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          package_dir="$PWD/open-vsx-dist"
+
+          for target in linux-x64 darwin-x64 darwin-arm64 win32-x64; do
+            vsix="$package_dir/dcmview-${version}-${target}.vsix"
+            test -f "$vsix"
+            npm --prefix vscode exec -- ovsx publish "$vsix" --skip-duplicate
+          done
+
   publish-homebrew-tap:
     if: vars.HOMEBREW_TAP_REPOSITORY != ''
     needs: release
