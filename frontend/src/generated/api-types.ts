@@ -386,6 +386,8 @@ export interface FileSummary {
 	object_kind: string;
 	support_state: SupportState;
 	support_reason: string | null;
+	raw_windowing_compatible: boolean;
+	raw_windowing_reason: string | null;
 	has_pixels: boolean;
 	frame_count: number;
 	rows: number;
