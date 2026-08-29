@@ -40,12 +40,11 @@ def assertion_evidence(observations: dict[str, Any]) -> dict[str, Any]:
 def _status(result: dict[str, Any], policy: dict[str, Any], assertions: list[dict[str, Any]]) -> str:
     if result.get("execution_safety") == "crash": return "crash"
     if result.get("execution_safety") == "timeout": return "timeout"
+    if any(row["status"] != "passed" for row in assertions): return "failed"
     statuses = [row.get("status") for row in result.get("http", {}).values() if isinstance(row, dict)]
     if policy["classification"] == "controlled_unsupported":
         expected = set((policy.get("expected_unsupported") or {}).get("statuses", []))
         return "expected_unsupported" if any(status in expected for status in statuses) else "unexpected_unsupported"
-    if any(row["status"] == "failed" for row in assertions): return "failed"
-    if any(row.get("scope") == "semantic_context" and row["status"] == "not_applicable" for row in assertions): return "failed"
     return "passed"
 
 def build_evidence_report(base: dict[str, Any], worklist: dict[str, Any], viewer_commit: str, build_features: list[str]) -> dict[str, Any]:

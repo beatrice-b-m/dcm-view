@@ -91,14 +91,23 @@ def evaluate(assertion_id: str, evidence: dict[str, Any]) -> dict[str, Any]:
     observed = {key: evidence.get(key) for key in spec.evidence_keys}
     available = [value for value in observed.values() if value is not None]
     if not available:
-        status = "not_applicable"
+        status = "failed"
     else:
         status = "passed" if all(assertion_passed(value) for value in available) else "failed"
     return {"assertion": assertion_id, "dimension": spec.dimension, "status": status, "evidence": observed}
 
 
 def validate_registry(policy: dict[str, Any], manifest_rows: list[dict[str, Any]]) -> None:
-    referenced = {assertion for rule in policy["rules"] for key in ("required_assertions", "semantic_context_assertions") for assertion in rule[key]}
+    referenced = {
+        assertion
+        for rule in policy["rules"]
+        for key in (
+            "required_assertions",
+            "conditional_assertions",
+            "semantic_context_assertions",
+        )
+        for assertion in rule.get(key, [])
+    }
     missing_assertions = referenced - set(ASSERTIONS)
     if missing_assertions:
         raise ValueError(f"policy references unknown assertions: {sorted(missing_assertions)}")

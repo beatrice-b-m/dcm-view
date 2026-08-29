@@ -35,7 +35,8 @@ def load_policy(path: Path = DEFAULT_POLICY) -> dict[str, Any]:
     ids: set[str] = set()
     for rule in rules:
         required = {"id", "precedence", "match", "classification", "required_assertions", "semantic_context_assertions", "expected_unsupported", "rationale", "exclusions"}
-        if not isinstance(rule, dict) or set(rule) - required or not required <= set(rule):
+        allowed = required | {"conditional_assertions"}
+        if not isinstance(rule, dict) or set(rule) - allowed or not required <= set(rule):
             raise PolicyError("policy rule does not conform to the versioned schema")
         if rule["id"] in ids or rule["classification"] not in CLASSIFICATIONS:
             raise PolicyError(f"duplicate rule or invalid classification: {rule.get('id')}")

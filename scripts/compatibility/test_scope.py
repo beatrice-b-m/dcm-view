@@ -2,12 +2,23 @@ from __future__ import annotations
 import hashlib, json, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
-from scripts.compatibility.scope import ScopeError, build_worklist, load_worklist, write_immutable_json
+from scripts.compatibility.scope import ScopeError, applicable_assertions, build_worklist, load_worklist, write_immutable_json
 
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value), encoding="utf-8")
 
 class ScopeTests(unittest.TestCase):
+    def test_selects_only_capability_backed_conditional_assertions(self) -> None:
+        rule = {
+            "required_assertions": ["discovery_identity"],
+            "conditional_assertions": ["frame_navigation", "reference_closure"],
+        }
+        entry = {"expected_capabilities": ["navigate_multiframe"]}
+        self.assertEqual(
+            applicable_assertions(rule, entry),
+            ["discovery_identity", "frame_navigation"],
+        )
+
     def fixture(self, profile: str = "all", *, sop_uid: bool = True) -> tuple[Path, Path, Path]:
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup); base = Path(temporary.name); suite = base / "suite"; root = base / profile
         payload = b"dicom"; path = root / "case/a.dcm"; path.parent.mkdir(parents=True); path.write_bytes(payload)

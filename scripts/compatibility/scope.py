@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from scripts.compatibility.assertions import CAPABILITY_ASSERTIONS
     from scripts.compatibility.corpus import DEFAULT_LOCK, CorpusError, load_json, sha256_file, verify_manifest, verify_suite
     from scripts.compatibility.policy import DEFAULT_POLICY, load_policy, policy_sha256, resolve
 except ModuleNotFoundError:
+    from assertions import CAPABILITY_ASSERTIONS  # type: ignore[no-redef]
     from corpus import DEFAULT_LOCK, CorpusError, load_json, sha256_file, verify_manifest, verify_suite  # type: ignore[no-redef]
     from policy import DEFAULT_POLICY, load_policy, policy_sha256, resolve  # type: ignore[no-redef]
 
@@ -34,6 +36,21 @@ def expected_contract(file_entry: dict[str, Any]) -> dict[str, Any]:
 
 def contract_sha256(file_entry: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(expected_contract(file_entry))).hexdigest()
+
+def applicable_assertions(rule: dict[str, Any], entry: dict[str, Any]) -> list[str]:
+    declared = set(entry.get("expected_capabilities") or [])
+    conditional = {
+        CAPABILITY_ASSERTIONS[capability]
+        for capability in declared
+        if capability in CAPABILITY_ASSERTIONS
+    }
+    selected = list(rule["required_assertions"])
+    selected.extend(
+        assertion
+        for assertion in rule.get("conditional_assertions", [])
+        if assertion in conditional
+    )
+    return list(dict.fromkeys(selected))
 
 def _file_row(profile: str, root: Path, manifest_sha256: str, entry: dict[str, Any]) -> dict[str, Any]:
     relative, case_id, declared_hash = entry.get("path"), entry.get("case_id"), entry.get("sha256")
@@ -85,7 +102,7 @@ def build_worklist(suite_root: Path, profile_roots: dict[str, Path], *, lock_pat
                     raise ScopeError(f"duplicate manifest identity has conflicting contract: {profile}:{row['path']}")
                 continue
             seen[key] = content; rule = resolve(policy, entry, profile)
-            row["policy"] = {"rule_id": rule["id"], "classification": rule["classification"], "required_assertions": rule["required_assertions"],
+            row["policy"] = {"rule_id": rule["id"], "classification": rule["classification"], "required_assertions": applicable_assertions(rule, entry),
                              "semantic_context_assertions": rule["semantic_context_assertions"], "expected_unsupported": rule["expected_unsupported"]}
             files.append(row)
         for entry in manifest.get("qualifications", []):

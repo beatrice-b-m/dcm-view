@@ -19,6 +19,7 @@
         "match": {"type": "object"},
         "classification": {"type": "string"},
         "required_assertions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "conditional_assertions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "semantic_context_assertions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
         "expected_unsupported": {"type": ["object", "null"]},
         "rationale": {"type": "string"}, "exclusions": {"type": "array", "items": {"type": "string"}}

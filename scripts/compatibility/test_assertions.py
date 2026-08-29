@@ -12,6 +12,7 @@ class AssertionRegistryTests(unittest.TestCase):
     def test_evaluator_requires_concrete_evidence(self) -> None:
         self.assertEqual(evaluate("cache_miss_hit", {"display_cache": True, "raw_cache": True})["status"], "passed")
         self.assertEqual(evaluate("cache_miss_hit", {"display_cache": False})["status"], "failed")
+        self.assertEqual(evaluate("cache_miss_hit", {})["status"], "failed")
     def test_registry_has_no_known_gap_assertion(self) -> None:
         self.assertNotIn("known_gap", ASSERTIONS)
 

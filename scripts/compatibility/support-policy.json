@@ -54,18 +54,18 @@
     {
       "id": "metadata_reference_objects", "precedence": 800,
       "match": {"sop_class_uids": ["1.2.840.10008.5.1.4.1.1.66.1", "1.2.840.10008.5.1.4.1.1.66.3", "1.2.840.10008.5.1.4.1.1.67", "1.2.840.10008.5.1.4.1.1.11.1", "1.2.840.10008.5.1.4.1.1.11.2", "1.2.840.10008.5.1.4.1.1.11.4", "1.2.840.10008.5.1.4.1.1.11.8", "1.2.840.10008.5.1.4.1.1.88.11", "1.2.840.10008.5.1.4.1.1.88.33", "1.2.840.10008.5.1.4.1.1.88.34", "1.2.840.10008.5.1.4.1.1.88.59", "1.2.840.10008.5.1.4.1.1.9.1.1", "1.2.840.10008.5.1.4.1.1.9.1.2", "1.2.840.10008.5.1.4.1.1.481.1", "1.2.840.10008.5.1.4.1.1.481.3", "1.2.840.10008.5.1.4.1.1.481.5", "1.2.840.10008.5.1.4.1.1.481.12", "1.2.840.10008.5.1.4.1.1.481.13", "1.2.840.10008.5.1.4.1.1.104.1", "1.2.840.10008.5.1.4.1.1.104.3"]},
-      "classification": "metadata_reference_navigation", "required_assertions": ["discovery_identity", "metadata_exact", "reference_closure", "no_misleading_renderer"], "semantic_context_assertions": [], "expected_unsupported": null,
+      "classification": "metadata_reference_navigation", "required_assertions": ["discovery_identity", "metadata_exact", "no_misleading_renderer"], "conditional_assertions": ["reference_closure"], "semantic_context_assertions": [], "expected_unsupported": null,
       "rationale": "Non-image and dedicated semantic objects remain navigable without claiming a renderer.", "exclusions": ["waveform display", "presentation-state application", "registration transforms", "SR interpretation", "document or mesh rendering", "RT planning interpretation"]
     },
     {
       "id": "qualified_generic_images", "precedence": 100, "match": {"profiles": ["all", "legacy"], "has_image": true},
-      "classification": "pixel_faithful_interactive", "required_assertions": ["discovery_identity", "metadata_exact", "raw_lossless_all_frames", "lossy_numeric_thresholds", "display_normalized_pixels", "presentation_pipeline", "frame_navigation", "series_geometry", "reference_closure", "cache_miss_hit", "server_recovers_after_error"],
+      "classification": "pixel_faithful_interactive", "required_assertions": ["discovery_identity", "metadata_exact", "display_normalized_pixels", "cache_miss_hit", "server_recovers_after_error"], "conditional_assertions": ["raw_lossless_all_frames", "lossy_numeric_thresholds", "presentation_pipeline", "frame_navigation", "series_geometry", "reference_closure"],
       "semantic_context_assertions": [], "expected_unsupported": null,
       "rationale": "Classic, enhanced, VL, and ordinary multiframe image families use assertion-backed generic inspection.", "exclusions": ["advanced enhanced dimensions", "clinical diagnostic fidelity beyond declared presentation assertions"]
     },
     {
       "id": "remaining_valid_metadata", "precedence": 10, "match": {"profiles": ["all", "legacy"], "has_image": false},
-      "classification": "metadata_reference_navigation", "required_assertions": ["discovery_identity", "metadata_exact", "reference_closure", "no_misleading_renderer"], "semantic_context_assertions": [], "expected_unsupported": null,
+      "classification": "metadata_reference_navigation", "required_assertions": ["discovery_identity", "metadata_exact", "no_misleading_renderer"], "conditional_assertions": ["reference_closure"], "semantic_context_assertions": [], "expected_unsupported": null,
       "rationale": "Valid local instances without an image contract remain available for tags and reference navigation.", "exclusions": ["renderer inference from SOP recognition"]
     }
   ]
