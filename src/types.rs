@@ -122,6 +122,7 @@ pub struct SeriesMetadata {
     pub image_orientation_patient: Option<PatientOrientation>,
     pub frame_image_positions_patient: Vec<Option<PatientPosition>>,
     pub frame_image_orientations_patient: Vec<Option<PatientOrientation>>,
+    pub frame_pixel_spacings: Vec<Option<[f64; 2]>>,
     pub concatenation_uid: Option<String>,
     pub in_concatenation_number: Option<u32>,
     pub in_concatenation_total_number: Option<u32>,
@@ -154,6 +155,14 @@ impl FileEntry {
         frame_geometry_value(
             &self.series_metadata.frame_image_orientations_patient,
             self.series_metadata.image_orientation_patient,
+            frame,
+        )
+    }
+
+    pub fn frame_pixel_spacing(&self, frame: u32) -> Option<[f64; 2]> {
+        frame_geometry_value(
+            &self.series_metadata.frame_pixel_spacings,
+            self.series_metadata.native_pixel.pixel_spacing,
             frame,
         )
     }

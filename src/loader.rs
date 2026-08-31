@@ -607,13 +607,19 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let frame_of_reference_uid = read_str(&obj, "FrameOfReferenceUID").unwrap_or_default();
     let image_position_patient = read_exact_f64s(&obj, "ImagePositionPatient");
     let image_orientation_patient = read_exact_f64s(&obj, "ImageOrientationPatient");
-    let (frame_image_positions_patient, frame_image_orientations_patient) =
-        read_frame_patient_geometry(
-            &obj,
-            frame_count,
-            image_position_patient,
-            image_orientation_patient,
-        );
+    let top_level_pixel_spacing = read_positive_f64_pair(&obj, "PixelSpacing");
+    let (
+        frame_image_positions_patient,
+        frame_image_orientations_patient,
+        frame_pixel_spacings,
+        shared_pixel_spacing,
+    ) = read_frame_patient_geometry(
+        &obj,
+        frame_count,
+        image_position_patient,
+        image_orientation_patient,
+        top_level_pixel_spacing,
+    );
     let concatenation_uid = read_str(&obj, "ConcatenationUID");
     let in_concatenation_number = read_u32(&obj, "InConcatenationNumber");
     let in_concatenation_total_number = read_u32(&obj, "InConcatenationTotalNumber");
@@ -650,7 +656,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
     let planar_configuration = read_u32(&obj, "PlanarConfiguration");
     let bits_stored = read_u32(&obj, "BitsStored");
     let high_bit = read_u32(&obj, "HighBit");
-    let pixel_spacing = read_positive_f64_pair(&obj, "PixelSpacing");
+    let pixel_spacing = top_level_pixel_spacing.or(shared_pixel_spacing);
     let pixel_aspect_ratio = read_positive_u32_pair(&obj, "PixelAspectRatio");
     let normalized_pixel_aspect = normalize_pixel_aspect(pixel_spacing, pixel_aspect_ratio);
     let modality_lut = read_lut_sequence(&obj, tags::MODALITY_LUT_SEQUENCE);
@@ -713,6 +719,7 @@ fn build_entry(path: &Path) -> Result<EntryInspection> {
             image_orientation_patient,
             frame_image_positions_patient,
             frame_image_orientations_patient,
+            frame_pixel_spacings,
             concatenation_uid,
             in_concatenation_number,
             in_concatenation_total_number,
@@ -1169,9 +1176,12 @@ fn read_frame_patient_geometry(
     frame_count: u32,
     top_level_position: Option<PatientPosition>,
     top_level_orientation: Option<PatientOrientation>,
+    top_level_pixel_spacing: Option<[f64; 2]>,
 ) -> (
     Vec<Option<PatientPosition>>,
     Vec<Option<PatientOrientation>>,
+    Vec<Option<[f64; 2]>>,
+    Option<[f64; 2]>,
 ) {
     let shared_orientation = obj
         .element(tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)
@@ -1185,18 +1195,28 @@ fn read_frame_patient_geometry(
                 tags::IMAGE_ORIENTATION_PATIENT,
             )
         });
+    let shared_pixel_spacing = obj
+        .element(tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)
+        .ok()
+        .and_then(|element| element.items())
+        .and_then(|items| items.first())
+        .and_then(|item| {
+            read_nested_exact_f64s(item, tags::PIXEL_MEASURES_SEQUENCE, tags::PIXEL_SPACING)
+        })
+        .filter(|values: &[f64; 2]| values.iter().all(|value| value.is_finite() && *value > 0.0));
     let per_frame_items = obj
         .element(tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
         .ok()
         .and_then(|element| element.items());
 
     if per_frame_items.is_none() && shared_orientation.is_none() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), shared_pixel_spacing);
     }
 
     let frame_count = frame_count as usize;
     let mut positions = Vec::with_capacity(frame_count);
     let mut orientations = Vec::with_capacity(frame_count);
+    let mut pixel_spacings = Vec::with_capacity(frame_count);
     for frame_index in 0..frame_count {
         let frame_item = per_frame_items.and_then(|items| items.get(frame_index));
         positions.push(
@@ -1222,8 +1242,24 @@ fn read_frame_patient_geometry(
                 .or(shared_orientation)
                 .or(top_level_orientation),
         );
+        pixel_spacings.push(
+            frame_item
+                .and_then(|item| {
+                    read_nested_exact_f64s(item, tags::PIXEL_MEASURES_SEQUENCE, tags::PIXEL_SPACING)
+                })
+                .filter(|values: &[f64; 2]| {
+                    values.iter().all(|value| value.is_finite() && *value > 0.0)
+                })
+                .or(shared_pixel_spacing)
+                .or(top_level_pixel_spacing),
+        );
     }
-    (positions, orientations)
+    (
+        positions,
+        orientations,
+        pixel_spacings,
+        shared_pixel_spacing,
+    )
 }
 
 fn read_nested_exact_f64s<const N: usize>(
@@ -1338,6 +1374,10 @@ mod tests {
                 Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 Some([0.0, 1.0, 0.0, 1.0, 0.0, 0.0]),
             ]
+        );
+        assert_eq!(
+            metadata.frame_pixel_spacings,
+            vec![Some([0.6, 0.3]), Some([0.6, 0.3])]
         );
         assert_eq!(metadata.concatenation_uid.as_deref(), Some("2.25.500"));
         assert_eq!(metadata.in_concatenation_number, Some(1));
@@ -1789,11 +1829,18 @@ mod tests {
     }
 
     fn write_series_identity_fixture(path: &std::path::Path) {
-        let shared_orientation = nested_sequence_item(
+        let mut shared_orientation = nested_sequence_item(
             tags::PLANE_ORIENTATION_SEQUENCE,
             tags::IMAGE_ORIENTATION_PATIENT,
             "1\\0\\0\\0\\1\\0",
         );
+        shared_orientation.put(DataElement::new(
+            tags::PIXEL_MEASURES_SEQUENCE,
+            VR::SQ,
+            DataSetSequence::from(vec![InMemDicomObject::from_element_iter([
+                DataElement::new(tags::PIXEL_SPACING, VR::DS, "0.6\\0.3"),
+            ])]),
+        ));
         let frame_one = nested_sequence_item(
             tags::PLANE_POSITION_SEQUENCE,
             tags::IMAGE_POSITION_PATIENT,
@@ -1851,7 +1898,6 @@ mod tests {
                 VR::US,
                 PrimitiveValue::from(0_u16),
             ),
-            DataElement::new(tags::PIXEL_SPACING, VR::DS, "0.6\\0.3"),
             DataElement::new(tags::PIXEL_ASPECT_RATIO, VR::IS, "3\\1"),
             DataElement::new(tags::FRAME_OF_REFERENCE_UID, VR::UI, "2.25.400"),
             DataElement::new(tags::IMAGE_POSITION_PATIENT, VR::DS, "10\\20\\30"),

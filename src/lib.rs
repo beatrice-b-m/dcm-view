@@ -1,5 +1,6 @@
 pub mod annotations;
 pub mod api;
+pub mod geometry;
 pub mod loader;
 pub mod object_kind;
 pub mod pixels;
