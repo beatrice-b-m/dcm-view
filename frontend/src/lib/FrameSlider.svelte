@@ -87,6 +87,15 @@
 
 {#if totalFrames > 1}
 	<div class="slider">
+		<input
+			type="range"
+			hidden
+			data-capture-position
+			min="0"
+			max={Math.max(0, totalFrames - 1)}
+			value={currentPosition}
+			oninput={(event) => onpositionchange(Number(event.currentTarget.value))}
+		/>
 		<button type="button" onclick={previous} aria-label="Previous image">◀</button>
 		<span>image {currentPosition + 1} / {totalFrames}</span>
 		<button type="button" onclick={next} aria-label="Next image">▶</button>

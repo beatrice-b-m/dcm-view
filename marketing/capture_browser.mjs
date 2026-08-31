@@ -88,9 +88,12 @@ async function seekWithinFile(page, file, frameIndex) {
 	if (frameIndex >= file.frame_count) {
 		throw new Error(`requested frame ${frameIndex} exceeds file frame count ${file.frame_count}`);
 	}
-	for (let frame = 0; frame < frameIndex; frame += 1) {
-		await page.keyboard.press("ArrowRight");
-	}
+	const position = page.locator("[data-capture-position]");
+	await position.evaluate((input, offset) => {
+		if (!(input instanceof HTMLInputElement)) throw new Error("capture position is not an input");
+		input.value = String(Number(input.value) + offset);
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+	}, frameIndex);
 	await waitForRendered(page, file.index, frameIndex);
 }
 
