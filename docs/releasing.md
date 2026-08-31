@@ -100,6 +100,11 @@ During that release:
 
 ## Standard release flow
 
+Use the [release checklist](release-checklist.md) as the required maintainer
+runbook for release notes, publication assets, candidate qualification, tagging,
+channel monitoring, `dcmview-docs` synchronization, and the next development
+version. This section summarizes the underlying commands and automation.
+
 1. Regenerate fixtures if they changed:
    `cargo run --locked --example generate_test_fixtures`
 2. Run the CI-aligned core profile:

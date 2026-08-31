@@ -54,6 +54,9 @@ or metadata unless they are fully de-identified and approved for public use.
   workflow, canonical check profiles, fixture policy, and cache budgets.
 - [Release process](releasing.md): local release checks, GitHub Release assets,
   PyPI wheels, VS Code Marketplace publishing, and Homebrew tap prerequisites.
+- [Release checklist](release-checklist.md): repeatable release-note,
+  publication, CI qualification, tagging, documentation synchronization,
+  incident handling, and next-version steps for every tagged release.
 - [v0.2.10 frontend QA](v0.2.10-frontend-qa.md): active browser matrix,
   release-blocker fixes, automated gate, and remaining responsive manual check.
 - [npm audit notes](npm-audit-2026-06-09.md): recorded frontend and VS Code npm
