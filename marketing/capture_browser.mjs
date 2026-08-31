@@ -150,7 +150,7 @@ async function main() {
 	});
 	const page = await context.newPage();
 	try {
-		await page.goto(args.url, { waitUntil: "networkidle", timeout: 60_000 });
+		await page.goto(args.url, { waitUntil: "domcontentloaded", timeout: 60_000 });
 		await page.addStyleTag({ content: `
 			*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }
 			.status { display: none !important; }
