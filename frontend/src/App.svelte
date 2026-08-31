@@ -7,6 +7,7 @@
 		type FilesResponse,
 		type SeriesCatalogResponse,
 		type SeriesStackSummary,
+		type SemanticContextResponse,
 		type WindowMode,
 		type WindowPreset,
 	} from "./api";
@@ -16,7 +17,11 @@
 	import OpenImageTabs from "./lib/OpenImageTabs.svelte";
 	import ReferenceNavigator from "./lib/ReferenceNavigator.svelte";
 	import SemanticContextPanel from "./lib/SemanticContextPanel.svelte";
-	import { supportsSemanticContext } from "./lib/semanticPresentation";
+	import {
+		segmentationOverlaySelection,
+		supportsSemanticContext,
+		type SemanticMode,
+	} from "./lib/semanticPresentation";
 	import StatusBar from "./lib/StatusBar.svelte";
 	import TagPanel from "./lib/TagPanel.svelte";
 	import ViewerToolbar from "./lib/ViewerToolbar.svelte";
@@ -105,6 +110,8 @@
 	let explorerDrawerElement = $state<HTMLDivElement | null>(null);
 	let tagsDrawerElement = $state<HTMLElement | null>(null);
 	let fileNavigationOrder = $state<number[]>([]);
+	let semanticMode = $state<SemanticMode>("pixel_preview");
+	let semanticResponse = $state<SemanticContextResponse | null>(null);
 
 	const filesById = $derived(indexFilesById(filesResponse?.files ?? []));
 	const activeFile = $derived(
@@ -124,6 +131,15 @@
 	const navigationFrameCount = $derived(navigationFrames.length);
 	const navigationScopeKey = $derived(activeTabId ?? (activeFile ? `file:${activeFile.index}` : ""));
 	const activeOrientation = $derived(activeFileIndex === null ? DEFAULT_ORIENTATION : orientationByFile[activeFileIndex] ?? DEFAULT_ORIENTATION);
+	const segmentationOverlay = $derived.by(() => {
+		if (semanticMode !== "semantic_context") return null;
+		if (!semanticResponse || semanticResponse.source_file_index !== activeFileIndex) return null;
+		const selection = segmentationOverlaySelection(semanticResponse, currentFrame);
+		if (!selection) return null;
+		const sourceFile = filesById.get(selection.sourceFileIndex);
+		if (!sourceFile) return null;
+		return { ...selection, sourceFile };
+	});
 	const openTabFiles = $derived(resolveFilesById(filesById, openTabs.map((tab) => tab.fileIndex)));
 	const openTabFrameCounts = $derived(new Map(
 		openTabs.map((tab) => [
@@ -277,6 +293,14 @@
 
 	function compactDrawerTrigger(drawer: CompactDrawer): HTMLButtonElement | null {
 		return drawer === "explorer" ? explorerDrawerButton : tagsDrawerButton;
+	}
+
+	function handleSemanticModeChange(mode: SemanticMode) {
+		semanticMode = mode;
+	}
+
+	function handleSemanticContextChange(response: SemanticContextResponse | null) {
+		semanticResponse = response;
 	}
 
 	function compactDrawerElement(drawer: CompactDrawer): HTMLElement | null {
@@ -729,7 +753,12 @@
 							onopenreference={openReferenceTarget}
 						/>
 						{#if supportsSemanticContext(activeFile.object_kind, activeFile.sop_class_uid)}
-							<SemanticContextPanel fileIndex={activeFile.index} {currentFrame} />
+							<SemanticContextPanel
+								fileIndex={activeFile.index}
+								{currentFrame}
+								onmodechange={handleSemanticModeChange}
+								oncontextchange={handleSemanticContextChange}
+							/>
 						{/if}
 						{#if activeFile.object_kind === "whole_slide_microscopy"}
 							<WsiTileContext fileIndex={activeFile.index} frame={currentFrame} />
@@ -745,6 +774,7 @@
 						resetCount={resetCount}
 						selectedPresetId={selectedPresetId}
 						orientation={activeOrientation}
+						{segmentationOverlay}
 						bind:cinePlaying
 						{cineFps}
 						{cineMode}

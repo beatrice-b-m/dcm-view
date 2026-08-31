@@ -8,7 +8,17 @@
 		type SemanticMode,
 	} from "./semanticPresentation";
 
-	let { fileIndex, currentFrame }: { fileIndex: number; currentFrame: number } = $props();
+	let {
+		fileIndex,
+		currentFrame,
+		onmodechange,
+		oncontextchange,
+	}: {
+		fileIndex: number;
+		currentFrame: number;
+		onmodechange?: (mode: SemanticMode) => void;
+		oncontextchange?: (response: SemanticContextResponse | null) => void;
+	} = $props();
 	let response = $state<SemanticContextResponse | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
@@ -25,12 +35,17 @@
 		const requestedFile = fileIndex;
 		const generation = ++requestGeneration;
 		response = null;
+		oncontextchange?.(null);
 		error = null;
 		loading = true;
 		mode = "pixel_preview";
+		onmodechange?.("pixel_preview");
 		fetchSemanticContext(requestedFile)
 			.then((result) => {
-				if (generation === requestGeneration && requestedFile === fileIndex) response = result;
+				if (generation === requestGeneration && requestedFile === fileIndex) {
+					response = result;
+					oncontextchange?.(result);
+				}
 			})
 			.catch((cause: unknown) => {
 				if (generation === requestGeneration && requestedFile === fileIndex) {
@@ -41,6 +56,11 @@
 				if (generation === requestGeneration && requestedFile === fileIndex) loading = false;
 			});
 	});
+
+	function setMode(nextMode: SemanticMode) {
+		mode = nextMode;
+		onmodechange?.(nextMode);
+	}
 
 	function display(value: string | number | null | undefined): string {
 		return value === null || value === undefined || value === "" ? "Not declared" : String(value);
@@ -57,14 +77,14 @@
 	</header>
 
 	<div class="mode-switch" role="group" aria-label="Interpretation mode">
-		<button class:active={mode === "pixel_preview"} type="button" onclick={() => (mode = "pixel_preview")}>
+		<button class:active={mode === "pixel_preview"} type="button" onclick={() => setMode("pixel_preview")}>
 			Pixel Preview
 		</button>
 		<button
 			class:active={mode === "semantic_context"}
 			type="button"
 			disabled={!semanticAvailable}
-			onclick={() => (mode = "semantic_context")}
+			onclick={() => setMode("semantic_context")}
 		>
 			Semantic Context
 		</button>

@@ -5,6 +5,7 @@ import {
 	displayFrameWindowCacheKey,
 	fetchFiles,
 	fetchReferences,
+	fetchSegmentationOverlayBlob,
 	fetchSeries,
 	fetchSelectedTag,
 	frameUrl,
@@ -161,6 +162,23 @@ describe("generated endpoint fetch wrappers", () => {
 
 		await expect(fetchReferences(7)).resolves.toEqual(payload);
 		expect(fetchMock).toHaveBeenCalledWith("/api/file/7/references", { method: "GET" });
+	});
+
+	it("uses the declared segmentation overlay endpoint", async () => {
+		const payload = new Blob(["png"], { type: "image/png" });
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(payload, {
+				status: 200,
+				headers: { "Content-Type": "image/png" },
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const controller = new AbortController();
+
+		await expect(fetchSegmentationOverlayBlob(4, 2, controller.signal)).resolves.toBeInstanceOf(Blob);
+		expect(fetchMock).toHaveBeenCalledWith("/api/file/4/frame/2/segmentation-overlay", {
+			signal: controller.signal,
+		});
 	});
 
 	it("uses the annotation update verb, body, and inferred response contract", async () => {

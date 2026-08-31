@@ -126,6 +126,19 @@ export function fetchSemanticContext(fileIndex: number): Promise<SemanticContext
 	return requestJsonEndpoint("fileSemanticContext", { index: fileIndex });
 }
 
+export async function fetchSegmentationOverlayBlob(
+	fileIndex: number,
+	frame: number,
+	signal?: AbortSignal,
+): Promise<Blob> {
+	const path = apiEndpointPath("fileSegmentationOverlay", { index: fileIndex, frame });
+	const response = await fetch(path, { signal });
+	if (response.status !== API_ENDPOINTS.fileSegmentationOverlay.successStatus) {
+		throw await responseError(response, `request failed: ${path}`);
+	}
+	return response.blob();
+}
+
 export function fetchWsiFrameContext(
 	fileIndex: number,
 	frame: number,

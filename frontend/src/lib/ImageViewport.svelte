@@ -6,6 +6,7 @@
 		fetchAnnotations,
 		fetchDisplayFrameBlob,
 		fetchRawFrame,
+		fetchSegmentationOverlayBlob,
 		updateAnnotations,
 		type DisplayFrameWindowOptions,
 		type EmbedRoiAnnotations,
@@ -64,7 +65,14 @@
 		WlRendererSuccess,
 	} from "./workers/wlRendererProtocol";
 
-	type PipelineMode = "cine" | "diagnostic_wl" | "server_wl";
+	type PipelineMode = "cine" | "diagnostic_wl" | "server_wl" | "segmentation_overlay";
+	type SegmentationOverlay = {
+		segmentationFileIndex: number;
+		segmentationFrameIndex: number;
+		sourceFileIndex: number;
+		sourceFrameIndex: number;
+		sourceFile: FileSummary;
+	};
 	type TransformState = { scale: number; tx: number; ty: number; fit: boolean };
 	type ZoomAnchor = {
 		clientX: number;
@@ -117,6 +125,7 @@
 		navigationScopeKey,
 		navigationPosition,
 		onnavigationchange,
+		segmentationOverlay = null,
 	}: {
 		activeFile: FileSummary;
 		currentFrame: number;
@@ -138,6 +147,7 @@
 		navigationScopeKey: string;
 		navigationPosition: number;
 		onnavigationchange: (position: number) => void;
+		segmentationOverlay?: SegmentationOverlay | null;
 	} = $props();
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
@@ -260,14 +270,23 @@
 	});
 	const zoomPercent = $derived(Math.round(activeTransform.scale * 100));
 	const isDragging = $derived(dragState !== null);
-	const pipelineMode = $derived<PipelineMode>(selectWindowingPipeline(
-		activeTool === "window_level",
-		rawWindowLevelFallbackByFile[activeFile.index] ?? false,
-		activeFile.raw_windowing_compatible,
-	));
+	const pipelineMode = $derived.by<PipelineMode>(() => segmentationOverlay
+		? "segmentation_overlay"
+		: selectWindowingPipeline(
+			activeTool === "window_level",
+			rawWindowLevelFallbackByFile[activeFile.index] ?? false,
+			activeFile.raw_windowing_compatible,
+		));
 
 	const displayWindow = $derived(
-		pipelineMode === "diagnostic_wl" && currentRawFrame
+		pipelineMode === "segmentation_overlay"
+			? segmentationOverlay?.sourceFile.default_window
+				? {
+					wc: segmentationOverlay.sourceFile.default_window.center,
+					ww: segmentationOverlay.sourceFile.default_window.width,
+				}
+				: { wc: 0, ww: 1 }
+			: pipelineMode === "diagnostic_wl" && currentRawFrame
 			? resolveDisplayWindow(
 				currentRawFrame,
 				liveWindowCenter,
@@ -292,19 +311,29 @@
 	);
 	const selectedRoiIndex = $derived(activeFile ? selectedRoiByFile[activeFile.index] ?? null : null);
 	const imageRows = $derived(
-		pipelineMode === "diagnostic_wl" && currentRawFrame
+		pipelineMode === "segmentation_overlay" && segmentationOverlay
+			? segmentationOverlay.sourceFile.rows
+			: pipelineMode === "diagnostic_wl" && currentRawFrame
 			? currentRawFrame.metadata.rows
 			: activeFile?.rows ?? 0,
 	);
 	const imageColumns = $derived(
-		pipelineMode === "diagnostic_wl" && currentRawFrame
+		pipelineMode === "segmentation_overlay" && segmentationOverlay
+			? segmentationOverlay.sourceFile.columns
+			: pipelineMode === "diagnostic_wl" && currentRawFrame
 			? currentRawFrame.metadata.columns
 			: activeFile?.columns ?? 0,
 	);
 	const displayGeometry = $derived(
-		imageDisplayGeometry(imageRows, imageColumns, activeFile?.pixel_aspect_ratio),
+		imageDisplayGeometry(
+			imageRows,
+			imageColumns,
+			segmentationOverlay?.sourceFile.pixel_aspect_ratio ?? activeFile?.pixel_aspect_ratio,
+		),
 	);
-	const visibleRois = $derived(deriveVisibleRois(activeAnnotations, currentFrame));
+	const visibleRois = $derived(
+		segmentationOverlay ? [] : deriveVisibleRois(activeAnnotations, currentFrame),
+	);
 	const draftRoi = $derived(
 		dragState?.mode === "draw_roi"
 			? canonicalRect(dragState.start, dragState.current, imageRows, imageColumns)
@@ -562,6 +591,7 @@
 	}
 
 	function currentDisplayWindowOptions(): DisplayFrameWindowOptions {
+		if (pipelineMode === "segmentation_overlay") return {};
 		if (windowCenter !== null && windowWidth !== null) {
 			return { wc: windowCenter, ww: windowWidth, windowMode: "default" };
 		}
@@ -1029,6 +1059,97 @@ function startDisplayPrefetch(
 		}
 	}
 
+	type DecodedCanvasImage = {
+		source: CanvasImageSource;
+		width: number;
+		height: number;
+		dispose: () => void;
+	};
+
+	async function decodeCanvasImage(blob: Blob): Promise<DecodedCanvasImage> {
+		if (typeof createImageBitmap === "function") {
+			const bitmap = await createImageBitmap(blob);
+			return {
+				source: bitmap,
+				width: bitmap.width,
+				height: bitmap.height,
+				dispose: () => bitmap.close(),
+			};
+		}
+
+		const url = URL.createObjectURL(blob);
+		const image = new Image();
+		image.decoding = "async";
+		try {
+			await new Promise<void>((resolve, reject) => {
+				image.onload = () => resolve();
+				image.onerror = () => reject(new Error("overlay image decode failed"));
+				image.src = url;
+			});
+			return {
+				source: image,
+				width: image.naturalWidth,
+				height: image.naturalHeight,
+				dispose: () => URL.revokeObjectURL(url),
+			};
+		} catch (error) {
+			URL.revokeObjectURL(url);
+			throw error;
+		}
+	}
+
+	async function loadSegmentationOverlayAndRender(
+		overlay: SegmentationOverlay,
+		generation: number,
+	): Promise<void> {
+		const windowOptions: DisplayFrameWindowOptions = {};
+		const signal = ensureDisplayFetchScope(windowOptions);
+		loading = true;
+		try {
+			const [sourceBlob, maskBlob] = await Promise.all([
+				ensureDisplayFrameBlob(
+					overlay.sourceFileIndex,
+					overlay.sourceFrameIndex,
+					windowOptions,
+				),
+				fetchSegmentationOverlayBlob(
+					overlay.segmentationFileIndex,
+					overlay.segmentationFrameIndex,
+					signal,
+				),
+			]);
+			const [sourceImage, maskImage] = await Promise.all([
+				decodeCanvasImage(sourceBlob),
+				decodeCanvasImage(maskBlob),
+			]);
+			try {
+				if (
+					generation !== requestGeneration
+					|| pipelineMode !== "segmentation_overlay"
+					|| !canvasEl
+				) return;
+				canvasEl.width = sourceImage.width;
+				canvasEl.height = sourceImage.height;
+				const ctx = canvasEl.getContext("2d", { alpha: false });
+				if (!ctx) throw new Error("2D canvas is unavailable");
+				ctx.drawImage(sourceImage.source, 0, 0);
+				ctx.drawImage(maskImage.source, 0, 0, sourceImage.width, sourceImage.height);
+				loading = false;
+				loadError = null;
+				markDisplayFrameRendered(activeFile.index, currentFrame);
+			} finally {
+				sourceImage.dispose();
+				maskImage.dispose();
+			}
+		} catch (error) {
+			if ((error as Error).name === "AbortError") return;
+			if (generation !== requestGeneration || pipelineMode !== "segmentation_overlay") return;
+			loading = false;
+			loadError = (error as Error).message || "Failed to load segmentation overlay";
+			cinePlaying = false;
+		}
+	}
+
 	function sameTransform(a: TransformState | undefined, b: TransformState): boolean {
 		return !!a
 			&& a.fit === b.fit
@@ -1222,6 +1343,10 @@ function startDisplayPrefetch(
 		const scopeKey = navigationScopeKey;
 		const windowOptions = currentDisplayWindowOptions();
 		if (!scopeKey) return;
+		if (mode === "segmentation_overlay") {
+			if (playing) cinePlaying = false;
+			return;
+		}
 		const canPlay = canRunCinePlayback(
 			mode === "cine" ? "cine" : "diagnostic_wl",
 			true,
@@ -1293,6 +1418,7 @@ function startDisplayPrefetch(
 		}
 
 		const mode = pipelineMode;
+		const overlay = segmentationOverlay;
 		const fileIndex = activeFile.index;
 		const frameIndex = currentFrame;
 		const generation = ++requestGeneration;
@@ -1306,7 +1432,9 @@ function startDisplayPrefetch(
 		void modeWindowMode;
 
 		loadError = null;
-		if (mode === "diagnostic_wl") {
+		if (mode === "segmentation_overlay" && overlay) {
+			void loadSegmentationOverlayAndRender(overlay, generation);
+		} else if (mode === "diagnostic_wl") {
 			void loadRawFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
 		} else {
 			void loadDisplayFrameAndRender(fileIndex, frameIndex, generation, frameDirection);
@@ -1489,6 +1617,9 @@ function startDisplayPrefetch(
 		}
 
 		if (event.button === 0) {
+			if (segmentationOverlay && (activeTool === "window_level" || activeTool === "annotate_rect")) {
+				return;
+			}
 			let nextDragState: DragState = null;
 			switch (activeTool) {
 				case "window_level": {
@@ -1730,7 +1861,7 @@ function startDisplayPrefetch(
 			style={`transform:${transformCss}; width:${Math.max(displayGeometry.width, 1)}px; height:${Math.max(displayGeometry.height, 1)}px;`}
 		>
 			<canvas bind:this={canvasEl} class="dicom-canvas"></canvas>
-			{#if imageColumns > 0 && imageRows > 0}
+			{#if !segmentationOverlay && imageColumns > 0 && imageRows > 0}
 				<svg
 					bind:this={roiSvgEl}
 					class="roi-overlay"
@@ -1772,14 +1903,19 @@ function startDisplayPrefetch(
 			{/if}
 		</div>
 		<div class="overlay">
-			<span>image {navigationPosition + 1} / {navigationFrameCount}</span>
-			<span>source frame {currentFrame + 1} / {activeFile.frame_count}</span>
+			{#if segmentationOverlay}
+				<span>SEG overlay {segmentationOverlay.segmentationFrameIndex + 1} / {activeFile.frame_count}</span>
+				<span>source frame {segmentationOverlay.sourceFrameIndex + 1}</span>
+			{:else}
+				<span>image {navigationPosition + 1} / {navigationFrameCount}</span>
+				<span>source frame {currentFrame + 1} / {activeFile.frame_count}</span>
+			{/if}
 			<span>W: {Math.round(displayWindow.ww)} · C: {Math.round(displayWindow.wc)}</span>
 			{#if activeTool === "window_level" && !activeFile.raw_windowing_compatible}
 				<span class="presentation-path" title={activeFile.raw_windowing_reason ?? undefined}>server presentation retained</span>
 			{/if}
 		</div>
-		<div class="roi-list">
+		{#if !segmentationOverlay}<div class="roi-list">
 			<div class="roi-list-title">
 				<span>ROIs {roiListCountLabel}</span>
 				{#if activeAnnotationPersistence?.status === "saving"}
@@ -1822,7 +1958,7 @@ function startDisplayPrefetch(
 					{/each}
 				</ul>
 			{/if}
-		</div>
+		</div>{/if}
 		<div class="zoom-controls">
 			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= MIN_ZOOM}>−</button>
 			<button type="button" class="zoom-level" onclick={fitActiveImageToViewport} title="Fit to height">{zoomPercent}%</button>
