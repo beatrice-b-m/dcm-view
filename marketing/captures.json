@@ -48,7 +48,7 @@
       "id": "pet-cine",
       "group": "05-pet",
       "series_role": "pet",
-      "file_position": 0.42,
+      "file_position": 0.65,
       "kind": "gif",
       "output": "pet-cine.gif",
       "gif": { "frames": 18, "step": 1, "fps": 6 },
@@ -80,7 +80,7 @@
       "group": "08-wsi",
       "series_role": "wsi",
       "preferred_filename": "aaade107-15b5-4353-a923-cea4a6d215aa.dcm",
-      "frame": 210,
+      "frame": 181,
       "kind": "screenshot",
       "output": "wsi-context.png",
       "modifications": ["cropped to the application viewport"]

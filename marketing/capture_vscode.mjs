@@ -126,6 +126,7 @@ async function main() {
 			`--extensions-dir=${path.join(scratch, "extensions")}`,
 			"--disable-workspace-trust",
 			"--disable-updates",
+			"--disable-extension", "vscode.git",
 			"--skip-release-notes",
 			"--skip-welcome",
 			"--window-size=1440,900",
