@@ -1171,18 +1171,20 @@ fn read_sequence_strings(
         .collect()
 }
 
+type FramePatientGeometry = (
+    Vec<Option<PatientPosition>>,
+    Vec<Option<PatientOrientation>>,
+    Vec<Option<[f64; 2]>>,
+    Option<[f64; 2]>,
+);
+
 fn read_frame_patient_geometry(
     obj: &dicom_object::DefaultDicomObject,
     frame_count: u32,
     top_level_position: Option<PatientPosition>,
     top_level_orientation: Option<PatientOrientation>,
     top_level_pixel_spacing: Option<[f64; 2]>,
-) -> (
-    Vec<Option<PatientPosition>>,
-    Vec<Option<PatientOrientation>>,
-    Vec<Option<[f64; 2]>>,
-    Option<[f64; 2]>,
-) {
+) -> FramePatientGeometry {
     let shared_orientation = obj
         .element(tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)
         .ok()

@@ -473,14 +473,20 @@ fn resolve_geometry_sources(
         .iter()
         .filter(|file| declared_uids.contains(&file.sop_instance_uid))
         .flat_map(|file| {
-            (0..file.frame_count).filter_map(move |frame_index| {
-                frame_geometrically_compatible(segmentation, segmentation_frame, file, frame_index)
-                    .then(|| ResolvedSegmentSourceFrame {
-                        file_index: file.index,
-                        frame_index,
-                        sop_instance_uid: file.sop_instance_uid.clone(),
-                    })
-            })
+            (0..file.frame_count)
+                .filter(move |frame_index| {
+                    frame_geometrically_compatible(
+                        segmentation,
+                        segmentation_frame,
+                        file,
+                        *frame_index,
+                    )
+                })
+                .map(|frame_index| ResolvedSegmentSourceFrame {
+                    file_index: file.index,
+                    frame_index,
+                    sop_instance_uid: file.sop_instance_uid.clone(),
+                })
         })
         .collect();
     finish_frame_mapping(mappings, "declared_source_geometry")
