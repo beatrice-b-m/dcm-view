@@ -222,6 +222,7 @@
 										{#each series.files as item}
 											<button
 												type="button"
+												data-capture-file-index={item.file.index}
 												class="file-row depth-3"
 												class:active={item.file.index === activeFileIndex}
 												aria-current={item.file.index === activeFileIndex ? "true" : undefined}

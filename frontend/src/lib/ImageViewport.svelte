@@ -159,6 +159,7 @@
 	let viewportEl: HTMLElement | undefined = $state();
 	let viewportSize = $state({ width: 0, height: 0 });
 	let canvasEl: HTMLCanvasElement | undefined = $state();
+	let renderedFrameToken = $state("");
 	let roiSvgEl: SVGSVGElement | undefined = $state();
 	let currentRawFrame = $state<RawFrame | null>(null);
 	let rawWindowLevelFallbackByFile = $state<Record<number, boolean>>({});
@@ -537,6 +538,7 @@
 	}
 
 	function clearCanvas(): void {
+		renderedFrameToken = "";
 		if (!canvasEl) return;
 		const ctx = canvasEl.getContext("2d", { alpha: false });
 		if (!ctx) return;
@@ -580,6 +582,7 @@
 		displayNetworkPromises.clear();
 		displayFetchPromises.clear();
 		lastRenderedDisplayFrame = null;
+		renderedFrameToken = "";
 	}
 
 	function getCachedDisplayBlob(key: string): Blob | undefined {
@@ -626,6 +629,7 @@
 		displayNetworkPromises.clear();
 		displayFetchPromises.clear();
 		lastRenderedDisplayFrame = null;
+		renderedFrameToken = "";
 		return displayScopeCtrl.signal;
 	}
 
@@ -671,6 +675,7 @@
 	}
 
 	function markDisplayFrameRendered(fileIndex: number, frameIndex: number): void {
+		renderedFrameToken = `${fileIndex}:${frameIndex}`;
 		lastRenderedDisplayFrame = { fileIndex, frameIndex };
 		for (const waiter of [...displayRenderWaiters]) {
 			if (waiter.fileIndex !== fileIndex || waiter.frameIndex !== frameIndex) continue;
@@ -1860,7 +1865,11 @@ function startDisplayPrefetch(
 			class="image-layer"
 			style={`transform:${transformCss}; width:${Math.max(displayGeometry.width, 1)}px; height:${Math.max(displayGeometry.height, 1)}px;`}
 		>
-			<canvas bind:this={canvasEl} class="dicom-canvas"></canvas>
+			<canvas
+				bind:this={canvasEl}
+				class="dicom-canvas"
+				data-capture-rendered={renderedFrameToken}
+			></canvas>
 			{#if !segmentationOverlay && imageColumns > 0 && imageRows > 0}
 				<svg
 					bind:this={roiSvgEl}

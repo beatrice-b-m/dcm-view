@@ -1,0 +1,17 @@
+{
+  "name": "dcmview-marketing-capture",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "@vscode/test-electron": "2.4.1",
+    "ffmpeg-static": "5.3.0",
+    "playwright": "1.62.1"
+  }
+}

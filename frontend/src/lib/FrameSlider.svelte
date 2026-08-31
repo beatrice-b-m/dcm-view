@@ -87,10 +87,10 @@
 
 {#if totalFrames > 1}
 	<div class="slider">
-		<button type="button" onclick={previous}>◀</button>
+		<button type="button" onclick={previous} aria-label="Previous image">◀</button>
 		<span>image {currentPosition + 1} / {totalFrames}</span>
-		<button type="button" onclick={next}>▶</button>
-		<button type="button" class="play" onclick={togglePlay}>
+		<button type="button" onclick={next} aria-label="Next image">▶</button>
+		<button type="button" class="play" onclick={togglePlay} aria-label={cinePlaying ? "Pause cine" : "Play cine"}>
 			{cinePlaying ? "⏸" : "▶"}
 		</button>
 		<select class="fps-select" bind:value={cineFps}>
