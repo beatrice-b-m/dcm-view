@@ -21,6 +21,7 @@ STRUCTS = (
 	"SegmentationContext",
 	"SegmentSummary",
 	"SegmentFrameMapping",
+	"ResolvedSegmentSourceFrame",
 	"OverlayEligibility",
 	"ParametricMapContext",
 	"RealWorldValueMappingSummary",

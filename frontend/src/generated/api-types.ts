@@ -545,12 +545,23 @@ export interface SegmentFrameMapping {
 	source_sop_instance_uid: string | null;
 	source_frame_numbers: number[];
 	source_file_indices: number[];
+	source_frames: ResolvedSegmentSourceFrame[];
+	mapping_method: string | null;
+	mapping_status: string;
+	mapping_reason: string;
+}
+
+export interface ResolvedSegmentSourceFrame {
+	file_index: number;
+	frame_index: number;
+	sop_instance_uid: string;
 }
 
 export interface OverlayEligibility {
 	eligible: boolean;
 	reason: string;
 	source_file_index: number | null;
+	mapped_source_count: number;
 }
 
 export interface ParametricMapContext {

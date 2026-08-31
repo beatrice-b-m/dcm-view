@@ -623,6 +623,21 @@ pub struct SegmentFrameMapping {
     /// DICOM-declared, one-based source frame numbers.
     pub source_frame_numbers: Vec<u32>,
     pub source_file_indices: Vec<usize>,
+    /// Normalized local source frames resolved from declared identity or geometry.
+    pub source_frames: Vec<ResolvedSegmentSourceFrame>,
+    /// `explicit_derivation` or `declared_source_geometry` when resolved.
+    pub mapping_method: Option<String>,
+    /// `resolved`, `missing`, or `ambiguous`.
+    pub mapping_status: String,
+    pub mapping_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedSegmentSourceFrame {
+    pub file_index: usize,
+    /// Zero-based frame index in the source object.
+    pub frame_index: u32,
+    pub sop_instance_uid: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -630,6 +645,7 @@ pub struct OverlayEligibility {
     pub eligible: bool,
     pub reason: String,
     pub source_file_index: Option<usize>,
+    pub mapped_source_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

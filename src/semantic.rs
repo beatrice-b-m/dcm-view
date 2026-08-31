@@ -6,8 +6,11 @@
 use crate::api::contracts::{
     CodedConceptSummary, DoseGridGeometry, OverlayEligibility, ParametricMapContext,
     RealWorldValueMappingSummary, ReferenceMatchSummary, ReferenceSummary, ReferenceTargetSummary,
-    RtDoseContext, SegmentFrameMapping, SegmentSummary, SegmentationContext, SemanticContext,
-    SemanticContextResponse,
+    ResolvedSegmentSourceFrame, RtDoseContext, SegmentFrameMapping, SegmentSummary,
+    SegmentationContext, SemanticContext, SemanticContextResponse,
+};
+use crate::geometry::{
+    frame_geometry, grids_overlap, target_to_source_transform, GeometryTolerances,
 };
 use crate::object_kind::{classify_sop_class, ObjectKind};
 use crate::references::{self, ReferenceCandidate, ReferenceRelationship, ResolvedReferenceEdge};
@@ -16,6 +19,7 @@ use anyhow::{Context, Result};
 use dicom_core::Tag;
 use dicom_dictionary_std::{tags, StandardDataDictionary};
 use dicom_object::{InMemDicomObject, OpenFileOptions};
+use std::collections::BTreeSet;
 
 const MAX_SEQUENCE_ITEMS: usize = 4_096;
 const MAX_LUT_VALUES: usize = 4_096;
@@ -104,6 +108,7 @@ fn segmentation_context(
     let shared_group = sequence_items(object, tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE)
         .into_iter()
         .next();
+    let declared_sources = sequence_items(object, tags::SOURCE_IMAGE_SEQUENCE);
     for (frame_index, frame_group) in
         sequence_items(object, tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE)
             .into_iter()
@@ -111,31 +116,45 @@ fn segmentation_context(
             .enumerate()
     {
         let segment_number = referenced_segment_number(frame_group, shared_group);
-        let source_item = sequence_items(frame_group, tags::DERIVATION_IMAGE_SEQUENCE)
+        let explicit_source_items = sequence_items(frame_group, tags::DERIVATION_IMAGE_SEQUENCE)
             .into_iter()
             .flat_map(|item| sequence_items(item, tags::SOURCE_IMAGE_SEQUENCE))
-            .next();
-        let source_sop_instance_uid =
-            source_item.and_then(|item| read_string(item, tags::REFERENCED_SOP_INSTANCE_UID));
-        let source_frame_numbers = source_item
-            .map(|item| read_numbers(item, tags::REFERENCED_FRAME_NUMBER))
-            .unwrap_or_default();
-        let source_file_indices = source_sop_instance_uid
-            .as_ref()
-            .map(|uid| {
-                files
-                    .iter()
-                    .filter(|file| &file.sop_instance_uid == uid)
-                    .map(|file| file.index)
-                    .collect()
-            })
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
+        let (source_frames, mapping_method, mapping_status, mapping_reason) =
+            if explicit_source_items.is_empty() {
+                resolve_geometry_sources(source, frame_index as u32, files, &declared_sources)
+            } else {
+                resolve_explicit_sources(source, frame_index as u32, files, &explicit_source_items)
+            };
+        let source_sop_instance_uids = source_frames
+            .iter()
+            .map(|mapping| mapping.sop_instance_uid.clone())
+            .collect::<BTreeSet<_>>();
+        let source_sop_instance_uid = (source_sop_instance_uids.len() == 1)
+            .then(|| source_sop_instance_uids.into_iter().next())
+            .flatten();
+        let source_frame_numbers = source_frames
+            .iter()
+            .map(|mapping| mapping.frame_index + 1)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let source_file_indices = source_frames
+            .iter()
+            .map(|mapping| mapping.file_index)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         frame_mappings.push(SegmentFrameMapping {
             frame_index: frame_index as u32,
             segment_number,
             source_sop_instance_uid,
             source_frame_numbers,
             source_file_indices,
+            source_frames,
+            mapping_method,
+            mapping_status,
+            mapping_reason,
         });
     }
 
@@ -148,13 +167,7 @@ fn segmentation_context(
             .segment_number
             .is_some_and(|number| declared_segments.contains(&number))
     });
-    let overlay = segmentation_overlay(
-        source,
-        files,
-        resolved,
-        &frame_mappings,
-        segment_closure_valid,
-    );
+    let overlay = segmentation_overlay(source, resolved, &frame_mappings, segment_closure_valid);
     SegmentationContext {
         segmentation_type: read_string(object, tags::SEGMENTATION_TYPE),
         segmentation_fractional_type: read_string(object, tags::SEGMENTATION_FRACTIONAL_TYPE),
@@ -182,7 +195,6 @@ fn referenced_segment_number(
 
 fn segmentation_overlay(
     source: &FileEntry,
-    files: &[FileEntry],
     resolved: &[ResolvedReferenceEdge],
     frame_mappings: &[SegmentFrameMapping],
     segment_closure_valid: bool,
@@ -195,42 +207,199 @@ fn segmentation_overlay(
     }
     if frame_mappings
         .iter()
-        .any(|mapping| mapping.source_file_indices.len() != 1)
+        .any(|mapping| mapping.mapping_status != "resolved" || mapping.source_frames.len() != 1)
     {
-        return ineligible("a source instance is missing or resolves ambiguously");
+        return ineligible("one or more segmentation frames lack a unique source-frame mapping");
     }
     let source_indices = frame_mappings
         .iter()
-        .flat_map(|mapping| mapping.source_file_indices.iter().copied())
-        .collect::<Vec<_>>();
-    let Some(&target_index) = source_indices.first() else {
+        .map(|mapping| mapping.source_frames[0].file_index)
+        .collect::<BTreeSet<_>>();
+    let Some(&first_target_index) = source_indices.first() else {
         return ineligible("no frame-level source image mapping is declared");
     };
-    if source_indices.iter().any(|index| *index != target_index) {
-        return ineligible("segmentation frames map to multiple source instances");
-    }
-    let Some(target) = files.iter().find(|file| file.index == target_index) else {
-        return ineligible("the mapped source image is not available");
-    };
-    if !patient_geometry_compatible(source, target) {
-        return ineligible("frame of reference or patient geometry is incompatible");
-    }
-    if !resolved.iter().any(|edge| {
-        matches!(
-            edge.relationship,
-            ReferenceRelationship::SourceImage | ReferenceRelationship::SourceImageForSegmentation
-        ) && edge
-            .matches
-            .iter()
-            .any(|candidate| candidate.file_index == target_index)
-    }) {
+    let references_close_all_mappings = frame_mappings.iter().all(|mapping| {
+        let source_frame = &mapping.source_frames[0];
+        resolved.iter().any(|edge| {
+            matches!(
+                edge.relationship,
+                ReferenceRelationship::SourceImage
+                    | ReferenceRelationship::SourceImageForSegmentation
+            ) && edge
+                .matches
+                .iter()
+                .any(|candidate| candidate.file_index == source_frame.file_index)
+        })
+    });
+    if !references_close_all_mappings {
         return ineligible("frame mapping is not closed by a declared source reference");
     }
     OverlayEligibility {
         eligible: true,
-        reason: "declared source identity and patient geometry are uniquely validated".to_string(),
-        source_file_index: Some(target_index),
+        reason: "every segmentation frame has a unique declared, geometry-compatible source frame"
+            .to_string(),
+        source_file_index: (source_indices.len() == 1).then_some(first_target_index),
+        mapped_source_count: source_indices.len(),
     }
+}
+
+fn resolve_explicit_sources(
+    segmentation: &FileEntry,
+    segmentation_frame: u32,
+    files: &[FileEntry],
+    source_items: &[&InMemDicomObject<StandardDataDictionary>],
+) -> (
+    Vec<ResolvedSegmentSourceFrame>,
+    Option<String>,
+    String,
+    String,
+) {
+    let mut mappings = Vec::new();
+    for item in source_items {
+        let Some(uid) = read_string(item, tags::REFERENCED_SOP_INSTANCE_UID) else {
+            continue;
+        };
+        let declared_frames = read_numbers::<u32>(item, tags::REFERENCED_FRAME_NUMBER);
+        for file in files.iter().filter(|file| file.sop_instance_uid == uid) {
+            let candidate_frames = if declared_frames.is_empty() {
+                (0..file.frame_count).collect::<Vec<_>>()
+            } else {
+                declared_frames
+                    .iter()
+                    .filter_map(|number| number.checked_sub(1))
+                    .filter(|frame| *frame < file.frame_count)
+                    .collect()
+            };
+            let compatible = candidate_frames
+                .iter()
+                .copied()
+                .filter(|source_frame| {
+                    frame_geometrically_compatible(
+                        segmentation,
+                        segmentation_frame,
+                        file,
+                        *source_frame,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let selected = if compatible.is_empty() && candidate_frames.len() == 1 {
+                candidate_frames
+            } else {
+                compatible
+            };
+            mappings.extend(
+                selected
+                    .into_iter()
+                    .map(|frame_index| ResolvedSegmentSourceFrame {
+                        file_index: file.index,
+                        frame_index,
+                        sop_instance_uid: file.sop_instance_uid.clone(),
+                    }),
+            );
+        }
+    }
+    finish_frame_mapping(mappings, "explicit_derivation")
+}
+
+fn resolve_geometry_sources(
+    segmentation: &FileEntry,
+    segmentation_frame: u32,
+    files: &[FileEntry],
+    source_items: &[&InMemDicomObject<StandardDataDictionary>],
+) -> (
+    Vec<ResolvedSegmentSourceFrame>,
+    Option<String>,
+    String,
+    String,
+) {
+    let declared_uids = source_items
+        .iter()
+        .filter_map(|item| read_string(item, tags::REFERENCED_SOP_INSTANCE_UID))
+        .collect::<BTreeSet<_>>();
+    if declared_uids.is_empty() {
+        return (
+            Vec::new(),
+            None,
+            "missing".to_string(),
+            "no per-frame derivation or top-level source images are declared".to_string(),
+        );
+    }
+    let mappings = files
+        .iter()
+        .filter(|file| declared_uids.contains(&file.sop_instance_uid))
+        .flat_map(|file| {
+            (0..file.frame_count).filter_map(move |frame_index| {
+                frame_geometrically_compatible(segmentation, segmentation_frame, file, frame_index)
+                    .then(|| ResolvedSegmentSourceFrame {
+                        file_index: file.index,
+                        frame_index,
+                        sop_instance_uid: file.sop_instance_uid.clone(),
+                    })
+            })
+        })
+        .collect();
+    finish_frame_mapping(mappings, "declared_source_geometry")
+}
+
+fn finish_frame_mapping(
+    mut mappings: Vec<ResolvedSegmentSourceFrame>,
+    method: &str,
+) -> (
+    Vec<ResolvedSegmentSourceFrame>,
+    Option<String>,
+    String,
+    String,
+) {
+    mappings.sort_by_key(|mapping| (mapping.file_index, mapping.frame_index));
+    mappings.dedup_by_key(|mapping| (mapping.file_index, mapping.frame_index));
+    let (status, reason) = match mappings.len() {
+        0 => (
+            "missing",
+            "no local source frame satisfies the declared mapping",
+        ),
+        1 => ("resolved", "one local source frame is uniquely resolved"),
+        _ => (
+            "ambiguous",
+            "multiple local source frames satisfy the declared mapping",
+        ),
+    };
+    (
+        mappings,
+        Some(method.to_string()),
+        status.to_string(),
+        reason.to_string(),
+    )
+}
+
+fn frame_geometrically_compatible(
+    segmentation: &FileEntry,
+    segmentation_frame: u32,
+    source: &FileEntry,
+    source_frame: u32,
+) -> bool {
+    if segmentation
+        .series_metadata
+        .frame_of_reference_uid
+        .is_empty()
+        || segmentation.series_metadata.frame_of_reference_uid
+            != source.series_metadata.frame_of_reference_uid
+    {
+        return false;
+    }
+    let Some(segmentation_geometry) = frame_geometry(segmentation, segmentation_frame) else {
+        return false;
+    };
+    let Some(source_geometry) = frame_geometry(source, source_frame) else {
+        return false;
+    };
+    let Some(transform) = target_to_source_transform(
+        segmentation_geometry,
+        source_geometry,
+        GeometryTolerances::default(),
+    ) else {
+        return false;
+    };
+    grids_overlap(segmentation_geometry, source_geometry, transform)
 }
 
 fn parametric_map_context(
@@ -361,6 +530,7 @@ fn rt_dose_overlay(
         eligible: true,
         reason: "declared source identity and patient geometry are uniquely validated".to_string(),
         source_file_index: Some(target_index),
+        mapped_source_count: 1,
     }
 }
 
@@ -503,6 +673,7 @@ fn ineligible(reason: &str) -> OverlayEligibility {
         eligible: false,
         reason: reason.to_string(),
         source_file_index: None,
+        mapped_source_count: 0,
     }
 }
 

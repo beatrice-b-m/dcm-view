@@ -407,19 +407,20 @@ fn select_candidates<'a>(
             .into_iter()
             .map(|candidate| (ReferenceRelationship::SourceImage, candidate))
             .collect(),
-        SEGMENTATION_STORAGE | LABEL_MAP_SEGMENTATION_STORAGE => {
-            matching(&|candidate| candidate.starts_with(REFERENCED_SERIES_SEQUENCE))
-                .into_iter()
-                .map(|candidate| {
-                    let relationship = if candidate.sop_class_uid.as_deref() == Some(WSI_STORAGE) {
-                        ReferenceRelationship::SourceImageForSegmentation
-                    } else {
-                        ReferenceRelationship::SourceImage
-                    };
-                    (relationship, candidate)
-                })
-                .collect()
-        }
+        SEGMENTATION_STORAGE | LABEL_MAP_SEGMENTATION_STORAGE => matching(&|candidate| {
+            candidate.starts_with(REFERENCED_SERIES_SEQUENCE)
+                || candidate.path.as_slice() == [SOURCE_IMAGE_SEQUENCE]
+        })
+        .into_iter()
+        .map(|candidate| {
+            let relationship = if candidate.sop_class_uid.as_deref() == Some(WSI_STORAGE) {
+                ReferenceRelationship::SourceImageForSegmentation
+            } else {
+                ReferenceRelationship::SourceImage
+            };
+            (relationship, candidate)
+        })
+        .collect(),
         GRAYSCALE_PR_STORAGE | COLOR_PR_STORAGE => {
             matching(&|candidate| candidate.starts_with(REFERENCED_SERIES_SEQUENCE))
                 .into_iter()
@@ -715,6 +716,33 @@ mod tests {
             Some("1.2.3.series")
         );
         assert_eq!(edges[0].target.frame_numbers, [1, 2]);
+    }
+
+    #[test]
+    fn segmentation_retains_top_level_source_images_without_common_instance_reference() {
+        let first = "1.2.3.10";
+        let second = "1.2.3.11";
+        let object = item([
+            DataElement::new(tags::SOP_CLASS_UID, VR::UI, SEGMENTATION_STORAGE),
+            DataElement::new(
+                tags::SOURCE_IMAGE_SEQUENCE,
+                VR::SQ,
+                DataSetSequence::from(vec![referenced(first, &[]), referenced(second, &[])]),
+            ),
+        ]);
+
+        let edges = extract_reference_edges_from_object(&object);
+        assert_eq!(edges.len(), 2);
+        assert!(edges
+            .iter()
+            .all(|edge| edge.relationship == ReferenceRelationship::SourceImage));
+        assert_eq!(
+            edges
+                .iter()
+                .filter_map(|edge| edge.target.sop_instance_uid.as_deref())
+                .collect::<Vec<_>>(),
+            [first, second]
+        );
     }
 
     #[test]

@@ -108,6 +108,137 @@ async fn segmentation_context_reports_segment_closure_and_validated_overlay() {
 }
 
 #[tokio::test]
+async fn segmentation_context_resolves_top_level_sources_by_frame_geometry() {
+    let dir = tempdir().expect("temp dir");
+    let seg_path = dir.path().join("geometry-seg.dcm");
+    let source_uids = ["2.25.8051", "2.25.8052"];
+    let positions = ["0\\0\\7", "0\\0\\11"];
+
+    let segment = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SEGMENT_NUMBER, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(tags::SEGMENT_LABEL, VR::LO, "Tumor"),
+        DataElement::new(tags::SEGMENT_ALGORITHM_TYPE, VR::CS, "MANUAL"),
+    ]);
+    let shared = InMemDicomObject::from_element_iter([
+        sequence(
+            tags::PLANE_ORIENTATION_SEQUENCE,
+            vec![InMemDicomObject::from_element_iter([DataElement::new(
+                tags::IMAGE_ORIENTATION_PATIENT,
+                VR::DS,
+                "1\\0\\0\\0\\1\\0",
+            )])],
+        ),
+        sequence(
+            tags::PIXEL_MEASURES_SEQUENCE,
+            vec![InMemDicomObject::from_element_iter([DataElement::new(
+                tags::PIXEL_SPACING,
+                VR::DS,
+                "1.6666666269\\1.6666666269",
+            )])],
+        ),
+    ]);
+    let frame_groups = positions
+        .map(|position| {
+            InMemDicomObject::from_element_iter([
+                sequence(
+                    tags::SEGMENT_IDENTIFICATION_SEQUENCE,
+                    vec![InMemDicomObject::from_element_iter([DataElement::new(
+                        tags::REFERENCED_SEGMENT_NUMBER,
+                        VR::US,
+                        PrimitiveValue::from(1_u16),
+                    )])],
+                ),
+                sequence(
+                    tags::PLANE_POSITION_SEQUENCE,
+                    vec![InMemDicomObject::from_element_iter([DataElement::new(
+                        tags::IMAGE_POSITION_PATIENT,
+                        VR::DS,
+                        position,
+                    )])],
+                ),
+            ])
+        })
+        .to_vec();
+    let object = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SOP_CLASS_UID, VR::UI, SEG_STORAGE),
+        DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.8050"),
+        DataElement::new(tags::FRAME_OF_REFERENCE_UID, VR::UI, "2.25.8099"),
+        DataElement::new(tags::SEGMENTATION_TYPE, VR::CS, "BINARY"),
+        sequence(tags::SEGMENT_SEQUENCE, vec![segment]),
+        sequence(
+            tags::SOURCE_IMAGE_SEQUENCE,
+            source_uids
+                .map(|uid| reference_item(CT_STORAGE, uid, None))
+                .to_vec(),
+        ),
+        sequence(tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE, vec![shared]),
+        sequence(tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE, frame_groups),
+    ]);
+    write_object(&seg_path, SEG_STORAGE, "2.25.8050", object);
+
+    let mut seg = support::file_entry(seg_path, uids::EXPLICIT_VR_LITTLE_ENDIAN, 2);
+    seg.sop_class_uid = SEG_STORAGE.to_string();
+    seg.sop_instance_uid = "2.25.8050".to_string();
+    seg.rows = 190;
+    seg.columns = 192;
+    seg.series_metadata.frame_of_reference_uid = "2.25.8099".to_string();
+    seg.series_metadata.frame_image_positions_patient =
+        vec![Some([0.0, 0.0, 7.0]), Some([0.0, 0.0, 11.0])];
+    seg.series_metadata.frame_image_orientations_patient = vec![
+        Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+    ];
+    seg.series_metadata.frame_pixel_spacings =
+        vec![Some([1.6666666269; 2]), Some([1.6666666269; 2])];
+
+    let mut sources = source_uids
+        .iter()
+        .zip([7.0, 11.0])
+        .enumerate()
+        .map(|(offset, (uid, z))| {
+            let mut source = support::file_entry(
+                dir.path().join(format!("source-{offset}.dcm")),
+                uids::EXPLICIT_VR_LITTLE_ENDIAN,
+                1,
+            );
+            source.sop_class_uid = CT_STORAGE.to_string();
+            source.sop_instance_uid = (*uid).to_string();
+            source.rows = 192;
+            source.columns = 190;
+            source.series_metadata.frame_of_reference_uid = "2.25.8099".to_string();
+            source.series_metadata.image_position_patient = Some([0.0, 0.0, z]);
+            source.series_metadata.image_orientation_patient = Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+            source.series_metadata.native_pixel.pixel_spacing = Some([1.6666666269; 2]);
+            source
+        })
+        .collect::<Vec<_>>();
+    let mut files = vec![seg];
+    files.append(&mut sources);
+
+    let response: Value = TestServer::new(server::router(support::app_state(files)))
+        .get("/api/file/0/semantic-context")
+        .await
+        .json();
+    let context = &response["context"];
+    assert_eq!(context["frame_mappings"][0]["mapping_status"], "resolved");
+    assert_eq!(
+        context["frame_mappings"][0]["mapping_method"],
+        "declared_source_geometry"
+    );
+    assert_eq!(
+        context["frame_mappings"][0]["source_frames"][0]["file_index"],
+        1
+    );
+    assert_eq!(
+        context["frame_mappings"][1]["source_frames"][0]["file_index"],
+        2
+    );
+    assert_eq!(context["overlay"]["eligible"], true);
+    assert_eq!(context["overlay"]["mapped_source_count"], 2);
+    assert!(context["overlay"]["source_file_index"].is_null());
+}
+
+#[tokio::test]
 async fn parametric_map_context_exposes_explicit_mapping_without_applying_it() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("pm.dcm");
