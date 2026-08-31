@@ -26,6 +26,17 @@ The VS Code scene downloads the exact editor version recorded in
 `marketing/captures.json` on first use. The downloaded editor and Chromium are
 tool caches, not repository content.
 
+Before downloading public sources, preflight the complete real-binary/browser
+path against a committed synthetic fixture:
+
+```bash
+python scripts/marketing_media.py smoke
+```
+
+The ignored result is written to `marketing-review/smoke/` for inspection.
+Add `--vscode` to preflight the extension-host capture too; its first run may
+download the pinned VS Code build.
+
 ## Retrieve And Lock Public Sources
 
 `marketing/sources.json` is the tracked source-of-truth for collection,

@@ -497,7 +497,7 @@ def wait_for_startup(process: subprocess.Popen[str], timeout: float = 60.0) -> s
 			event = json.loads(line)
 		except json.JSONDecodeError:
 			continue
-		if event.get("type") == "dcmview-startup" and isinstance(event.get("url"), str):
+		if event.get("type") == "server_started" and isinstance(event.get("url"), str):
 			return str(event["url"])
 	raise MarketingMediaError(
 		"dcmview did not report startup within the timeout\n" + "\n".join(recent)
@@ -768,6 +768,75 @@ def validate_configuration(args: argparse.Namespace) -> None:
 	print(f"validated {len(source_groups(sources))} source groups and {len(scenes)} capture scenes")
 
 
+def smoke_capture(args: argparse.Namespace) -> None:
+	fixture = REPO_ROOT / "tests" / "fixtures" / "golden-jpeg-baseline-large-single-frame.dcm"
+	binary = build_capture_binary(args.binary.resolve(), args.no_build)
+	node = require_executable("node", "Install Node.js 20.19 or newer.")
+	destination = args.review_root.resolve() / "smoke"
+	destination.mkdir(parents=True, exist_ok=True)
+	with running_server(binary, fixture, 1) as url:
+		with urllib.request.urlopen(f"{url.rstrip('/')}/api/files", timeout=5) as response:
+			catalog = json.load(response)
+		file = catalog["files"][0]
+		scene = {
+			"id": "synthetic-smoke",
+			"kind": "screenshot",
+			"output": "synthetic-smoke.png",
+			"viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
+			"theme": "dark",
+			"locale": "en-US",
+			"series_instance_uid": file["series_instance_uid"],
+			"allowed_patient_ids": [file["patient_id"]] if file["patient_id"] else [],
+		}
+		scene_path = destination / "synthetic-smoke.scene.json"
+		scene_path.write_text(json.dumps(scene, indent=2) + "\n", encoding="utf-8")
+		subprocess.run(
+			[
+				node, str(REPO_ROOT / "marketing" / "capture_browser.mjs"),
+				"--url", url, "--scene", str(scene_path),
+				"--output", str(destination / scene["output"]),
+				"--report", str(destination / "synthetic-smoke.capture.json"),
+			],
+			cwd=REPO_ROOT,
+			check=True,
+		)
+	print(f"synthetic capture preflight passed: {destination / scene['output']}")
+	if args.vscode:
+		vscode_scene = next(
+			scene
+			for scene in capture_scenes(load_json(DEFAULT_CAPTURES))[1]
+			if scene.get("surface") == "vscode"
+		)
+		print("\n==> Compile and preflight VS Code capture", flush=True)
+		subprocess.run(["npm", "--prefix", "vscode", "run", "compile"], cwd=REPO_ROOT, check=True)
+		workspace = Path(tempfile.mkdtemp(prefix="dcmview-vscode-smoke-"))
+		try:
+			shutil.copy2(fixture, workspace / "synthetic.dcm")
+			scene.update(
+				{
+					"id": "synthetic-vscode-smoke",
+					"surface": "vscode",
+					"vscode_version": vscode_scene["vscode_version"],
+				}
+			)
+			scene_path = destination / "synthetic-vscode-smoke.scene.json"
+			scene_path.write_text(json.dumps(scene, indent=2) + "\n", encoding="utf-8")
+			subprocess.run(
+				[
+					node, str(REPO_ROOT / "marketing" / "capture_vscode.mjs"),
+					"--source", str(workspace), "--scene", str(scene_path),
+					"--output", str(destination / "synthetic-vscode-smoke.png"),
+					"--report", str(destination / "synthetic-vscode-smoke.capture.json"),
+					"--binary", str(binary), "--repo", str(REPO_ROOT),
+				],
+				cwd=REPO_ROOT,
+				check=True,
+			)
+		finally:
+			shutil.rmtree(workspace, ignore_errors=True)
+		print(f"VS Code capture preflight passed: {destination / 'synthetic-vscode-smoke.png'}")
+
+
 def replace_marked_block(path: Path, block: str, *, anchor: str) -> None:
 	start = "<!-- dcmview-marketing:start -->"
 	end = "<!-- dcmview-marketing:end -->"
@@ -925,6 +994,15 @@ def build_parser() -> argparse.ArgumentParser:
 	validate.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
 	validate.add_argument("--captures", type=Path, default=DEFAULT_CAPTURES)
 	validate.set_defaults(handler=validate_configuration)
+
+	smoke = subparsers.add_parser(
+		"smoke", help="Preflight the real browser capture path with a committed synthetic fixture"
+	)
+	smoke.add_argument("--review-root", type=Path, default=DEFAULT_REVIEW_ROOT)
+	smoke.add_argument("--binary", type=Path, default=REPO_ROOT / "target" / "debug" / "dcmview")
+	smoke.add_argument("--no-build", action="store_true")
+	smoke.add_argument("--vscode", action="store_true", help="Also launch the pinned VS Code host")
+	smoke.set_defaults(handler=smoke_capture)
 	return parser
 
 

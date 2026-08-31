@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { _electron as electron } from "playwright";
+import { chromium } from "playwright";
 import vscodeTest from "@vscode/test-electron";
 
 const { downloadAndUnzipVSCode } = vscodeTest;
@@ -64,6 +66,46 @@ async function waitForRendered(frame, fileIndex) {
 	await frame.evaluate(() => document.fonts.ready);
 }
 
+async function availablePort() {
+	return new Promise((resolve, reject) => {
+		const server = net.createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (!address || typeof address === "string") {
+				server.close(() => reject(new Error("failed to reserve a CDP port")));
+				return;
+			}
+			server.close((error) => error ? reject(error) : resolve(address.port));
+		});
+	});
+}
+
+async function connectToCode(port, child) {
+	const deadline = Date.now() + 60_000;
+	let lastError;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null) throw new Error(`VS Code exited before CDP startup (${child.exitCode})`);
+		try {
+			return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+		} catch (error) {
+			lastError = error;
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+	}
+	throw new Error(`timed out connecting to VS Code CDP: ${lastError instanceof Error ? lastError.message : lastError}`);
+}
+
+async function stopProcess(child) {
+	if (child.exitCode !== null) return;
+	child.kill("SIGTERM");
+	await Promise.race([
+		new Promise((resolve) => child.once("exit", resolve)),
+		new Promise((resolve) => setTimeout(resolve, 5_000)),
+	]);
+	if (child.exitCode === null) child.kill("SIGKILL");
+}
+
 async function main() {
 	const args = parseArguments(process.argv.slice(2));
 	const scene = JSON.parse(await readFile(args.scene, "utf8"));
@@ -74,10 +116,11 @@ async function main() {
 	await mkdir(path.dirname(args.output), { recursive: true });
 	const executablePath = await downloadAndUnzipVSCode(vscodeVersion);
 	const scratch = await mkdtemp(path.join(tmpdir(), "dcmview-vscode-capture-"));
-	const electronApp = await electron.launch({
-		executablePath,
-		args: [
+	const cdpPort = await availablePort();
+	const code = spawn(executablePath, [
 			args.source,
+			"--new-window",
+			`--remote-debugging-port=${cdpPort}`,
 			`--extensionDevelopmentPath=${path.join(args.repo, "vscode")}`,
 			`--user-data-dir=${path.join(scratch, "user-data")}`,
 			`--extensions-dir=${path.join(scratch, "extensions")}`,
@@ -86,15 +129,20 @@ async function main() {
 			"--skip-release-notes",
 			"--skip-welcome",
 			"--window-size=1440,900",
-		],
+		], {
 		env: {
 			...process.env,
 			DCMVIEW_BINARY: args.binary,
 			DCMVIEW_VSCODE_BYPASS: "0",
 		},
+		stdio: "ignore",
 	});
+	let browser;
 	try {
-		const window = await electronApp.firstWindow();
+		browser = await connectToCode(cdpPort, code);
+		const context = browser.contexts()[0];
+		if (!context) throw new Error("VS Code CDP exposed no browser context");
+		const window = context.pages()[0] ?? await context.waitForEvent("page", { timeout: 30_000 });
 		await window.waitForTimeout(1_000);
 		await window.keyboard.press(process.platform === "darwin" ? "Meta+Shift+P" : "Control+Shift+P");
 		await window.keyboard.type("dcmview: Open Workspace with dcmview");
@@ -138,7 +186,13 @@ async function main() {
 			viewport: scene.viewport,
 		}, null, 2)}\n`, "utf8");
 	} finally {
-		await electronApp.close();
+		await stopProcess(code);
+		if (browser) {
+			await Promise.race([
+				browser.close().catch(() => {}),
+				new Promise((resolve) => setTimeout(resolve, 2_000)),
+			]);
+		}
 		await rm(scratch, { recursive: true, force: true });
 	}
 }

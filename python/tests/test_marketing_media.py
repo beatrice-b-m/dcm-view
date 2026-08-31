@@ -136,6 +136,21 @@ class MarketingMediaSourceTests(unittest.TestCase):
 			self.assertNotIn("First", text)
 			self.assertIn("Second", text)
 
+	def test_parses_the_binary_startup_event(self) -> None:
+		class FakeProcess:
+			stdout = iter(
+				['{"type":"server_started","url":"http://127.0.0.1:54321","host":"127.0.0.1","port":54321}\n']
+			)
+
+			@staticmethod
+			def poll() -> None:
+				return None
+
+		self.assertEqual(
+			marketing_media.wait_for_startup(FakeProcess(), timeout=1),  # type: ignore[arg-type]
+			"http://127.0.0.1:54321",
+		)
+
 
 if __name__ == "__main__":
 	unittest.main()
