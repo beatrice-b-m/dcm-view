@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chromium } from "playwright";
 import ffmpegPath from "ffmpeg-static";
 
@@ -202,6 +202,10 @@ async function main() {
 			patient_ids: [...new Set(catalog.files.map((candidate) => candidate.patient_id).filter(Boolean))].sort(),
 			visible_text_sha256: digestText(visibleText),
 			browser_version: browser.version(),
+			node_version: process.version,
+			ffmpeg_version: scene.kind === "gif"
+				? execFileSync(ffmpegPath, ["-version"], { encoding: "utf8" }).split(/\r?\n/, 1)[0]
+				: null,
 			viewport: scene.viewport,
 		};
 		await import("node:fs/promises").then(({ writeFile }) =>

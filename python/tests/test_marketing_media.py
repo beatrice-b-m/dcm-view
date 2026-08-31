@@ -20,6 +20,8 @@ class MarketingMediaSourceTests(unittest.TestCase):
 			"groups": [
 				{
 					"id": "example",
+					"title": "Example modality",
+					"collection": "EXAMPLE",
 					"dataset_title": "Example dataset",
 					"attribution_party": "Example creator",
 					"year_version": "2026",
@@ -78,6 +80,61 @@ class MarketingMediaSourceTests(unittest.TestCase):
 					group=group,
 					series=group["series"][0],
 				)
+
+	def test_resolves_capture_scene_to_allowlisted_source(self) -> None:
+		captures = {
+			"schema_version": 1,
+			"viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
+			"theme": "dark",
+			"locale": "en-US",
+			"scenes": [
+				{
+					"id": "example-scene",
+					"group": "example",
+					"series_role": "source",
+					"kind": "screenshot",
+					"output": "example.png",
+					"modifications": ["windowed"],
+				}
+			],
+		}
+		resolved = marketing_media.resolve_scenes(
+			captures=captures, sources=self.source_manifest(), requested=[]
+		)
+		self.assertEqual(resolved[0]["series_instance_uid"], "1.2.3")
+		self.assertEqual(resolved[0]["allowed_patient_ids"], ["PUBLIC-001"])
+		self.assertEqual(resolved[0]["viewport"]["width"], 1440)
+
+	def test_rejects_capture_output_outside_bundle(self) -> None:
+		captures = {
+			"schema_version": 1,
+			"viewport": {"width": 1, "height": 1, "device_scale_factor": 1},
+			"theme": "dark",
+			"locale": "en-US",
+			"scenes": [
+				{
+					"id": "escape",
+					"group": "example",
+					"series_role": "source",
+					"kind": "screenshot",
+					"output": "../escape.png",
+					"modifications": [],
+				}
+			],
+		}
+		with self.assertRaisesRegex(marketing_media.MarketingMediaError, "filename"):
+			marketing_media.capture_scenes(captures)
+
+	def test_publication_markers_are_idempotent(self) -> None:
+		with tempfile.TemporaryDirectory() as directory:
+			path = Path(directory) / "README.md"
+			path.write_text("# Example\n\n## Install\n", encoding="utf-8")
+			marketing_media.replace_marked_block(path, "## Gallery\n\nFirst", anchor="## Install")
+			marketing_media.replace_marked_block(path, "## Gallery\n\nSecond", anchor="## Install")
+			text = path.read_text(encoding="utf-8")
+			self.assertEqual(text.count("dcmview-marketing:start"), 1)
+			self.assertNotIn("First", text)
+			self.assertIn("Second", text)
 
 
 if __name__ == "__main__":

@@ -4,12 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import datetime as dt
 import hashlib
 import json
 import os
+import queue
+import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -20,6 +30,19 @@ DEFAULT_CAPTURES = REPO_ROOT / "marketing" / "captures.json"
 DEFAULT_SOURCE_ROOT = REPO_ROOT / "marketing-source-data"
 DEFAULT_REVIEW_ROOT = REPO_ROOT / "marketing-review"
 SOURCE_INVENTORY_NAME = "SOURCE_FILES.json"
+SOURCE_LINKAGE_NAME = "SOURCE_LINKAGE.md"
+MEDIA_LOCK_NAME = "media-lock.json"
+ATTRIBUTION_NAME = "ATTRIBUTION.md"
+CAPTURE_INPUTS = (
+	"frontend/src",
+	"src/api/contracts.rs",
+	"src/geometry.rs",
+	"src/pixels/segmentation.rs",
+	"src/semantic.rs",
+	"vscode/src",
+	"vscode/package.json",
+	"marketing",
+)
 
 
 class MarketingMediaError(RuntimeError):
@@ -79,7 +102,7 @@ def source_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 		if group_id in seen_groups:
 			raise MarketingMediaError(f"duplicate marketing source group: {group_id}")
 		seen_groups.add(group_id)
-		for field in ("dataset_title", "attribution_party", "year_version", "doi"):
+		for field in ("title", "collection", "dataset_title", "attribution_party", "year_version", "doi"):
 			require_string(raw_group.get(field), f"groups[{group_index}].{field}")
 		patient_ids = raw_group.get("patient_ids")
 		if not isinstance(patient_ids, list) or not all(
@@ -190,6 +213,52 @@ def write_source_inventory(
 	}
 	destination = source_root / SOURCE_INVENTORY_NAME
 	destination.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+	write_source_linkage(source_root=source_root, groups=groups, inventory=inventory)
+	return destination
+
+
+def write_source_linkage(
+	*, source_root: Path, groups: Sequence[dict[str, Any]], inventory: dict[str, Any]
+) -> Path:
+	lines = [
+		"# DICOM marketing source linkage",
+		"",
+		"This ignored directory contains public DICOM source material. Do not commit its contents.",
+		"Each downloaded file is content-addressed in `SOURCE_FILES.json`.",
+		"",
+	]
+	for group in groups:
+		lines.extend(
+			[
+				f"## {group['title']}",
+				"",
+				f"- Dataset: {group['dataset_title']}",
+				f"- Collection: `{group['collection']}`",
+				f"- Attribution: {group['attribution_party']}",
+				f"- Version: {group['year_version']}",
+				f"- DOI: {group['doi']}",
+				f"- Public subject identifier(s): {', '.join(f'`{value}`' for value in group['patient_ids'])}",
+				"- Series:",
+			]
+		)
+		for series in group["series"]:
+			lines.append(
+				f"  - `{series['role']}` — `{series['series_instance_uid']}` "
+				f"({series['expected_files']} file(s))"
+			)
+		lines.append("")
+	lines.extend(
+		[
+			"## Local inventory",
+			"",
+			f"- Files: {inventory['file_count']}",
+			f"- Bytes: {inventory['total_bytes']}",
+			"- Per-file relative path, size, SHA-256, source group, role, and Series Instance UID: `SOURCE_FILES.json`",
+			"",
+		]
+	)
+	destination = source_root / SOURCE_LINKAGE_NAME
+	destination.write_text("\n".join(lines), encoding="utf-8")
 	return destination
 
 
@@ -285,10 +354,508 @@ def verify_source_inventory(args: argparse.Namespace) -> None:
 	print(f"verified {len(selected_records)} DICOM source files against {inventory_path}")
 
 
+def capture_scenes(manifest: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+	if manifest.get("schema_version") != 1:
+		raise MarketingMediaError("marketing capture manifest schema_version must be 1")
+	viewport = manifest.get("viewport")
+	if not isinstance(viewport, dict):
+		raise MarketingMediaError("capture viewport must be an object")
+	for field in ("width", "height", "device_scale_factor"):
+		require_positive_int(viewport.get(field), f"viewport.{field}")
+	defaults = {
+		"viewport": viewport,
+		"theme": require_string(manifest.get("theme"), "theme"),
+		"locale": require_string(manifest.get("locale"), "locale"),
+	}
+	scenes = manifest.get("scenes")
+	if not isinstance(scenes, list) or not scenes:
+		raise MarketingMediaError("capture manifest must contain scenes")
+	seen_ids: set[str] = set()
+	seen_outputs: set[str] = set()
+	validated: list[dict[str, Any]] = []
+	for index, raw_scene in enumerate(scenes):
+		if not isinstance(raw_scene, dict):
+			raise MarketingMediaError(f"scenes[{index}] must be an object")
+		scene = {**defaults, **raw_scene}
+		scene_id = require_string(scene.get("id"), f"scenes[{index}].id")
+		output = require_string(scene.get("output"), f"scenes[{index}].output")
+		if Path(output).name != output:
+			raise MarketingMediaError(f"scene output must be a filename: {output}")
+		if scene_id in seen_ids or output in seen_outputs:
+			raise MarketingMediaError(f"duplicate capture scene id or output: {scene_id}")
+		if scene.get("kind") not in {"screenshot", "gif"}:
+			raise MarketingMediaError(f"unsupported capture kind for {scene_id}")
+		if scene.get("surface", "browser") not in {"browser", "vscode"}:
+			raise MarketingMediaError(f"unsupported capture surface for {scene_id}")
+		require_string(scene.get("group"), f"scenes[{index}].group")
+		require_string(scene.get("series_role"), f"scenes[{index}].series_role")
+		if not isinstance(scene.get("modifications"), list) or not all(
+			isinstance(value, str) and value for value in scene["modifications"]
+		):
+			raise MarketingMediaError(f"scenes[{index}].modifications must be strings")
+		seen_ids.add(scene_id)
+		seen_outputs.add(output)
+		validated.append(scene)
+	return defaults, validated
+
+
+def resolve_scenes(
+	*, captures: dict[str, Any], sources: dict[str, Any], requested: Sequence[str]
+) -> list[dict[str, Any]]:
+	_, scenes = capture_scenes(captures)
+	groups = {str(group["id"]): group for group in source_groups(sources)}
+	by_id = {str(scene["id"]): scene for scene in scenes}
+	unknown = sorted(set(requested) - by_id.keys())
+	if unknown:
+		raise MarketingMediaError(f"unknown capture scene(s): {', '.join(unknown)}")
+	selected = [by_id[value] for value in requested] if requested else scenes
+	resolved: list[dict[str, Any]] = []
+	for scene in selected:
+		group = groups.get(str(scene["group"]))
+		if group is None:
+			raise MarketingMediaError(f"scene {scene['id']} references an unknown source group")
+		series = next(
+			(candidate for candidate in group["series"] if candidate["role"] == scene["series_role"]),
+			None,
+		)
+		if series is None:
+			raise MarketingMediaError(
+				f"scene {scene['id']} references unknown role {scene['series_role']}"
+			)
+		resolved.append(
+			{
+				**scene,
+				"surface": scene.get("surface", "browser"),
+				"series_instance_uid": series["series_instance_uid"],
+				"preferred_filename": scene.get("preferred_filename", series.get("preferred_filename")),
+				"allowed_patient_ids": group["patient_ids"],
+				"source": {
+					"group": group["id"],
+					"title": group["title"],
+					"dataset_title": group["dataset_title"],
+					"attribution_party": group["attribution_party"],
+					"year_version": group["year_version"],
+					"doi": group["doi"],
+				},
+			}
+		)
+	return resolved
+
+
+def tracked_input_digest(repo_root: Path = REPO_ROOT) -> tuple[str, list[str]]:
+	result = subprocess.run(
+		["git", "ls-files", "--", *CAPTURE_INPUTS],
+		cwd=repo_root,
+		check=True,
+		text=True,
+		capture_output=True,
+	)
+	paths = sorted(line for line in result.stdout.splitlines() if line)
+	hasher = hashlib.sha256()
+	for relative in paths:
+		hasher.update(relative.encode("utf-8") + b"\0")
+		hasher.update((repo_root / relative).read_bytes())
+		hasher.update(b"\0")
+	return hasher.hexdigest(), paths
+
+
+def git_value(*args: str) -> str:
+	return subprocess.run(
+		["git", *args], cwd=REPO_ROOT, check=True, text=True, capture_output=True
+	).stdout.strip()
+
+
+def git_is_dirty() -> bool:
+	return bool(git_value("status", "--porcelain", "--untracked-files=normal"))
+
+
+def wait_for_startup(process: subprocess.Popen[str], timeout: float = 60.0) -> str:
+	lines: queue.Queue[str | None] = queue.Queue()
+
+	def read_stdout() -> None:
+		assert process.stdout is not None
+		for line in process.stdout:
+			lines.put(line)
+		lines.put(None)
+
+	threading.Thread(target=read_stdout, daemon=True).start()
+	deadline = time.monotonic() + timeout
+	recent: list[str] = []
+	while time.monotonic() < deadline:
+		try:
+			line = lines.get(timeout=min(0.25, max(deadline - time.monotonic(), 0.01)))
+		except queue.Empty:
+			if process.poll() is not None:
+				break
+			continue
+		if line is None:
+			break
+		print(line, end="")
+		recent.append(line.rstrip())
+		recent = recent[-20:]
+		try:
+			event = json.loads(line)
+		except json.JSONDecodeError:
+			continue
+		if event.get("type") == "dcmview-startup" and isinstance(event.get("url"), str):
+			return str(event["url"])
+	raise MarketingMediaError(
+		"dcmview did not report startup within the timeout\n" + "\n".join(recent)
+	)
+
+
+def wait_for_catalog(url: str, expected_files: int, timeout: float = 120.0) -> dict[str, Any]:
+	deadline = time.monotonic() + timeout
+	last_count = 0
+	while time.monotonic() < deadline:
+		try:
+			with urllib.request.urlopen(f"{url.rstrip('/')}/api/files", timeout=5) as response:
+				catalog = json.load(response)
+		except (OSError, urllib.error.URLError, json.JSONDecodeError):
+			time.sleep(0.2)
+			continue
+		last_count = len(catalog.get("files", []))
+		if catalog.get("scan_complete"):
+			if last_count != expected_files:
+				raise MarketingMediaError(
+					f"capture source expected {expected_files} DICOM objects, dcmview found {last_count}"
+				)
+			return catalog
+		time.sleep(0.2)
+	raise MarketingMediaError(f"catalog scan timed out after finding {last_count}/{expected_files} files")
+
+
+@contextlib.contextmanager
+def running_server(binary: Path, source_path: Path, expected_files: int) -> Iterable[str]:
+	process = subprocess.Popen(
+		[
+			str(binary), "--no-browser", "--host", "127.0.0.1", "--port", "0",
+			"--startup-json", str(source_path),
+		],
+		cwd=REPO_ROOT,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT,
+		text=True,
+		bufsize=1,
+	)
+	try:
+		url = wait_for_startup(process)
+		wait_for_catalog(url, expected_files)
+		yield url
+	finally:
+		if process.poll() is None:
+			process.send_signal(signal.SIGINT)
+			try:
+				process.wait(timeout=10)
+			except subprocess.TimeoutExpired:
+				process.kill()
+				process.wait(timeout=5)
+
+
+def build_capture_binary(binary: Path, no_build: bool) -> Path:
+	if not no_build:
+		print("\n==> Build capture binary", flush=True)
+		subprocess.run(["cargo", "build", "--locked"], cwd=REPO_ROOT, check=True)
+	if not binary.is_file():
+		raise MarketingMediaError(f"capture binary is unavailable: {binary}")
+	return binary.resolve()
+
+
+def source_group_file_count(group: dict[str, Any]) -> int:
+	return sum(int(series["expected_files"]) for series in group["series"])
+
+
+def write_attribution(
+	*, destination: Path, scenes: Sequence[dict[str, Any]], sources: dict[str, Any]
+) -> None:
+	license_info = sources["license"]
+	retrieved = sources["retrieved_via"]
+	lines = [
+		"# Marketing media attribution",
+		"",
+		"The screenshots and GIFs are documentation derivatives, not clinical material.",
+		f"Source DICOM data are licensed under [{license_info['name']}]({license_info['url']}).",
+		"No endorsement by the dataset creators, IDC, TCIA, NIH, or NCI is implied.",
+		"",
+		"## Capture-to-source linkage",
+		"",
+	]
+	for scene in scenes:
+		source = scene["source"]
+		lines.extend(
+			[
+				f"### `{scene['output']}` — {source['title']}",
+				"",
+				f"{source['dataset_title']}. {source['attribution_party']} ({source['year_version']}). "
+				f"[{source['doi']}]({source['doi']})",
+				"",
+				f"Series Instance UID: `{scene['series_instance_uid']}`. "
+				f"Modifications: {', '.join(scene['modifications'])}.",
+				"",
+			]
+		)
+	lines.extend(
+		[
+			"## Retrieval platform",
+			"",
+			f"Retrieved from {retrieved['name']} ({retrieved['data_version']}) using {retrieved['tool']}.",
+			f"{retrieved['citation']} [{retrieved['doi']}]({retrieved['doi']})",
+			"",
+		]
+	)
+	destination.write_text("\n".join(lines), encoding="utf-8")
+
+
+def capture_media(args: argparse.Namespace) -> None:
+	sources_path = args.sources.resolve()
+	captures_path = args.captures.resolve()
+	sources = load_json(sources_path)
+	groups = {str(group["id"]): group for group in source_groups(sources)}
+	scenes = resolve_scenes(
+		captures=load_json(captures_path), sources=sources, requested=args.scene
+	)
+	if args.surface:
+		scenes = [scene for scene in scenes if scene["surface"] in set(args.surface)]
+	if not scenes:
+		raise MarketingMediaError("no capture scenes matched the selection")
+	if git_is_dirty() and not args.allow_dirty:
+		raise MarketingMediaError("capture requires a clean worktree; commit changes or pass --allow-dirty")
+
+	if not args.skip_source_verification:
+		verification_args = argparse.Namespace(
+			sources=sources_path,
+			source_root=args.source_root,
+			group=sorted({str(scene["group"]) for scene in scenes}),
+		)
+		verify_source_inventory(verification_args)
+
+	binary = build_capture_binary(args.binary.resolve(), args.no_build)
+	node = require_executable("node", "Install Node.js 20.19 or newer.")
+	capture_script = REPO_ROOT / "marketing" / "capture_browser.mjs"
+	vscode_script = REPO_ROOT / "marketing" / "capture_vscode.mjs"
+	if any(scene["surface"] == "vscode" for scene in scenes):
+		print("\n==> Compile VS Code extension", flush=True)
+		subprocess.run(["npm", "--prefix", "vscode", "run", "compile"], cwd=REPO_ROOT, check=True)
+	review_root = args.review_root.resolve()
+	review_root.mkdir(parents=True, exist_ok=True)
+	staging = Path(tempfile.mkdtemp(prefix="capture-", dir=review_root))
+	reports: list[dict[str, Any]] = []
+	try:
+		for scene in scenes:
+			group = groups[str(scene["group"])]
+			source_path = args.source_root.resolve() / str(group["id"])
+			output = staging / str(scene["output"])
+			report_path = staging / f"{scene['id']}.capture.json"
+			scene_path = staging / f"{scene['id']}.scene.json"
+			scene_path.write_text(json.dumps(scene, indent=2) + "\n", encoding="utf-8")
+			print(f"\n==> Capture {scene['id']}", flush=True)
+			if scene["surface"] == "browser":
+				with running_server(binary, source_path, source_group_file_count(group)) as url:
+					subprocess.run(
+						[
+							node, str(capture_script), "--url", url, "--scene", str(scene_path),
+							"--output", str(output), "--report", str(report_path),
+						],
+						cwd=REPO_ROOT,
+						check=True,
+					)
+			else:
+				subprocess.run(
+					[
+						node, str(vscode_script), "--source", str(source_path),
+						"--scene", str(scene_path), "--output", str(output),
+						"--report", str(report_path), "--binary", str(binary),
+						"--repo", str(REPO_ROOT),
+					],
+					cwd=REPO_ROOT,
+					check=True,
+				)
+			reports.append(load_json(report_path))
+
+		write_attribution(destination=staging / ATTRIBUTION_NAME, scenes=scenes, sources=sources)
+		input_digest, input_paths = tracked_input_digest()
+		artifacts = []
+		for scene in scenes:
+			path = staging / str(scene["output"])
+			artifacts.append(
+				{
+					"scene_id": scene["id"], "path": scene["output"],
+					"bytes": path.stat().st_size, "sha256": sha256_file(path),
+					"width": scene["viewport"]["width"], "height": scene["viewport"]["height"],
+					"source_group": scene["group"], "series_instance_uid": scene["series_instance_uid"],
+				}
+			)
+		inventory_path = args.source_root.resolve() / SOURCE_INVENTORY_NAME
+		lock = {
+			"schema_version": 1,
+			"captured_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+			"git_commit": git_value("rev-parse", "HEAD"),
+			"git_dirty": git_is_dirty(),
+			"dcmview_version": git_value("show", "HEAD:Cargo.toml").split('version = "', 1)[1].split('"', 1)[0],
+			"sources_manifest_sha256": manifest_sha256(sources_path),
+			"captures_manifest_sha256": manifest_sha256(captures_path),
+			"source_inventory_sha256": sha256_file(inventory_path),
+			"capture_inputs_sha256": input_digest,
+			"capture_input_paths": input_paths,
+			"artifacts": artifacts,
+			"reports": reports,
+		}
+		(staging / MEDIA_LOCK_NAME).write_text(
+			json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+		)
+		final = review_root / "current"
+		if final.exists():
+			shutil.rmtree(final)
+		staging.replace(final)
+		print(f"\ncapture review bundle: {final}")
+	except BaseException:
+		shutil.rmtree(staging, ignore_errors=True)
+		raise
+
+
+def verify_media_bundle(args: argparse.Namespace, *, quiet: bool = False) -> dict[str, Any]:
+	bundle = args.bundle.resolve()
+	lock = load_json(bundle / MEDIA_LOCK_NAME)
+	if lock.get("schema_version") != 1:
+		raise MarketingMediaError("media lock schema_version must be 1")
+	if lock.get("git_dirty"):
+		raise MarketingMediaError("media bundle was captured from a dirty worktree")
+	sources_path = args.sources.resolve()
+	captures_path = args.captures.resolve()
+	inventory_path = args.source_root.resolve() / SOURCE_INVENTORY_NAME
+	expected_hashes = {
+		"sources_manifest_sha256": manifest_sha256(sources_path),
+		"captures_manifest_sha256": manifest_sha256(captures_path),
+		"source_inventory_sha256": sha256_file(inventory_path),
+	}
+	for field, expected in expected_hashes.items():
+		if lock.get(field) != expected:
+			raise MarketingMediaError(f"media bundle is stale: {field} changed")
+	input_digest, _ = tracked_input_digest()
+	if lock.get("capture_inputs_sha256") != input_digest:
+		raise MarketingMediaError("media bundle is stale: viewer/capture inputs changed")
+	artifacts = lock.get("artifacts")
+	if not isinstance(artifacts, list) or not artifacts:
+		raise MarketingMediaError("media lock has no artifacts")
+	for artifact in artifacts:
+		path = bundle / require_string(artifact.get("path"), "artifact.path")
+		if not path.is_file():
+			raise MarketingMediaError(f"captured artifact is missing: {path.name}")
+		if path.stat().st_size != artifact.get("bytes") or sha256_file(path) != artifact.get("sha256"):
+			raise MarketingMediaError(f"captured artifact hash mismatch: {path.name}")
+	attribution = (bundle / ATTRIBUTION_NAME).read_text(encoding="utf-8")
+	for group in source_groups(load_json(sources_path)):
+		if any(artifact.get("source_group") == group["id"] for artifact in artifacts):
+			for required in (group["dataset_title"], group["attribution_party"], group["doi"]):
+				if required not in attribution:
+					raise MarketingMediaError(f"attribution is missing source text: {required}")
+	if not quiet:
+		print(f"verified {len(artifacts)} current capture artifact(s) in {bundle}")
+	return lock
+
+
+def replace_marked_block(path: Path, block: str, *, anchor: str) -> None:
+	start = "<!-- dcmview-marketing:start -->"
+	end = "<!-- dcmview-marketing:end -->"
+	text = path.read_text(encoding="utf-8")
+	marked = f"{start}\n{block.rstrip()}\n{end}"
+	if start in text or end in text:
+		if text.count(start) != 1 or text.count(end) != 1 or text.index(start) > text.index(end):
+			raise MarketingMediaError(f"invalid marketing markers in {path}")
+		text = text[: text.index(start)] + marked + text[text.index(end) + len(end) :]
+	else:
+		position = text.find(anchor)
+		if position < 0:
+			raise MarketingMediaError(f"publication anchor {anchor!r} not found in {path}")
+		text = text[:position] + marked + "\n\n" + text[position:]
+	path.write_text(text, encoding="utf-8")
+
+
+def copy_bundle_files(bundle: Path, destination: Path, lock: dict[str, Any]) -> None:
+	destination.mkdir(parents=True, exist_ok=True)
+	for artifact in lock["artifacts"]:
+		shutil.copy2(bundle / artifact["path"], destination / artifact["path"])
+	for name in (ATTRIBUTION_NAME, MEDIA_LOCK_NAME):
+		shutil.copy2(bundle / name, destination / name)
+
+
+def publish_media(args: argparse.Namespace) -> None:
+	if not args.approve:
+		raise MarketingMediaError("publication requires the explicit --approve flag after visual review")
+	lock = verify_media_bundle(args, quiet=True)
+	expected_scene_ids = {
+		str(scene["id"])
+		for scene in resolve_scenes(
+			captures=load_json(args.captures.resolve()),
+			sources=load_json(args.sources.resolve()),
+			requested=[],
+		)
+	}
+	actual_scene_ids = {str(artifact.get("scene_id")) for artifact in lock["artifacts"]}
+	if actual_scene_ids != expected_scene_ids:
+		missing = ", ".join(sorted(expected_scene_ids - actual_scene_ids)) or "none"
+		raise MarketingMediaError(f"only a complete reviewed bundle may be published; missing: {missing}")
+	version = require_string(lock.get("dcmview_version"), "dcmview_version")
+	tag = require_string(args.tag, "tag")
+	if tag != f"v{version}" or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+		raise MarketingMediaError(f"publication tag {tag!r} does not match captured version v{version}")
+	bundle = args.bundle.resolve()
+	repository = "https://raw.githubusercontent.com/beatrice-b-m/dcmview"
+	root_media = REPO_ROOT / "media" / "marketing"
+	vscode_media = REPO_ROOT / "vscode" / "media" / "marketing"
+	copy_bundle_files(bundle, root_media, lock)
+	copy_bundle_files(bundle, vscode_media, lock)
+	gallery = (
+		"## Viewer gallery\n\n"
+		f"![DICOM SEG semantic context in dcmview]({repository}/{tag}/media/marketing/brain-mr-seg.png)\n\n"
+		f"![Chest CT cine playback in dcmview]({repository}/{tag}/media/marketing/chest-ct-cine.gif)\n\n"
+		f"[Source imagery attribution]({repository}/{tag}/media/marketing/ATTRIBUTION.md)"
+	)
+	replace_marked_block(REPO_ROOT / "README.md", gallery, anchor="## Why use it?")
+	vscode_gallery = (
+		"## In VS Code\n\n"
+		f"![dcmview running inside VS Code]({repository}/{tag}/vscode/media/marketing/vscode-workflow.png)\n\n"
+		f"![DICOM cine playback]({repository}/{tag}/vscode/media/marketing/chest-ct-cine.gif)\n\n"
+		f"[Source imagery attribution]({repository}/{tag}/vscode/media/marketing/ATTRIBUTION.md)"
+	)
+	replace_marked_block(REPO_ROOT / "vscode" / "README.md", vscode_gallery, anchor="## Supported Platforms")
+
+	docs_repo = args.docs_repo.resolve()
+	docs_index = docs_repo / "src" / "content" / "docs" / "index.mdx"
+	if not docs_index.is_file():
+		raise MarketingMediaError(f"dcmview-docs index is unavailable: {docs_index}")
+	docs_media = docs_repo / "public" / "media" / "dcmview"
+	copy_bundle_files(bundle, docs_media, lock)
+	docs_gallery = (
+		"## See dcmview in action\n\n"
+		"![DICOM SEG semantic context in dcmview](/media/dcmview/brain-mr-seg.png)\n\n"
+		"![Chest CT cine playback in dcmview](/media/dcmview/chest-ct-cine.gif)\n\n"
+		"[Review source imagery attribution](/reference/media-attribution/)."
+	)
+	replace_marked_block(docs_index, docs_gallery, anchor="## Choose your workflow")
+	attribution_page = docs_repo / "src" / "content" / "docs" / "reference" / "media-attribution.md"
+	attribution_page.write_text(
+		"---\ntitle: Marketing media attribution\ndescription: Source and license attribution for dcmview documentation imagery.\n---\n\n"
+		+ (bundle / ATTRIBUTION_NAME).read_text(encoding="utf-8").replace(
+			"# Marketing media attribution\n\n", ""
+		),
+		encoding="utf-8",
+	)
+	print("published the approved media set to README, Marketplace, and dcmview-docs surfaces")
+
+
 def add_common_manifest_arguments(parser: argparse.ArgumentParser) -> None:
 	parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
 	parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
 	parser.add_argument("--group", action="append", default=[], help="Source group ID; repeatable")
+
+
+def add_capture_manifest_arguments(parser: argparse.ArgumentParser) -> None:
+	parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
+	parser.add_argument("--captures", type=Path, default=DEFAULT_CAPTURES)
+	parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
+	parser.add_argument("--review-root", type=Path, default=DEFAULT_REVIEW_ROOT)
+	parser.add_argument("--scene", action="append", default=[], help="Capture scene ID; repeatable")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -304,6 +871,36 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	add_common_manifest_arguments(verify_sources)
 	verify_sources.set_defaults(handler=verify_source_inventory)
+
+	capture = subparsers.add_parser(
+		"capture", help="Capture deterministic browser media into an ignored review bundle"
+	)
+	add_capture_manifest_arguments(capture)
+	capture.add_argument(
+		"--surface", action="append", choices=("browser", "vscode"), default=[]
+	)
+	capture.add_argument("--binary", type=Path, default=REPO_ROOT / "target" / "debug" / "dcmview")
+	capture.add_argument("--no-build", action="store_true")
+	capture.add_argument("--skip-source-verification", action="store_true")
+	capture.add_argument("--allow-dirty", action="store_true")
+	capture.set_defaults(handler=capture_media)
+
+	verify = subparsers.add_parser(
+		"verify", help="Reject stale, modified, dirty, or incompletely attributed media"
+	)
+	add_capture_manifest_arguments(verify)
+	verify.add_argument("--bundle", type=Path, default=DEFAULT_REVIEW_ROOT / "current")
+	verify.set_defaults(handler=verify_media_bundle)
+
+	publish = subparsers.add_parser(
+		"publish", help="Publish a visually approved bundle to all documentation surfaces"
+	)
+	add_capture_manifest_arguments(publish)
+	publish.add_argument("--bundle", type=Path, default=DEFAULT_REVIEW_ROOT / "current")
+	publish.add_argument("--docs-repo", type=Path, default=REPO_ROOT.parent / "dcmview-docs")
+	publish.add_argument("--tag", required=True)
+	publish.add_argument("--approve", action="store_true")
+	publish.set_defaults(handler=publish_media)
 	return parser
 
 

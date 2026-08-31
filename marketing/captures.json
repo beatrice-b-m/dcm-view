@@ -92,6 +92,7 @@
       "file_position": 0.35,
       "kind": "screenshot",
       "surface": "vscode",
+      "vscode_version": "1.103.2",
       "output": "vscode-workflow.png",
       "modifications": ["windowed", "captured in a controlled VS Code development host"]
     }
