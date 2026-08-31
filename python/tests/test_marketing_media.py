@@ -81,6 +81,19 @@ class MarketingMediaSourceTests(unittest.TestCase):
 					series=group["series"][0],
 				)
 
+	def test_accepts_standard_idc_series_directory_layout(self) -> None:
+		with tempfile.TemporaryDirectory() as directory:
+			root = Path(directory)
+			series_root = root / "example" / "collection" / "patient" / "study" / "MR_1.2.3"
+			series_root.mkdir(parents=True)
+			(series_root / "one.dcm").write_bytes(b"one")
+			(series_root / "two.dcm").write_bytes(b"two")
+			group = self.source_manifest()["groups"][0]
+			entries = marketing_media.inventory_series(
+				source_root=root, group=group, series=group["series"][0]
+			)
+			self.assertEqual(len(entries), 2)
+
 	def test_resolves_capture_scene_to_allowlisted_source(self) -> None:
 		captures = {
 			"schema_version": 1,

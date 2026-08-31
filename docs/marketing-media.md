@@ -49,6 +49,13 @@ python scripts/marketing_media.py fetch
 python scripts/marketing_media.py verify-sources
 ```
 
+If the selected IDC series are already present, create the inventory and
+linkage records without downloading again:
+
+```bash
+python scripts/marketing_media.py inventory
+```
+
 Downloads go to the ignored `marketing-source-data/` directory. Fetch writes
 `SOURCE_FILES.json`, which records a SHA-256 and source linkage for every DICOM
 object, and `SOURCE_LINKAGE.md`, which provides the human-readable

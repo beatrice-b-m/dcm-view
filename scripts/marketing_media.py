@@ -166,13 +166,29 @@ def dicom_files(path: Path) -> list[Path]:
 	)
 
 
+def find_series_root(source_root: Path, group: dict[str, Any], series: dict[str, Any]) -> Path:
+	group_root = source_root / str(group["id"])
+	uid = str(series["series_instance_uid"])
+	candidates = sorted(
+		path
+		for path in group_root.rglob("*")
+		if path.is_dir() and (path.name == uid or path.name.endswith(f"_{uid}"))
+	)
+	if len(candidates) != 1:
+		raise MarketingMediaError(
+			f"{group['id']}/{series['role']} expected one directory for Series {uid}, "
+			f"found {len(candidates)}"
+		)
+	return candidates[0]
+
+
 def inventory_series(
 	*,
 	source_root: Path,
 	group: dict[str, Any],
 	series: dict[str, Any],
 ) -> list[dict[str, Any]]:
-	series_root = source_root / str(group["id"]) / str(series["series_instance_uid"])
+	series_root = find_series_root(source_root, group, series)
 	files = dicom_files(series_root)
 	expected = int(series["expected_files"])
 	if len(files) != expected:
@@ -304,6 +320,17 @@ def fetch_sources(args: argparse.Namespace) -> None:
 		groups=groups,
 	)
 	print(f"wrote source inventory: {inventory_path}")
+
+
+def inventory_sources(args: argparse.Namespace) -> None:
+	sources_path = args.sources.resolve()
+	groups = select_groups(source_groups(load_json(sources_path)), args.group)
+	source_root = args.source_root.resolve()
+	ensure_ignored(source_root)
+	inventory_path = write_source_inventory(
+		source_root=source_root, sources_path=sources_path, groups=groups
+	)
+	print(f"inventoried existing source files: {inventory_path}")
 
 
 def verify_source_inventory(args: argparse.Namespace) -> None:
@@ -948,6 +975,12 @@ def build_parser() -> argparse.ArgumentParser:
 	fetch = subparsers.add_parser("fetch", help="Download and inventory pinned IDC series")
 	add_common_manifest_arguments(fetch)
 	fetch.set_defaults(handler=fetch_sources)
+
+	inventory = subparsers.add_parser(
+		"inventory", help="Checksum already-downloaded IDC series and write linkage records"
+	)
+	add_common_manifest_arguments(inventory)
+	inventory.set_defaults(handler=inventory_sources)
 
 	verify_sources = subparsers.add_parser(
 		"verify-sources", help="Verify downloaded source files against their local inventory"
