@@ -1,4 +1,5 @@
 use super::support;
+use axum::http::header;
 use axum_test::TestServer;
 use dcmview::server;
 use dicom_core::value::DataSetSequence;
@@ -239,6 +240,129 @@ async fn segmentation_context_resolves_top_level_sources_by_frame_geometry() {
 }
 
 #[tokio::test]
+async fn segmentation_overlay_returns_source_sized_transparent_png() {
+    let dir = tempdir().expect("temp dir");
+    let seg_path = dir.path().join("overlay-seg.dcm");
+    let source_uid = "2.25.8061";
+    let segment = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SEGMENT_NUMBER, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(tags::SEGMENT_LABEL, VR::LO, "Tumor"),
+        DataElement::new(tags::SEGMENT_ALGORITHM_TYPE, VR::CS, "MANUAL"),
+    ]);
+    let shared = InMemDicomObject::from_element_iter([
+        sequence(
+            tags::PLANE_ORIENTATION_SEQUENCE,
+            vec![InMemDicomObject::from_element_iter([DataElement::new(
+                tags::IMAGE_ORIENTATION_PATIENT,
+                VR::DS,
+                "1\\0\\0\\0\\1\\0",
+            )])],
+        ),
+        sequence(
+            tags::PIXEL_MEASURES_SEQUENCE,
+            vec![InMemDicomObject::from_element_iter([DataElement::new(
+                tags::PIXEL_SPACING,
+                VR::DS,
+                "1\\1",
+            )])],
+        ),
+    ]);
+    let frame_group = InMemDicomObject::from_element_iter([
+        sequence(
+            tags::SEGMENT_IDENTIFICATION_SEQUENCE,
+            vec![InMemDicomObject::from_element_iter([DataElement::new(
+                tags::REFERENCED_SEGMENT_NUMBER,
+                VR::US,
+                PrimitiveValue::from(1_u16),
+            )])],
+        ),
+        sequence(
+            tags::PLANE_POSITION_SEQUENCE,
+            vec![InMemDicomObject::from_element_iter([DataElement::new(
+                tags::IMAGE_POSITION_PATIENT,
+                VR::DS,
+                "0\\0\\0",
+            )])],
+        ),
+    ]);
+    let object = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SOP_CLASS_UID, VR::UI, SEG_STORAGE),
+        DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.8060"),
+        DataElement::new(tags::FRAME_OF_REFERENCE_UID, VR::UI, "2.25.8099"),
+        DataElement::new(tags::SEGMENTATION_TYPE, VR::CS, "BINARY"),
+        DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, "1"),
+        DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(2_u16)),
+        DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(2_u16)),
+        DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(0_u16)),
+        DataElement::new(
+            tags::PIXEL_REPRESENTATION,
+            VR::US,
+            PrimitiveValue::from(0_u16),
+        ),
+        DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, "MONOCHROME2"),
+        sequence(tags::SEGMENT_SEQUENCE, vec![segment]),
+        sequence(
+            tags::SOURCE_IMAGE_SEQUENCE,
+            vec![reference_item(CT_STORAGE, source_uid, None)],
+        ),
+        sequence(tags::SHARED_FUNCTIONAL_GROUPS_SEQUENCE, vec![shared]),
+        sequence(
+            tags::PER_FRAME_FUNCTIONAL_GROUPS_SEQUENCE,
+            vec![frame_group],
+        ),
+        DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            PrimitiveValue::U8(vec![0b0000_0110].into()),
+        ),
+    ]);
+    write_object(&seg_path, SEG_STORAGE, "2.25.8060", object);
+
+    let mut seg = support::file_entry(seg_path, uids::EXPLICIT_VR_LITTLE_ENDIAN, 1);
+    seg.sop_class_uid = SEG_STORAGE.to_string();
+    seg.sop_instance_uid = "2.25.8060".to_string();
+    seg.rows = 2;
+    seg.columns = 2;
+    seg.bits_allocated = 1;
+    seg.series_metadata.native_pixel.bits_stored = Some(1);
+    seg.series_metadata.native_pixel.high_bit = Some(0);
+    seg.series_metadata.native_pixel.pixel_data_kind =
+        Some(dcmview::types::NativePixelDataKind::Integer);
+    configure_geometry(&mut seg, "2.25.8099");
+    seg.rows = 2;
+    seg.columns = 2;
+
+    let mut source = support::file_entry(
+        dir.path().join("overlay-source.dcm"),
+        uids::EXPLICIT_VR_LITTLE_ENDIAN,
+        1,
+    );
+    source.sop_class_uid = CT_STORAGE.to_string();
+    source.sop_instance_uid = source_uid.to_string();
+    source.rows = 2;
+    source.columns = 2;
+    configure_geometry(&mut source, "2.25.8099");
+    source.rows = 2;
+    source.columns = 2;
+
+    let server = TestServer::new(server::router(support::app_state(vec![seg, source])));
+    let response = server.get("/api/file/0/frame/0/segmentation-overlay").await;
+    response.assert_status_ok();
+    response.assert_header(header::CONTENT_TYPE, "image/png");
+    assert!(response.maybe_header("X-Cache").is_some());
+    let overlay = image::load_from_memory(response.as_bytes().as_ref())
+        .expect("decode overlay PNG")
+        .to_rgba8();
+    assert_eq!(overlay.dimensions(), (2, 2));
+    assert_eq!(overlay.get_pixel(0, 0).0[3], 0);
+    assert_eq!(overlay.get_pixel(1, 0).0[3], 178);
+    assert_eq!(overlay.get_pixel(0, 1).0[3], 178);
+}
+
+#[tokio::test]
 async fn parametric_map_context_exposes_explicit_mapping_without_applying_it() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("pm.dcm");
@@ -371,7 +495,7 @@ fn configure_geometry(entry: &mut dcmview::types::FileEntry, frame_of_reference_
     entry.columns = 16;
     entry.series_metadata.frame_of_reference_uid = frame_of_reference_uid.to_string();
     entry.series_metadata.image_position_patient = Some([0.0, 0.0, 0.0]);
-    entry.series_metadata.image_orientation_patient = Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    entry.series_metadata.image_orientation_patient = Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
     entry.series_metadata.native_pixel.pixel_spacing = Some([1.0, 1.0]);
 }
 

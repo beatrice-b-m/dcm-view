@@ -163,6 +163,72 @@ pub(super) async fn semantic_context(
     Ok(Json(context))
 }
 
+pub(super) async fn segmentation_overlay(
+    State(state): State<AppState>,
+    path: Result<Path<(usize, u32)>, PathRejection>,
+) -> Result<Response, ApiError> {
+    let Path((index, frame)) = path.map_err(error::path_rejection)?;
+    let segmentation = state
+        .registry()
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    let files = state.registry().files_snapshot();
+    let plan = task::spawn_blocking({
+        let segmentation = segmentation.clone();
+        let files = files.clone();
+        move || crate::semantic::segmentation_overlay_plan(&segmentation, frame, &files)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("SEG overlay planning task failed: {error}")))?
+    .map_err(|error| match error {
+        crate::semantic::SegmentationOverlayError::NotSegmentation => {
+            ApiError::bad_request(error.to_string())
+        }
+        crate::semantic::SegmentationOverlayError::FrameOutOfRange => {
+            error::pixel_error(crate::pixels::PixelError::FrameOutOfRange)
+        }
+        crate::semantic::SegmentationOverlayError::Unavailable(_) => {
+            ApiError::semantic_mapping_unavailable(error.to_string())
+        }
+        crate::semantic::SegmentationOverlayError::Metadata(_) => {
+            ApiError::internal(error.to_string())
+        }
+    })?;
+    let target = files
+        .iter()
+        .find(|file| file.index == plan.source_file_index)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("resolved source file is unavailable"))?;
+    let raw = pixels::load_raw_frame(segmentation, state.raw_cache(), RawFrameRequest { frame })
+        .await
+        .map_err(error::pixel_error)?;
+    let target_rows = target.rows;
+    let target_columns = target.columns;
+    let overlay = task::spawn_blocking(move || {
+        pixels::encode_segmentation_overlay_png(
+            &raw.body,
+            &raw.metadata,
+            &plan,
+            target_rows,
+            target_columns,
+        )
+        .map(|body| (body, raw.cache_hit))
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("SEG overlay encoding task failed: {error}")))?
+    .map_err(error::pixel_error)?;
+
+    let mut response = Response::new(axum::body::Body::from(overlay.0));
+    response.headers_mut().insert(
+        CACHE_HEADER,
+        HeaderValue::from_static(if overlay.1 { CACHE_HIT } else { CACHE_MISS }),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    Ok(response)
+}
+
 pub(super) async fn wsi_context(
     State(state): State<AppState>,
     path: Result<Path<(usize, u32)>, PathRejection>,

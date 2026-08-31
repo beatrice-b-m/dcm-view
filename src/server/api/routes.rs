@@ -237,6 +237,23 @@ fn register_api_endpoint(
                 ),
             )
         }
+        ApiOperation::FileSegmentationOverlay => {
+            require_method(ApiMethod::Get);
+            require_endpoint_spec::<api_contracts::FileSegmentationOverlay>(endpoint);
+            require_no_query::<api_contracts::FileSegmentationOverlay>();
+            require_no_request::<api_contracts::FileSegmentationOverlay>();
+            router.route(
+                endpoint.path,
+                get(
+                    |state: State<AppState>,
+                     path: Result<Path<(usize, u32)>, PathRejection>| async move {
+                        let response: handler_result_type!(api_contracts::FileSegmentationOverlay) =
+                            handlers::segmentation_overlay(state, path).await;
+                        response
+                    },
+                ),
+            )
+        }
         ApiOperation::FileWsiContext => {
             require_method(ApiMethod::Get);
             require_endpoint_spec::<api_contracts::FileWsiContext>(endpoint);

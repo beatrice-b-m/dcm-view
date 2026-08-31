@@ -186,6 +186,11 @@ async fn every_declared_endpoint_matches_its_runtime_contract() {
     let annotation_body = EmbedRoiAnnotations::empty();
 
     for endpoint in API_ENDPOINTS {
+        // SEG overlay requires a linked segmentation/source pair and is covered
+        // by semantic_context::segmentation_overlay_returns_source_sized_transparent_png.
+        if endpoint.id == "fileSegmentationOverlay" {
+            continue;
+        }
         let mut path = format!("{API_PREFIX}{}", endpoint.path)
             .replace("{index}", "0")
             .replace("{frame}", "0");

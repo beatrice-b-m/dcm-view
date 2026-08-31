@@ -249,6 +249,20 @@ define_api_endpoints! {
         error_type: ErrorResponse,
         success_status: 200
     },
+    API_ENDPOINT_FILE_SEGMENTATION_OVERLAY => {
+        operation: FileSegmentationOverlay,
+        id: "fileSegmentationOverlay",
+        method: Get,
+        path: "/file/{index}/frame/{frame}/segmentation-overlay",
+        query_type: NoQuery,
+        request_type: NoRequest,
+        request_media_type: None,
+        response_type: BlobBody,
+        response_media_type: "image/png",
+        response_headers_type: CacheResponseHeaders,
+        error_type: ErrorResponse,
+        success_status: 200
+    },
     API_ENDPOINT_FILE_WSI_CONTEXT => {
         operation: FileWsiContext,
         id: "fileWsiContext",
@@ -897,6 +911,7 @@ pub enum ApiErrorCode {
     InvalidWindow,
     UnsupportedTransferSyntax,
     UnsupportedPixelLayout,
+    SemanticMappingUnavailable,
     PixelDecodeFailed,
     InternalError,
 }

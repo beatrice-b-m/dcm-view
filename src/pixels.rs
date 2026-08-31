@@ -14,6 +14,7 @@ mod overlay;
 mod palette;
 mod render;
 mod rle;
+mod segmentation;
 mod service;
 mod shutter;
 mod stored_bits;
@@ -25,6 +26,7 @@ pub use cache::{
     RAW_CACHE_CAPACITY, RAW_CACHE_MAX_BYTES,
 };
 pub use error::{PixelError, PixelResult};
+pub use segmentation::encode_segmentation_overlay_png;
 pub use service::{
     load_frame, load_raw_frame, FrameRequest, FrameResponse, RawFrameRequest, RawFrameResponse,
 };

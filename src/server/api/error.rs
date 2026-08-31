@@ -53,6 +53,14 @@ impl ApiError {
         }
     }
 
+    pub(super) fn semantic_mapping_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code: ApiErrorCode::SemanticMappingUnavailable,
+            message: message.into(),
+        }
+    }
+
     fn coded(status: StatusCode, code: ApiErrorCode, message: impl Into<String>) -> Self {
         Self {
             status,

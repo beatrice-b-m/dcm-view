@@ -11,6 +11,7 @@ use crate::api::contracts::{
 };
 use crate::geometry::{
     frame_geometry, grids_overlap, target_to_source_transform, GeometryTolerances,
+    PixelAffineTransform,
 };
 use crate::object_kind::{classify_sop_class, ObjectKind};
 use crate::references::{self, ReferenceCandidate, ReferenceRelationship, ResolvedReferenceEdge};
@@ -23,6 +24,127 @@ use std::collections::BTreeSet;
 
 const MAX_SEQUENCE_ITEMS: usize = 4_096;
 const MAX_LUT_VALUES: usize = 4_096;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SegmentationOverlayError {
+    #[error("semantic overlay is only available for segmentation objects")]
+    NotSegmentation,
+    #[error("segmentation frame is out of range")]
+    FrameOutOfRange,
+    #[error("segmentation overlay unavailable: {0}")]
+    Unavailable(String),
+    #[error(transparent)]
+    Metadata(#[from] anyhow::Error),
+}
+
+#[derive(Debug, Clone)]
+pub struct SegmentationOverlayPlan {
+    pub segmentation_file_index: usize,
+    pub segmentation_frame_index: u32,
+    pub source_file_index: usize,
+    pub source_frame_index: u32,
+    pub target_to_segmentation: PixelAffineTransform,
+    pub segmentation_type: String,
+    pub maximum_fractional_value: Option<u32>,
+    pub color: [u8; 3],
+}
+
+pub fn segmentation_overlay_plan(
+    source: &FileEntry,
+    frame: u32,
+    files: &[FileEntry],
+) -> Result<SegmentationOverlayPlan, SegmentationOverlayError> {
+    if classify_sop_class(&source.sop_class_uid) != ObjectKind::Segmentation {
+        return Err(SegmentationOverlayError::NotSegmentation);
+    }
+    if frame >= source.frame_count {
+        return Err(SegmentationOverlayError::FrameOutOfRange);
+    }
+    let response = semantic_context(source, files)?;
+    let SemanticContext::Segmentation(context) = response.context else {
+        return Err(SegmentationOverlayError::NotSegmentation);
+    };
+    let mapping = context
+        .frame_mappings
+        .iter()
+        .find(|mapping| mapping.frame_index == frame)
+        .ok_or_else(|| {
+            SegmentationOverlayError::Unavailable("frame mapping is missing".to_string())
+        })?;
+    if mapping.mapping_status != "resolved" || mapping.source_frames.len() != 1 {
+        return Err(SegmentationOverlayError::Unavailable(
+            mapping.mapping_reason.clone(),
+        ));
+    }
+    let resolved_source = &mapping.source_frames[0];
+    let target = files
+        .iter()
+        .find(|file| file.index == resolved_source.file_index)
+        .ok_or_else(|| {
+            SegmentationOverlayError::Unavailable(
+                "the resolved source frame is not available".to_string(),
+            )
+        })?;
+    let segmentation_geometry = frame_geometry(source, frame).ok_or_else(|| {
+        SegmentationOverlayError::Unavailable(
+            "segmentation frame geometry is incomplete".to_string(),
+        )
+    })?;
+    let target_geometry = frame_geometry(target, resolved_source.frame_index).ok_or_else(|| {
+        SegmentationOverlayError::Unavailable("source frame geometry is incomplete".to_string())
+    })?;
+    let target_to_segmentation = target_to_source_transform(
+        segmentation_geometry,
+        target_geometry,
+        GeometryTolerances::default(),
+    )
+    .filter(|transform| grids_overlap(segmentation_geometry, target_geometry, *transform))
+    .ok_or_else(|| {
+        SegmentationOverlayError::Unavailable(
+            "source and segmentation grids are not compatibly coplanar".to_string(),
+        )
+    })?;
+    let segmentation_type = context
+        .segmentation_type
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    if !matches!(segmentation_type.as_str(), "BINARY" | "FRACTIONAL") {
+        return Err(SegmentationOverlayError::Unavailable(format!(
+            "segmentation type {segmentation_type} is not supported for overlays"
+        )));
+    }
+    let color = mapping
+        .segment_number
+        .and_then(|number| {
+            context
+                .segments
+                .iter()
+                .find(|segment| segment.number == number)
+        })
+        .map(|segment| fallback_segment_color(segment.number))
+        .unwrap_or([255, 79, 132]);
+    Ok(SegmentationOverlayPlan {
+        segmentation_file_index: source.index,
+        segmentation_frame_index: frame,
+        source_file_index: resolved_source.file_index,
+        source_frame_index: resolved_source.frame_index,
+        target_to_segmentation,
+        segmentation_type,
+        maximum_fractional_value: context.maximum_fractional_value,
+        color,
+    })
+}
+
+fn fallback_segment_color(segment_number: u16) -> [u8; 3] {
+    const COLORS: [[u8; 3]; 6] = [
+        [255, 79, 132],
+        [42, 211, 199],
+        [255, 190, 92],
+        [136, 132, 255],
+        [114, 218, 111],
+        [255, 126, 92],
+    ];
+    COLORS[usize::from(segment_number.saturating_sub(1)) % COLORS.len()]
+}
 
 pub fn semantic_context(
     source: &FileEntry,
@@ -167,7 +289,13 @@ fn segmentation_context(
             .segment_number
             .is_some_and(|number| declared_segments.contains(&number))
     });
-    let overlay = segmentation_overlay(source, resolved, &frame_mappings, segment_closure_valid);
+    let overlay = segmentation_overlay(
+        source,
+        files,
+        resolved,
+        &frame_mappings,
+        segment_closure_valid,
+    );
     SegmentationContext {
         segmentation_type: read_string(object, tags::SEGMENTATION_TYPE),
         segmentation_fractional_type: read_string(object, tags::SEGMENTATION_FRACTIONAL_TYPE),
@@ -195,6 +323,7 @@ fn referenced_segment_number(
 
 fn segmentation_overlay(
     source: &FileEntry,
+    files: &[FileEntry],
     resolved: &[ResolvedReferenceEdge],
     frame_mappings: &[SegmentFrameMapping],
     segment_closure_valid: bool,
@@ -210,6 +339,22 @@ fn segmentation_overlay(
         .any(|mapping| mapping.mapping_status != "resolved" || mapping.source_frames.len() != 1)
     {
         return ineligible("one or more segmentation frames lack a unique source-frame mapping");
+    }
+    if frame_mappings.iter().any(|mapping| {
+        let resolved_source = &mapping.source_frames[0];
+        files
+            .iter()
+            .find(|file| file.index == resolved_source.file_index)
+            .is_none_or(|target| {
+                !frame_geometrically_compatible(
+                    source,
+                    mapping.frame_index,
+                    target,
+                    resolved_source.frame_index,
+                )
+            })
+    }) {
+        return ineligible("one or more source frames have incompatible patient geometry");
     }
     let source_indices = frame_mappings
         .iter()
