@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "retrieved_via": {
+    "name": "NCI Imaging Data Commons",
+    "tool": "idc-index",
+    "data_version": "v24",
+    "citation": "Fedorov, A., Longabaugh, W. J. R., Pot, D., et al. (2023). National Cancer Institute Imaging Data Commons: Toward Transparency, Reproducibility, and Scalability in Imaging Artificial Intelligence. RadioGraphics, 43(12).",
+    "doi": "https://doi.org/10.1148/rg.230180"
+  },
+  "license": {
+    "name": "Creative Commons Attribution 4.0 International",
+    "spdx": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  "groups": [
+    {
+      "id": "01-mr-seg",
+      "title": "Brain MR and DICOM SEG",
+      "collection": "ReMIND",
+      "dataset_title": "The Brain Resection Multimodal Imaging Database (ReMIND)",
+      "attribution_party": "Juvekar, P., Dorent, R., Kögl, F., et al.",
+      "year_version": "2023, Version 1",
+      "doi": "https://doi.org/10.7937/3RAG-D070",
+      "patient_ids": ["ReMIND-084"],
+      "series": [
+        {
+          "role": "source_mr",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.22170270874912661638837921250285401241",
+          "expected_files": 192
+        },
+        {
+          "role": "segmentation",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.207326736062478576135244485404102351558",
+          "expected_files": 1
+        }
+      ]
+    },
+    {
+      "id": "02-chest-ct",
+      "title": "Chest CT",
+      "collection": "COVID-19-AR",
+      "dataset_title": "Chest Imaging with Clinical and Genomic Correlates Representing a Rural COVID-19 Positive Population",
+      "attribution_party": "Desai, S., Baghal, A., Wongsurawat, T., et al.",
+      "year_version": "2020, Version 1",
+      "doi": "https://doi.org/10.7937/TCIA.2020.PY71-5978",
+      "patient_ids": ["COVID-19-AR-16406502"],
+      "series": [
+        {
+          "role": "chest_ct",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.9999.103.1892998694410640266017914996862",
+          "expected_files": 92
+        }
+      ]
+    },
+    {
+      "id": "03-radiograph",
+      "title": "PA chest radiograph",
+      "collection": "COVID-19-AR",
+      "dataset_title": "Chest Imaging with Clinical and Genomic Correlates Representing a Rural COVID-19 Positive Population",
+      "attribution_party": "Desai, S., Baghal, A., Wongsurawat, T., et al.",
+      "year_version": "2020, Version 1",
+      "doi": "https://doi.org/10.7937/TCIA.2020.PY71-5978",
+      "patient_ids": ["COVID-19-AR-16406502"],
+      "series": [
+        {
+          "role": "radiograph",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.9999.103.7387851802783238061375077795803",
+          "expected_files": 1
+        }
+      ]
+    },
+    {
+      "id": "04-mammography",
+      "title": "Mammography study",
+      "collection": "CMMD",
+      "dataset_title": "The Chinese Mammography Database (CMMD): An online mammography database with biopsy confirmed types for machine diagnosis of breast",
+      "attribution_party": "Cui, C., Li, L., Cai, H., Fan, Z., Zhang, L., Dan, T., Li, J., and Wang, J.",
+      "year_version": "2021, Version 1",
+      "doi": "https://doi.org/10.7937/TCIA.EQDE-4B16",
+      "patient_ids": ["D1-0021"],
+      "series": [
+        {
+          "role": "mammography",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.1239.1759.817188338697704141156927137894",
+          "expected_files": 4
+        }
+      ]
+    },
+    {
+      "id": "05-pet",
+      "title": "Whole-body PET",
+      "collection": "CMB-MEL",
+      "dataset_title": "Cancer Moonshot Biobank - Melanoma Collection (CMB-MEL)",
+      "attribution_party": "Cancer Moonshot Biobank",
+      "year_version": "2022, Version 12",
+      "doi": "https://doi.org/10.7937/GWSP-WH72",
+      "patient_ids": ["MSB-07848"],
+      "series": [
+        {
+          "role": "pet",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.136947173675657605570262051526571210299",
+          "expected_files": 284
+        }
+      ]
+    },
+    {
+      "id": "06-ultrasound",
+      "title": "Liver biopsy ultrasound",
+      "collection": "CMB-MEL",
+      "dataset_title": "Cancer Moonshot Biobank - Melanoma Collection (CMB-MEL)",
+      "attribution_party": "Cancer Moonshot Biobank",
+      "year_version": "2022, Version 12",
+      "doi": "https://doi.org/10.7937/GWSP-WH72",
+      "patient_ids": ["MSB-07848"],
+      "series": [
+        {
+          "role": "ultrasound",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.1.78620393996990384206084905721745347693",
+          "expected_files": 15
+        }
+      ]
+    },
+    {
+      "id": "07-rt-dose",
+      "title": "RT Dose and referenced source chain",
+      "collection": "Vestibular-Schwannoma-SEG",
+      "dataset_title": "Segmentation of Vestibular Schwannoma from Magnetic Resonance Imaging: An Open Annotated Dataset and Baseline Algorithm",
+      "attribution_party": "Shapey, J., Kujawa, A., Dorent, R., et al.",
+      "year_version": "2021, Version 2",
+      "doi": "https://doi.org/10.7937/TCIA.9YTJ-5Q73",
+      "patient_ids": ["VS-SEG-131"],
+      "series": [
+        {
+          "role": "rt_dose",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.118532755654767959890619646384959953910",
+          "expected_files": 1
+        },
+        {
+          "role": "rt_plan",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.228792382495649941952806093716428793979",
+          "expected_files": 1
+        },
+        {
+          "role": "rt_structure_set",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.308925594107447958217289235734396556916",
+          "expected_files": 1
+        },
+        {
+          "role": "source_mr",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.230263586595942655768879402870881645107",
+          "expected_files": 120
+        }
+      ]
+    },
+    {
+      "id": "08-wsi",
+      "title": "DICOM whole-slide microscopy",
+      "collection": "gtex",
+      "dataset_title": "GTEx: DICOM converted whole slide hematoxylin and eosin stained images from the Genotype-Tissue Expression (GTEx) Project",
+      "attribution_party": "Clunie, D., GTEx Consortium, Clifford, W., Pot, D., Wagner, U., Kim, E., Sutton, G., and Fedorov, A.",
+      "year_version": "2024",
+      "doi": "https://doi.org/10.5281/ZENODO.11099099",
+      "patient_ids": ["GTEX-17HHY"],
+      "series": [
+        {
+          "role": "wsi",
+          "series_instance_uid": "1.3.6.1.4.1.5962.99.1.2218940421.790215425.1720205891589.4.0",
+          "expected_files": 4,
+          "preferred_filename": "aaade107-15b5-4353-a923-cea4a6d215aa.dcm"
+        }
+      ]
+    }
+  ]
+}

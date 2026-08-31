@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "marketing_media.py"
+SPEC = importlib.util.spec_from_file_location("marketing_media", SCRIPT_PATH)
+assert SPEC is not None and SPEC.loader is not None
+marketing_media = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(marketing_media)
+
+
+class MarketingMediaSourceTests(unittest.TestCase):
+	def source_manifest(self) -> dict:
+		return {
+			"schema_version": 1,
+			"groups": [
+				{
+					"id": "example",
+					"dataset_title": "Example dataset",
+					"attribution_party": "Example creator",
+					"year_version": "2026",
+					"doi": "https://doi.org/10.example/example",
+					"patient_ids": ["PUBLIC-001"],
+					"series": [
+						{
+							"role": "source",
+							"series_instance_uid": "1.2.3",
+							"expected_files": 2,
+						}
+					],
+				}
+			],
+		}
+
+	def test_validates_unique_groups_roles_and_series(self) -> None:
+		manifest = self.source_manifest()
+		self.assertEqual(marketing_media.source_groups(manifest)[0]["id"], "example")
+
+		manifest["groups"].append(dict(manifest["groups"][0]))
+		with self.assertRaisesRegex(marketing_media.MarketingMediaError, "duplicate"):
+			marketing_media.source_groups(manifest)
+
+	def test_writes_and_verifies_content_addressed_inventory(self) -> None:
+		with tempfile.TemporaryDirectory() as directory:
+			root = Path(directory)
+			sources_path = root / "sources.json"
+			manifest = self.source_manifest()
+			sources_path.write_text(json.dumps(manifest), encoding="utf-8")
+			series_root = root / "payload" / "example" / "1.2.3"
+			series_root.mkdir(parents=True)
+			(series_root / "one.dcm").write_bytes(b"one")
+			(series_root / "two.dcm").write_bytes(b"two")
+
+			inventory_path = marketing_media.write_source_inventory(
+				source_root=root / "payload",
+				sources_path=sources_path,
+				groups=marketing_media.source_groups(manifest),
+			)
+			inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+			self.assertEqual(inventory["file_count"], 2)
+			self.assertEqual(inventory["total_bytes"], 6)
+			self.assertEqual(len({entry["sha256"] for entry in inventory["files"]}), 2)
+
+	def test_rejects_incomplete_series_inventory(self) -> None:
+		with tempfile.TemporaryDirectory() as directory:
+			root = Path(directory)
+			series_root = root / "example" / "1.2.3"
+			series_root.mkdir(parents=True)
+			(series_root / "one.dcm").write_bytes(b"one")
+			group = self.source_manifest()["groups"][0]
+			with self.assertRaisesRegex(marketing_media.MarketingMediaError, "expected 2"):
+				marketing_media.inventory_series(
+					source_root=root,
+					group=group,
+					series=group["series"][0],
+				)
+
+
+if __name__ == "__main__":
+	unittest.main()

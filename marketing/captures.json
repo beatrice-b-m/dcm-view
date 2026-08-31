@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "viewport": { "width": 1440, "height": 900, "device_scale_factor": 1 },
+  "theme": "dark",
+  "locale": "en-US",
+  "scenes": [
+    {
+      "id": "brain-mr-seg",
+      "group": "01-mr-seg",
+      "series_role": "segmentation",
+      "file_position": 0,
+      "frame": 0,
+      "semantic_context": true,
+      "kind": "screenshot",
+      "output": "brain-mr-seg.png",
+      "modifications": ["windowed", "segmentation colorized", "resampled", "cropped to the application viewport"]
+    },
+    {
+      "id": "chest-ct-cine",
+      "group": "02-chest-ct",
+      "series_role": "chest_ct",
+      "file_position": 0.35,
+      "kind": "gif",
+      "output": "chest-ct-cine.gif",
+      "gif": { "frames": 18, "step": 1, "fps": 6 },
+      "modifications": ["windowed", "animated", "cropped to the application viewport"]
+    },
+    {
+      "id": "radiograph",
+      "group": "03-radiograph",
+      "series_role": "radiograph",
+      "file_position": 0,
+      "kind": "screenshot",
+      "output": "radiograph.png",
+      "modifications": ["windowed", "cropped to the application viewport"]
+    },
+    {
+      "id": "mammography",
+      "group": "04-mammography",
+      "series_role": "mammography",
+      "file_position": 0,
+      "kind": "gif",
+      "output": "mammography.gif",
+      "gif": { "frames": 4, "step": 1, "fps": 2 },
+      "modifications": ["windowed", "animated", "cropped to the application viewport"]
+    },
+    {
+      "id": "pet-cine",
+      "group": "05-pet",
+      "series_role": "pet",
+      "file_position": 0.42,
+      "kind": "gif",
+      "output": "pet-cine.gif",
+      "gif": { "frames": 18, "step": 1, "fps": 6 },
+      "modifications": ["windowed", "animated", "cropped to the application viewport"]
+    },
+    {
+      "id": "ultrasound-cine",
+      "group": "06-ultrasound",
+      "series_role": "ultrasound",
+      "file_position": 0,
+      "kind": "gif",
+      "output": "ultrasound-cine.gif",
+      "gif": { "frames": 12, "step": 1, "fps": 4 },
+      "modifications": ["animated", "cropped to the application viewport"]
+    },
+    {
+      "id": "rt-dose-context",
+      "group": "07-rt-dose",
+      "series_role": "rt_dose",
+      "file_position": 0,
+      "frame": 94,
+      "semantic_context": true,
+      "kind": "screenshot",
+      "output": "rt-dose-context.png",
+      "modifications": ["windowed", "cropped to the application viewport"]
+    },
+    {
+      "id": "wsi-context",
+      "group": "08-wsi",
+      "series_role": "wsi",
+      "preferred_filename": "aaade107-15b5-4353-a923-cea4a6d215aa.dcm",
+      "frame": 210,
+      "kind": "screenshot",
+      "output": "wsi-context.png",
+      "modifications": ["cropped to the application viewport"]
+    },
+    {
+      "id": "vscode-workflow",
+      "group": "02-chest-ct",
+      "series_role": "chest_ct",
+      "file_position": 0.35,
+      "kind": "screenshot",
+      "surface": "vscode",
+      "output": "vscode-workflow.png",
+      "modifications": ["windowed", "captured in a controlled VS Code development host"]
+    }
+  ]
+}

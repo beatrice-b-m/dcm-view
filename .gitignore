@@ -11,6 +11,8 @@ vscode/out/
 devscripts/
 artifacts/
 marketing-source-data/
+marketing/node_modules/
+marketing-review/
 
 *.dcm
 *.dicom
