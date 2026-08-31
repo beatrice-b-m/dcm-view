@@ -210,9 +210,10 @@ The embedded browser viewer includes:
 - Study and directory navigation with typed links between locally resolved
   referenced objects and frames.
 - Default pixel preview plus opt-in declared semantic context for SEG,
-  Parametric Map, and RT Dose. Semantic panels preserve stored pixel display,
-  identify missing or incompatible geometry, and do not claim clinical
-  interpretation.
+  Parametric Map, and RT Dose. Validated SEG mappings can compose binary or
+  fractional masks over referenced source images even when compatible patient
+  geometry uses different matrix dimensions. Semantic panels identify missing,
+  ambiguous, or incompatible geometry and do not claim clinical interpretation.
 - Positioned single-tile WSI inspection with matrix, row/column, optical-path,
   focal-plane, and minimap context. Tiles are not stitched and the Total Pixel
   Matrix is not reconstructed.

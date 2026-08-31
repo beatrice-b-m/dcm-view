@@ -58,8 +58,10 @@ Static frontend assets are served at `/` and `/assets/*`.
 | GET | `/api/series` | Server-owned logical series and ordered virtual frame stacks. |
 | GET | `/api/file/:index/info` | Frame metadata for one file. |
 | GET | `/api/file/:index/references` | Typed DICOM relationships plus resolved local file/frame targets. |
+| GET | `/api/file/:index/semantic-context` | Declared SEG, Parametric Map, or RT Dose semantics and validated source mappings. |
 | GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG. |
 | GET | `/api/file/:index/frame/:frame/raw` | Decoded frame sample bytes plus rendering metadata headers. |
+| GET | `/api/file/:index/frame/:frame/segmentation-overlay` | Transparent, source-sized SEG mask PNG for a validated source mapping. |
 | GET | `/api/file/:index/tags` | Lazy DICOM tag tree. |
 | GET | `/api/file/:index/tags/select` | Selective tag-path retrieval with sequence pagination. |
 | GET | `/api/file/:index/annotations` | Current in-memory ROI annotations for one file. |
@@ -263,6 +265,37 @@ for viewer navigation. Empty `matches` means the declaration was understood
 but its target is not present in the current scan. Relationship names describe
 identity and navigation only; they do not claim SEG, SR, presentation-state,
 registration, RT, or other object-specific rendering semantics.
+
+## Semantic Context And SEG Overlays
+
+`GET /api/file/:index/semantic-context` interprets supported derived-object
+metadata without changing its ordinary pixel preview. A SEG response includes
+segment definitions, references, and one mapping record per SEG frame. Mapping
+records expose `mapping_method`, `mapping_status`, `mapping_reason`, and the
+resolved zero-based `source_frames`.
+
+The SEG resolver first uses an explicit per-frame derivation source when one is
+declared. If the object instead declares source instances at the top level, it
+can resolve the SEG frame by patient geometry. This path requires compatible
+Frame of Reference, Image Position (Patient), Image Orientation (Patient), and
+Pixel Spacing. It supports a source series represented by many classic
+single-frame instances and does not require identical source and SEG matrix
+dimensions. Missing, non-coplanar, non-overlapping, or multiply matching grids
+remain unavailable or ambiguous in the response.
+
+`GET /api/file/:index/frame/:frame/segmentation-overlay` renders a frame only
+after that same mapping validation succeeds. Binary SEG samples are treated as
+a mask; fractional samples are normalized by Maximum Fractional Value. The
+mask is nearest-neighbor resampled through patient coordinates and returned as
+a transparent, source-sized `image/png`, ready to composite over the resolved
+source display frame. A stable per-segment fallback palette supplies the mask
+color; interpreting Recommended Display CIELab values is not yet implemented.
+
+A successful overlay response includes `X-Cache: HIT` or `X-Cache: MISS` for
+the decoded SEG frame. An absent or ambiguous mapping, incompatible geometry,
+or a missing local source returns HTTP 422 with the
+`semantic_mapping_unavailable` error code. A non-SEG object returns 400, and an
+out-of-range SEG frame returns 404.
 
 ## File Info
 

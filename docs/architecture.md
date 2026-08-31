@@ -20,6 +20,7 @@ module:
 | HTTP wire model | `src/api/contracts.rs` | Typed endpoint registry, wire structs, query names, response header names, and error envelope. |
 | HTTP runtime | `src/server/` | Listener/runtime, route registration, handlers, state, registry, activity tracking, tags, and embedded assets. |
 | Pixel service | `src/pixels/` | Typed display/raw requests, cache behavior, transfer-syntax classification, decoding, rendering, and `PixelError`. |
+| Patient geometry | `src/geometry.rs` | Normalized per-frame position, orientation, pixel spacing, coplanarity checks, and target-to-source pixel transforms. |
 | DICOM references | `src/references.rs` | Bounded extraction of typed instance relationships without implying target presence or semantic rendering. |
 | Semantic context | `src/semantic.rs` | Conservative SEG, Parametric Map, and RT Dose metadata interpretation layered beside unchanged pixel preview. |
 | WSI tile context | `src/wsi.rs` | Bounded positioning of one selected WSI tile without stitching or Total Pixel Matrix reconstruction. |
@@ -76,7 +77,9 @@ modules, not the reverse:
    validates native frame sizing and normalizes bit-packed, planar, subsampled,
    and endian-sensitive storage before display decoding. `pixels/overlay.rs`
    and `pixels/shutter.rs` own bounded native presentation compositing;
-   `pixels/rle.rs` owns the bounded Annex G/PackBits path.
+   `pixels/segmentation.rs` owns SEG mask decoding and patient-coordinate
+   nearest-neighbor resampling; `pixels/rle.rs` owns the bounded Annex
+   G/PackBits path.
 
 `src/api/contracts.rs` owns browser-visible wire declarations. `src/types.rs`
 owns internal DICOM, cache-key, transfer-syntax, and windowing domain types; it
@@ -91,6 +94,15 @@ through the same tab and stack state as ordinary navigation; it does not imply
 semantic rendering of the referencing object. Components use
 `frontend/src/api.ts`; new endpoint fetches should not be introduced directly
 inside components.
+
+For SEG objects, `SemanticContextPanel` keeps Pixel Preview as the initial mode
+and publishes an explicit Semantic Context selection to `App.svelte`.
+`ImageViewport` composes the referenced display PNG with the transparent SEG
+overlay only when the selected SEG frame has one validated source-frame
+mapping. The active logical frame remains the SEG frame; source identity and
+geometry come from the mapping. ROI editing, interactive window/level, and cine
+are disabled for the composed view because their existing state belongs to the
+SEG object or requires a separate source-window contract.
 
 `FileNavigator` owns the active clinical-versus-directory organization and
 publishes the corresponding flattened file order to `App.svelte`. Global
@@ -170,9 +182,20 @@ The executable contract is kept consistent by three layers:
   local navigation matches contain only validated zero-based frames; missing
   targets remain explicit empty matches.
 - `/api/file/{index}/semantic-context` reads declared SEG, Parametric Map, and
-  RT Dose meaning without modifying decoded pixels. Pixel preview remains the
-  default, reference geometry must match before an overlay is offered, and
-  absent or incompatible metadata is reported explicitly rather than inferred.
+  RT Dose meaning without modifying decoded pixels. For SEG frames, explicit
+  per-frame derivation references take precedence. When those are absent, the
+  resolver can match top-level declared source instances by Frame of Reference
+  and per-frame patient geometry, including classic series split across many
+  SOP Instances. Each result reports its mapping method and status. Pixel
+  preview remains the default, every frame must resolve uniquely for aggregate
+  overlay eligibility, and absent, ambiguous, or incompatible metadata is
+  reported explicitly rather than inferred.
+- `/api/file/{index}/frame/{frame}/segmentation-overlay` accepts one SEG frame
+  whose source mapping and geometry have been validated. It decodes binary or
+  fractional SEG samples, maps pixel centers through patient coordinates, and
+  returns a source-sized transparent PNG using nearest-neighbor mask sampling.
+  Unavailable semantic mappings return `422 semantic_mapping_unavailable`;
+  successful responses include `X-Cache` for the decoded SEG frame.
 - `/api/file/{index}/wsi/frame/{frame}` returns bounded placement metadata for
   one selected tile. TILED_FULL uses deterministic raster placement;
   TILED_SPARSE uses per-frame plane positions. The contract exposes matrix,
