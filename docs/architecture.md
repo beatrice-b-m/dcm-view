@@ -322,6 +322,7 @@ flowchart TD
     e2e["e2e"] --> core
     e2e --> elayers["real debug binary build<br/>Python wrapper integration<br/>HTTP binary smoke<br/>VS Code Electron integration"]
     external["external"] --> xlayers["feature-gated remote fixtures<br/>network or local cache allowed"]
+    marketing["marketing"] --> mlayers["capture manifest and driver checks<br/>media drift gate when published"]
     ci["CI component jobs"] -. "reuse focused profiles" .-> qlayers
     ci -.-> clayers
     ci -.-> elayers
@@ -339,6 +340,7 @@ The supported development baselines are Rust 1.88+, Node.js 20.19+, and Python
 | `core` | Before handing off a normal code change | Everything in the corresponding frontend/lint/unit layers, plus deterministic fixture regeneration that must leave the current fixture tree unchanged, the default-feature, non-ignored locked Rust suite, and VS Code compilation. |
 | `e2e` | Process or integration changes | `core`, then a real debug binary, Python wrapper binary integration, debug-binary HTTP smoke, and VS Code Electron integration. |
 | `external` | Opt-in upstream DICOM compatibility | Builds frontend assets and runs only ignored integration tests behind `remote-fixtures`; those tests may download or populate the `dicom-test-files` cache. It is separate from `e2e`. |
+| `marketing` | Capture tooling and release media | Validates tracked source/capture manifests, syntax-checks the browser and VS Code capture drivers, runs marketing-media unit tests, and—once an approved bundle is committed—verifies published hashes and the capture-input digest without ignored DICOM sources. |
 
 Pass `--install` when the profile should run `npm ci` for the frontend and, when
 needed, VS Code dependencies. Without it, installed dependencies are reused.
@@ -411,7 +413,7 @@ flowchart LR
     oldserver["Before: server and pixels<br/>were broad modules"] --> newserver["Now: runtime, API, catalog,<br/>lifecycle, and pixel services"]
     oldtypes["Before: wire ownership was<br/>mixed with domain types"] --> newtypes["Now: api/contracts.rs is canonical<br/>and TypeScript is generated"]
     oldscan["Before: discovery was<br/>fire-and-forget"] --> newscan["Now: cancellation, typed outcomes,<br/>drain and join are explicit"]
-    oldchecks["Before: validation was an<br/>ad hoc command list"] --> newchecks["Now: quick, core, e2e,<br/>and external profiles"]
+    oldchecks["Before: validation was an<br/>ad hoc command list"] --> newchecks["Now: quick, core, e2e,<br/>external, and marketing profiles"]
     oldui["Before: one file-tab concept<br/>carried navigation concerns"] --> newui["Now: FileNavigator and<br/>OpenImageTabs are separate"]
 ```
 

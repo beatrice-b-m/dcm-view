@@ -251,6 +251,27 @@ class CheckRunner:
 			env=cargo_env(),
 		)
 
+	def marketing(self) -> None:
+		run("Validate marketing source and capture manifests", [self.python, "scripts/marketing_media.py", "validate"])
+		node = executable("node")
+		run("Check browser capture harness syntax", [node, "--check", "marketing/capture_browser.mjs"])
+		run("Check VS Code capture harness syntax", [node, "--check", "marketing/capture_vscode.mjs"])
+		run(
+			"Run marketing-media unit tests",
+			[self.python, "-m", "unittest", "python.tests.test_marketing_media"],
+		)
+		published_lock = REPO_ROOT / "media" / "marketing" / "media-lock.json"
+		if published_lock.is_file():
+			run(
+				"Reject stale or modified published media",
+				[
+					self.python, "scripts/marketing_media.py", "verify", "--offline",
+					"--bundle", "media/marketing",
+				],
+			)
+		else:
+			print("\n==> No approved media bundle is committed yet; drift gate is inactive", flush=True)
+
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description=__doc__)
@@ -271,6 +292,7 @@ def parse_args() -> argparse.Namespace:
 			"core",
 			"e2e",
 			"external",
+			"marketing",
 		],
 		help="check profile to execute",
 	)
@@ -300,6 +322,7 @@ def main() -> int:
 		"core": runner.core,
 		"e2e": runner.e2e,
 		"external": runner.external,
+		"marketing": runner.marketing,
 	}
 
 	try:

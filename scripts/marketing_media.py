@@ -726,8 +726,11 @@ def verify_media_bundle(args: argparse.Namespace, *, quiet: bool = False) -> dic
 	expected_hashes = {
 		"sources_manifest_sha256": manifest_sha256(sources_path),
 		"captures_manifest_sha256": manifest_sha256(captures_path),
-		"source_inventory_sha256": sha256_file(inventory_path),
 	}
+	if inventory_path.is_file():
+		expected_hashes["source_inventory_sha256"] = sha256_file(inventory_path)
+	elif not args.offline:
+		raise MarketingMediaError(f"source inventory is unavailable: {inventory_path}")
 	for field, expected in expected_hashes.items():
 		if lock.get(field) != expected:
 			raise MarketingMediaError(f"media bundle is stale: {field} changed")
@@ -752,6 +755,17 @@ def verify_media_bundle(args: argparse.Namespace, *, quiet: bool = False) -> dic
 	if not quiet:
 		print(f"verified {len(artifacts)} current capture artifact(s) in {bundle}")
 	return lock
+
+
+def validate_configuration(args: argparse.Namespace) -> None:
+	sources = load_json(args.sources.resolve())
+	scenes = resolve_scenes(
+		captures=load_json(args.captures.resolve()), sources=sources, requested=[]
+	)
+	package_lock = load_json(REPO_ROOT / "marketing" / "package-lock.json")
+	if not package_lock.get("lockfileVersion"):
+		raise MarketingMediaError("marketing capture dependencies are not locked")
+	print(f"validated {len(source_groups(sources))} source groups and {len(scenes)} capture scenes")
 
 
 def replace_marked_block(path: Path, block: str, *, anchor: str) -> None:
@@ -890,6 +904,10 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	add_capture_manifest_arguments(verify)
 	verify.add_argument("--bundle", type=Path, default=DEFAULT_REVIEW_ROOT / "current")
+	verify.add_argument(
+		"--offline", action="store_true",
+		help="Verify committed media without requiring the ignored source inventory",
+	)
 	verify.set_defaults(handler=verify_media_bundle)
 
 	publish = subparsers.add_parser(
@@ -900,7 +918,13 @@ def build_parser() -> argparse.ArgumentParser:
 	publish.add_argument("--docs-repo", type=Path, default=REPO_ROOT.parent / "dcmview-docs")
 	publish.add_argument("--tag", required=True)
 	publish.add_argument("--approve", action="store_true")
+	publish.set_defaults(offline=False)
 	publish.set_defaults(handler=publish_media)
+
+	validate = subparsers.add_parser("validate", help="Validate tracked source and scene manifests")
+	validate.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
+	validate.add_argument("--captures", type=Path, default=DEFAULT_CAPTURES)
+	validate.set_defaults(handler=validate_configuration)
 	return parser
 
 

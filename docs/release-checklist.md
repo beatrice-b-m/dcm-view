@@ -77,48 +77,57 @@ The detailed channel configuration and artifact descriptions remain in the
 
 ### Screenshots, GIFs, And Attribution
 
-- [ ] Determine whether viewer, extension, API, CSS, or capture-plan changes
-      make any published screenshot or GIF stale.
-- [ ] Recreate affected assets from the release-candidate binary using only the
-      approved public, de-identified sources under ignored
-      `marketing-source-data/`.
-- [ ] Verify each source against its recorded collection, DOI, license,
-      Series/SOP identity, and checksum. Keep source payloads and local-path
-      linkage untracked.
+- [ ] Install the pinned tools and validate the tracked capture configuration as
+      described in the [marketing media workflow](marketing-media.md):
+
+  ```bash
+  python -m pip install -r marketing/requirements.txt
+  npm --prefix marketing ci
+  npm --prefix marketing run install-browser
+  python scripts/marketing_media.py validate
+  ```
+
+- [ ] Retrieve missing public sources, then verify every source file against its
+      recorded collection, DOI, license, Series identity, size, and checksum.
+      Keep source payloads and both linkage records untracked:
+
+  ```bash
+  python scripts/marketing_media.py fetch
+  python scripts/marketing_media.py verify-sources
+  ```
+
+- [ ] On the clean release-candidate commit, recreate the complete review
+      bundle from the real binary and pinned VS Code host:
+
+  ```bash
+  python scripts/marketing_media.py capture
+  ```
+
 - [ ] Review every image and animation for identifiers, local paths, hostnames,
       misleading clinical implications, rendering errors, and obsolete UI.
-- [ ] Record the dcmview version and commit, source-manifest hash, capture date,
-      output hash, dimensions, capture-tool versions, and modification summary.
-- [ ] Publish attribution near the asset or through a clearly linked attribution
-      page. For CC BY 4.0 material, retain the designated creator/attribution
-      party, dataset title when supplied, source/DOI, license link, changes made,
-      and a no-endorsement statement.
-- [ ] Use this attribution structure, expanding it once per dataset when an
-      asset combines multiple sources:
+- [ ] Verify the approved bundle. This rejects dirty captures, input drift,
+      changed source records, modified outputs, and incomplete attribution:
 
-  ```text
-  Source imagery: {dataset title}, {creator or designated attribution party},
-  {year/version}. {DOI or canonical dataset URL}. Retrieved through {repository}
-  where applicable. Licensed under CC BY 4.0:
-  https://creativecommons.org/licenses/by/4.0/
-
-  Changes: Displayed using dcmview {version}; {windowed, cropped, resized,
-  colorized, annotated, or animated as applicable} for demonstration.
-
-  Provenance: Captured from dcmview commit {full commit SHA} using source
-  manifest {SHA-256}. No endorsement by the dataset creators, repository,
-  TCIA, IDC, NIH, or NCI is implied.
+  ```bash
+  python scripts/marketing_media.py verify
   ```
-- [ ] Update every consuming surface from the same approved asset set: root
-      README/PyPI, `vscode/README.md`, VS Code Marketplace, Open VSX, GitHub
-      Release notes, and `dcmview-docs`.
+
+- [ ] Publish the complete approved set to every consuming surface from one
+      bundle, then review the changes in both repositories:
+
+  ```bash
+  VERSION="$(python scripts/check_versions.py --print-version)"
+  python scripts/marketing_media.py publish --tag "v${VERSION}" \
+    --docs-repo ../dcmview-docs --approve
+  python scripts/check.py marketing
+  ```
+
 - [ ] Ensure Marketplace README image URLs resolve through HTTPS and are pinned
       to the release tag rather than `main`.
-
-Until deterministic capture tooling is committed, the capture itself and the
-privacy/aesthetic review are manual release gates. Once a capture manifest and
-media lock exist, the release workflow should reject a mismatched UI-input
-digest or media hash; human review should still remain required.
+- [ ] Confirm the generated media lock records the dcmview version and commit,
+      source/capture/inventory hashes, capture date, output hashes and
+      dimensions, tool versions, and modification summaries. Human visual
+      approval remains required even when every automated check passes.
 
 ### Documentation And Links
 
