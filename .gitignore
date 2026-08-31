@@ -10,6 +10,7 @@ vscode/out/
 .vscode-test/
 devscripts/
 artifacts/
+marketing-source-data/
 
 *.dcm
 *.dicom
