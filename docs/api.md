@@ -77,7 +77,7 @@ Static frontend assets are served at `/` and `/assets/*`.
   "status": "ok",
   "viewer": {
     "name": "dcmview",
-    "version": "0.2.12",
+    "version": "0.2.13",
     "build_git_sha": "0123456789abcdef...",
     "build_target": "aarch64-apple-darwin",
     "build_profile": "release"
