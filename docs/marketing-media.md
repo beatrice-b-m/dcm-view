@@ -81,7 +81,7 @@ real progressive catalog, captures every scene, and writes
 For focused iteration, select one or more scenes or surfaces:
 
 ```bash
-python scripts/marketing_media.py capture --scene brain-mr-seg
+python scripts/marketing_media.py capture --scene mr-seg-cine
 python scripts/marketing_media.py capture --surface browser
 ```
 
@@ -103,6 +103,20 @@ The review bundle contains:
 Review every frame of every PNG/GIF for rendering quality, public identifiers,
 local paths or hostnames, unintended UI, clinical overclaiming, and sensible
 windowing/crop. This visual decision is the only mandatory manual capture step.
+
+GIF timing is encoded into each artifact; macOS Preview, GitHub, and Marketplace
+surfaces should therefore have the same nominal playback rate. The capture plan
+uses 12 fps for the longer CT stack, 10 fps for PET, 8 fps for ultrasound, and
+a one-second hold for each of the four mammography views. The MR/SEG scene is a
+5 fps semantic-overlay cine and fails capture if the current build cannot resolve
+every frame to a unique declared source image.
+
+The VS Code GIF is also automated. It creates an isolated temporary workspace,
+right-clicks the selected DICOM series in Explorer, captures the real **Open with
+dcmview** contribution, opens the viewer, and advances the CT stack. On macOS,
+the isolated profile sets `window.menuStyle` to `custom` because native OS menus
+are not part of the browser screenshot surface. This setting never touches the
+developer's VS Code profile and the temporary workspace is removed after capture.
 
 ## Verify And Publish The Approved Set
 

@@ -104,7 +104,10 @@ The detailed channel configuration and artifact descriptions remain in the
   ```
 
 - [ ] Review every image and animation for identifiers, local paths, hostnames,
-      misleading clinical implications, rendering errors, and obsolete UI.
+      misleading clinical implications, rendering errors, obsolete UI, smooth
+      playback, and appropriate per-frame dwell time. Confirm the MR/SEG GIF
+      visibly overlays the declared source images and the VS Code GIF shows the
+      real Explorer **Open with dcmview** action.
 - [ ] Verify the approved bundle. This rejects dirty captures, input drift,
       changed source records, modified outputs, and incomplete attribution:
 
