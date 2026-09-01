@@ -5,15 +5,16 @@
   "locale": "en-US",
   "scenes": [
     {
-      "id": "brain-mr-seg",
+      "id": "mr-seg-cine",
       "group": "01-mr-seg",
       "series_role": "segmentation",
       "file_position": 0,
-      "frame": 0,
       "semantic_context": true,
-      "kind": "screenshot",
-      "output": "brain-mr-seg.png",
-      "modifications": ["windowed", "segmentation colorized", "resampled", "cropped to the application viewport"]
+      "require_semantic_overlay": true,
+      "kind": "gif",
+      "output": "mr-seg-cine.gif",
+      "gif": { "frames": 10, "step": 1, "fps": 5 },
+      "modifications": ["windowed", "segmentation colorized", "resampled", "animated", "cropped to the application viewport"]
     },
     {
       "id": "chest-ct-cine",
@@ -22,7 +23,7 @@
       "file_position": 0.35,
       "kind": "gif",
       "output": "chest-ct-cine.gif",
-      "gif": { "frames": 18, "step": 1, "fps": 6 },
+      "gif": { "frames": 36, "step": 1, "fps": 12 },
       "modifications": ["windowed", "animated", "cropped to the application viewport"]
     },
     {
@@ -41,17 +42,17 @@
       "file_position": 0,
       "kind": "gif",
       "output": "mammography.gif",
-      "gif": { "frames": 4, "step": 1, "fps": 2 },
+      "gif": { "frames": 4, "step": 1, "fps": 1 },
       "modifications": ["windowed", "animated", "cropped to the application viewport"]
     },
     {
       "id": "pet-cine",
       "group": "05-pet",
       "series_role": "pet",
-      "file_position": 0.65,
+      "file_position": 0.35,
       "kind": "gif",
       "output": "pet-cine.gif",
-      "gif": { "frames": 18, "step": 1, "fps": 6 },
+      "gif": { "frames": 30, "step": 1, "fps": 10 },
       "modifications": ["windowed", "animated", "cropped to the application viewport"]
     },
     {
@@ -61,7 +62,7 @@
       "file_position": 0,
       "kind": "gif",
       "output": "ultrasound-cine.gif",
-      "gif": { "frames": 12, "step": 1, "fps": 4 },
+      "gif": { "frames": 15, "step": 1, "fps": 8 },
       "modifications": ["animated", "cropped to the application viewport"]
     },
     {
@@ -90,11 +91,12 @@
       "group": "02-chest-ct",
       "series_role": "chest_ct",
       "file_position": 0.35,
-      "kind": "screenshot",
+      "kind": "gif",
       "surface": "vscode",
       "vscode_version": "1.103.2",
-      "output": "vscode-workflow.png",
-      "modifications": ["windowed", "captured in a controlled VS Code development host"]
+      "output": "vscode-workflow.gif",
+      "walkthrough": { "fps": 8, "caption_frames": 16, "action_frames": 8, "viewer_frames": 24 },
+      "modifications": ["windowed", "animated", "captioned", "captured in a controlled VS Code development host"]
     }
   ]
 }

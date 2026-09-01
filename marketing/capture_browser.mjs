@@ -68,7 +68,14 @@ async function waitForRendered(page, expectedFileIndex = null, expectedFrameInde
 async function advanceFrame(page, step = 1) {
 	for (let count = 0; count < step; count += 1) {
 		const before = await renderedToken(page);
-		await page.keyboard.press("ArrowRight");
+		const position = page.locator("[data-capture-position]");
+		await position.evaluate((input) => {
+			if (!(input instanceof HTMLInputElement)) throw new Error("capture position is not an input");
+			const maximum = Number(input.max);
+			const current = Number(input.value);
+			input.value = String(current >= maximum ? 0 : current + 1);
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
 		await page.waitForFunction(
 			(previous) => {
 				const canvas = document.querySelector("canvas.dicom-canvas");
@@ -181,6 +188,12 @@ async function main() {
 			await semantic.waitFor({ state: "visible", timeout: 30_000 });
 			await semantic.click();
 			await waitForRendered(page);
+			if (scene.require_semantic_overlay) {
+				const interpretation = await page.getByRole("region", { name: "Object interpretation" }).innerText();
+				if (!interpretation.includes("Overlay eligible")) {
+					throw new Error("capture scene requires an eligible semantic overlay");
+				}
+			}
 		}
 
 		const visibleText = await page.locator("body").innerText();

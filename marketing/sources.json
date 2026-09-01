@@ -15,22 +15,22 @@
   "groups": [
     {
       "id": "01-mr-seg",
-      "title": "Brain MR and DICOM SEG",
-      "collection": "ReMIND",
-      "dataset_title": "The Brain Resection Multimodal Imaging Database (ReMIND)",
-      "attribution_party": "Juvekar, P., Dorent, R., Kögl, F., et al.",
-      "year_version": "2023, Version 1",
-      "doi": "https://doi.org/10.7937/3RAG-D070",
-      "patient_ids": ["ReMIND-084"],
+      "title": "Breast DWI MR and DICOM SEG",
+      "collection": "acrin_6698",
+      "dataset_title": "ACRIN 6698/I-SPY2 Breast DWI",
+      "attribution_party": "Newitt, D. C., Partridge, S. C., Zhang, Z., et al.",
+      "year_version": "2021, Version 1",
+      "doi": "https://doi.org/10.7937/TCIA.KK02-6D95",
+      "patient_ids": ["ACRIN-6698-234723"],
       "series": [
         {
           "role": "source_mr",
-          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.22170270874912661638837921250285401241",
-          "expected_files": 192
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.7695.4164.276432038959697573803950696367",
+          "expected_files": 120
         },
         {
           "role": "segmentation",
-          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.207326736062478576135244485404102351558",
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.7695.4164.197935705864255073412256526155",
           "expected_files": 1
         }
       ]
@@ -88,18 +88,18 @@
     },
     {
       "id": "05-pet",
-      "title": "Whole-body PET",
-      "collection": "CMB-MEL",
-      "dataset_title": "Cancer Moonshot Biobank - Melanoma Collection (CMB-MEL)",
-      "attribution_party": "Cancer Moonshot Biobank",
-      "year_version": "2022, Version 12",
-      "doi": "https://doi.org/10.7937/GWSP-WH72",
-      "patient_ids": ["MSB-07848"],
+      "title": "Whole-body PSMA PET",
+      "collection": "psma_pet_ct_lesions",
+      "dataset_title": "A whole-body PSMA-PET/CT dataset with manually annotated tumor lesions",
+      "attribution_party": "Jeblick, K., Schachtner, B., Mittermeier, A., et al.",
+      "year_version": "2026, Version 2",
+      "doi": "https://doi.org/10.7937/R7EP-3X37",
+      "patient_ids": ["PSMA_f77011649a56cf08"],
       "series": [
         {
           "role": "pet",
-          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.136947173675657605570262051526571210299",
-          "expected_files": 284
+          "series_instance_uid": "1.3.6.1.4.1.14519.5.2.1.153050364328304867324655664137435456205",
+          "expected_files": 165
         }
       ]
     },
