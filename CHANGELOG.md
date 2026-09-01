@@ -10,6 +10,64 @@ diagnostic viewer.
 
 ## Unreleased
 
+## 0.2.12 - 2026-08-31
+
+### Geometry-Aligned DICOM SEG Overlays
+
+- Added opt-in composition of DICOM Segmentation masks over locally resolved
+  source images. The viewer preserves Pixel Preview as the default and exposes
+  the composed view only when one source frame is validated for the selected
+  SEG frame.
+- Resolved sources from explicit per-frame derivation references or declared
+  source instances plus patient geometry. Classic source series split across
+  multiple single-frame objects are supported, and compatible source and SEG
+  grids may use different matrix dimensions.
+- Resampled binary and fractional masks through patient coordinates with
+  nearest-neighbor semantics and returned transparent, source-sized PNGs from
+  the new internal
+  `/api/file/:index/frame/:frame/segmentation-overlay` endpoint.
+- Kept missing, ambiguous, non-coplanar, non-overlapping, and otherwise
+  incompatible mappings unavailable with explicit evidence instead of
+  presenting an unvalidated overlay.
+
+### Editor Distribution
+
+- Added independently gated Open VSX publication of the same target-specific
+  extension packages attached to GitHub Releases, making the extension
+  available to Cursor under `beatricebm.dcmview` without coupling that channel
+  to the VS Code Marketplace deployment.
+- Updated the editor documentation, package description, and installation
+  matrix for both VS Code and Cursor while retaining the existing binary
+  resolution, Remote-SSH, notebook, and bridge behavior.
+
+### Documentation And Release Reproducibility
+
+- Added an attributed viewer gallery covering SEG, CT, radiography,
+  mammography, PET, ultrasound, RT Dose, WSI, and the real VS Code Explorer
+  workflow to the GitHub/PyPI, repository documentation, and editor README
+  surfaces.
+- Added a pinned, checksum-verified public-source inventory and deterministic
+  browser, GIF, and VS Code capture workflow. The committed media lock records
+  release inputs, source and output hashes, dimensions, tool versions, capture
+  time, and human-reviewed modification summaries.
+- Added a maintainer release checklist that treats published tags as immutable,
+  qualifies the exact candidate commit through CI, verifies published
+  artifacts and channels, synchronizes stable documentation through a pull
+  request, and starts the next development version separately.
+
+### Compatibility And Known Limitations
+
+- This release adds no CLI options or breaking package-manifest changes. The
+  viewer HTTP API remains an internal debugging and automation surface rather
+  than a stable external integration contract.
+- Semantic composition is deliberately conservative. Recommended Display
+  CIELab colors are not yet interpreted, and ROI editing, interactive
+  window/level, and cine remain disabled while a SEG overlay is composed.
+- `dcmview` remains a research and development inspection tool, not a clinical
+  diagnostic viewer. Public sample imagery is sourced through the NCI Imaging
+  Data Commons and is credited in
+  [`media/marketing/ATTRIBUTION.md`](media/marketing/ATTRIBUTION.md).
+
 ## 0.2.11 - 2026-08-28
 
 ### Semantic And Whole-Slide Context

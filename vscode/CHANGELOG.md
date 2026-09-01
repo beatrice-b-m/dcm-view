@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.2.12 - 2026-08-31
+
+- Publish the target-specific extension packages to Open VSX through an
+  independently gated release job so Cursor users can install
+  `beatricebm.dcmview` from their extension marketplace.
+- Describe VS Code and Cursor consistently across the Marketplace README,
+  installation matrix, package metadata, and troubleshooting links.
+- Include the validated geometry-aligned DICOM SEG overlay viewer delivered by
+  the bundled `dcmview` binary while keeping Pixel Preview as the default and
+  refusing ambiguous or incompatible source mappings.
+- Add an attributed gallery captured from the real viewer and VS Code Explorer
+  **Open with dcmview** workflow, with image URLs pinned to the `v0.2.12` tag.
+
 ## 0.2.9 - 2026-08-26
 
 - Keep Explorer and Tags accessible in compact and narrow webviews through
