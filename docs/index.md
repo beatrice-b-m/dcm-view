@@ -5,6 +5,32 @@ temporary DICOM inspection tool for research and development workflows, not
 clinical diagnosis. Do not publish DICOM files, screenshots, logs, local paths,
 or metadata unless they are fully de-identified and approved for public use.
 
+<!-- dcmview-marketing:start -->
+## Viewer gallery
+
+### Cine playback and semantic context
+
+![Chest CT cine playback in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/chest-ct-cine.gif)
+
+![DICOM SEG semantic overlay in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/mr-seg-cine.gif)
+
+### Modality coverage
+
+![Chest radiograph in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/radiograph.png)
+
+![Mammography study in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/mammography.gif)
+
+![PET cine playback in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/pet-cine.gif)
+
+![Ultrasound cine playback in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/ultrasound-cine.gif)
+
+![RT Dose semantic context in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/rt-dose-context.png)
+
+![DICOM whole-slide microscopy context in dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/wsi-context.png)
+
+[Source imagery attribution](https://raw.githubusercontent.com/beatrice-b-m/dcmview/v0.2.12/media/marketing/ATTRIBUTION.md)
+<!-- dcmview-marketing:end -->
+
 ## User Guides
 
 - [Troubleshooting](troubleshooting.md): fixes for install, startup, discovery,
