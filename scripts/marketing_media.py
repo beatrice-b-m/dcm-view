@@ -864,15 +864,28 @@ def smoke_capture(args: argparse.Namespace) -> None:
 		print(f"VS Code capture preflight passed: {destination / 'synthetic-vscode-smoke.png'}")
 
 
-def replace_marked_block(path: Path, block: str, *, anchor: str) -> None:
-	start = "<!-- dcmview-marketing:start -->"
-	end = "<!-- dcmview-marketing:end -->"
+def replace_marked_block(path: Path, block: str, *, anchor: str, mdx: bool = False) -> None:
+	html_markers = ("<!-- dcmview-marketing:start -->", "<!-- dcmview-marketing:end -->")
+	mdx_markers = ("{/* dcmview-marketing:start */}", "{/* dcmview-marketing:end */}")
+	start, end = mdx_markers if mdx else html_markers
 	text = path.read_text(encoding="utf-8")
 	marked = f"{start}\n{block.rstrip()}\n{end}"
-	if start in text or end in text:
-		if text.count(start) != 1 or text.count(end) != 1 or text.index(start) > text.index(end):
+	present = [markers for markers in (html_markers, mdx_markers) if markers[0] in text or markers[1] in text]
+	if present:
+		if len(present) != 1:
 			raise MarketingMediaError(f"invalid marketing markers in {path}")
-		text = text[: text.index(start)] + marked + text[text.index(end) + len(end) :]
+		existing_start, existing_end = present[0]
+		if (
+			text.count(existing_start) != 1
+			or text.count(existing_end) != 1
+			or text.index(existing_start) > text.index(existing_end)
+		):
+			raise MarketingMediaError(f"invalid marketing markers in {path}")
+		text = (
+			text[: text.index(existing_start)]
+			+ marked
+			+ text[text.index(existing_end) + len(existing_end) :]
+		)
 	else:
 		position = text.find(anchor)
 		if position < 0:
@@ -996,7 +1009,7 @@ def publish_media(args: argparse.Namespace) -> None:
 		asset_base="/media/dcmview",
 		attribution_url="/reference/media-attribution/",
 	)
-	replace_marked_block(docs_index, docs_gallery, anchor="## Choose your workflow")
+	replace_marked_block(docs_index, docs_gallery, anchor="## Choose your workflow", mdx=True)
 	attribution_page = docs_repo / "src" / "content" / "docs" / "reference" / "media-attribution.md"
 	attribution_page.write_text(
 		"---\ntitle: Marketing media attribution\ndescription: Source and license attribution for dcmview documentation imagery.\n---\n\n"

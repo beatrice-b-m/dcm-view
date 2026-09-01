@@ -149,6 +149,20 @@ class MarketingMediaSourceTests(unittest.TestCase):
 			self.assertNotIn("First", text)
 			self.assertIn("Second", text)
 
+	def test_publication_markers_migrate_to_mdx_comments(self) -> None:
+		with tempfile.TemporaryDirectory() as directory:
+			path = Path(directory) / "index.mdx"
+			path.write_text(
+				"<!-- dcmview-marketing:start -->\nOld\n<!-- dcmview-marketing:end -->\n\n## Docs\n",
+				encoding="utf-8",
+			)
+			marketing_media.replace_marked_block(path, "## Gallery\n\nNew", anchor="## Docs", mdx=True)
+			text = path.read_text(encoding="utf-8")
+			self.assertIn("{/* dcmview-marketing:start */}", text)
+			self.assertIn("{/* dcmview-marketing:end */}", text)
+			self.assertNotIn("<!-- dcmview-marketing:start -->", text)
+			self.assertNotIn("Old", text)
+
 	def test_publication_galleries_resolve_current_scene_outputs(self) -> None:
 		paths = {
 			"mr-seg-cine": "mr-seg-cine.gif",
