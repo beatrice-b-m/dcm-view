@@ -149,6 +149,36 @@ class MarketingMediaSourceTests(unittest.TestCase):
 			self.assertNotIn("First", text)
 			self.assertIn("Second", text)
 
+	def test_publication_galleries_resolve_current_scene_outputs(self) -> None:
+		paths = {
+			"mr-seg-cine": "mr-seg-cine.gif",
+			"chest-ct-cine": "chest-ct-cine.gif",
+			"radiograph": "radiograph.png",
+			"mammography": "mammography.gif",
+			"pet-cine": "pet-cine.gif",
+			"ultrasound-cine": "ultrasound-cine.gif",
+			"rt-dose-context": "rt-dose-context.png",
+			"wsi-context": "wsi-context.png",
+			"vscode-workflow": "vscode-workflow.gif",
+		}
+		viewer = marketing_media.viewer_gallery(
+			paths, asset_base="https://example.test/media", attribution_url="/attribution"
+		)
+		extension = marketing_media.vscode_gallery(
+			paths, asset_base="https://example.test/vscode", attribution_url="/attribution"
+		)
+		self.assertIn("https://example.test/media/mr-seg-cine.gif", viewer)
+		self.assertIn("https://example.test/media/wsi-context.png", viewer)
+		self.assertIn("https://example.test/vscode/vscode-workflow.gif", extension)
+		self.assertNotIn("brain-mr-seg.png", viewer)
+		self.assertNotIn("vscode-workflow.png", extension)
+
+	def test_publication_gallery_rejects_missing_scene(self) -> None:
+		with self.assertRaisesRegex(marketing_media.MarketingMediaError, "chest-ct-cine"):
+			marketing_media.viewer_gallery(
+				{}, asset_base="https://example.test/media", attribution_url="/attribution"
+			)
+
 	def test_parses_the_binary_startup_event(self) -> None:
 		class FakeProcess:
 			stdout = iter(

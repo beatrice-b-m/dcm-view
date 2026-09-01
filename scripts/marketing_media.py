@@ -889,6 +889,59 @@ def copy_bundle_files(bundle: Path, destination: Path, lock: dict[str, Any]) -> 
 		shutil.copy2(bundle / name, destination / name)
 
 
+def publication_artifact_paths(lock: dict[str, Any]) -> dict[str, str]:
+	paths: dict[str, str] = {}
+	for artifact in lock.get("artifacts", []):
+		scene_id = require_string(artifact.get("scene_id"), "artifact.scene_id")
+		path = require_string(artifact.get("path"), "artifact.path")
+		if scene_id in paths:
+			raise MarketingMediaError(f"duplicate published scene: {scene_id}")
+		paths[scene_id] = path
+	return paths
+
+
+def publication_image(paths: dict[str, str], scene_id: str, alt: str, base: str) -> str:
+	try:
+		path = paths[scene_id]
+	except KeyError as error:
+		raise MarketingMediaError(f"published gallery scene is unavailable: {scene_id}") from error
+	return f"![{alt}]({base.rstrip('/')}/{path})"
+
+
+def viewer_gallery(paths: dict[str, str], *, asset_base: str, attribution_url: str) -> str:
+	images = {
+		"ct": publication_image(paths, "chest-ct-cine", "Chest CT cine playback in dcmview", asset_base),
+		"seg": publication_image(paths, "mr-seg-cine", "DICOM SEG semantic overlay in dcmview", asset_base),
+		"radiograph": publication_image(paths, "radiograph", "Chest radiograph in dcmview", asset_base),
+		"mammography": publication_image(paths, "mammography", "Mammography study in dcmview", asset_base),
+		"pet": publication_image(paths, "pet-cine", "PET cine playback in dcmview", asset_base),
+		"ultrasound": publication_image(paths, "ultrasound-cine", "Ultrasound cine playback in dcmview", asset_base),
+		"dose": publication_image(paths, "rt-dose-context", "RT Dose semantic context in dcmview", asset_base),
+		"wsi": publication_image(paths, "wsi-context", "DICOM whole-slide microscopy context in dcmview", asset_base),
+	}
+	return (
+		"## Viewer gallery\n\n"
+		"### Cine playback and semantic context\n\n"
+		f"{images['ct']}\n\n{images['seg']}\n\n"
+		"### Modality coverage\n\n"
+		f"{images['radiograph']}\n\n{images['mammography']}\n\n{images['pet']}\n\n"
+		f"{images['ultrasound']}\n\n{images['dose']}\n\n{images['wsi']}\n\n"
+		f"[Source imagery attribution]({attribution_url})"
+	)
+
+
+def vscode_gallery(paths: dict[str, str], *, asset_base: str, attribution_url: str) -> str:
+	workflow = publication_image(
+		paths, "vscode-workflow", "Open DICOM data with dcmview from VS Code Explorer", asset_base
+	)
+	ct = publication_image(paths, "chest-ct-cine", "DICOM cine playback in dcmview", asset_base)
+	return (
+		"## In VS Code\n\n"
+		f"{workflow}\n\n{ct}\n\n"
+		f"[Source imagery attribution]({attribution_url})"
+	)
+
+
 def publish_media(args: argparse.Namespace) -> None:
 	if not args.approve:
 		raise MarketingMediaError("publication requires the explicit --approve flag after visual review")
@@ -911,24 +964,26 @@ def publish_media(args: argparse.Namespace) -> None:
 		raise MarketingMediaError(f"publication tag {tag!r} does not match captured version v{version}")
 	bundle = args.bundle.resolve()
 	repository = "https://raw.githubusercontent.com/beatrice-b-m/dcmview"
+	artifact_paths = publication_artifact_paths(lock)
 	root_media = REPO_ROOT / "media" / "marketing"
 	vscode_media = REPO_ROOT / "vscode" / "media" / "marketing"
 	copy_bundle_files(bundle, root_media, lock)
 	copy_bundle_files(bundle, vscode_media, lock)
-	gallery = (
-		"## Viewer gallery\n\n"
-		f"![DICOM SEG semantic context in dcmview]({repository}/{tag}/media/marketing/brain-mr-seg.png)\n\n"
-		f"![Chest CT cine playback in dcmview]({repository}/{tag}/media/marketing/chest-ct-cine.gif)\n\n"
-		f"[Source imagery attribution]({repository}/{tag}/media/marketing/ATTRIBUTION.md)"
+	root_gallery = viewer_gallery(
+		artifact_paths,
+		asset_base=f"{repository}/{tag}/media/marketing",
+		attribution_url=f"{repository}/{tag}/media/marketing/ATTRIBUTION.md",
 	)
-	replace_marked_block(REPO_ROOT / "README.md", gallery, anchor="## Why use it?")
-	vscode_gallery = (
-		"## In VS Code\n\n"
-		f"![dcmview running inside VS Code]({repository}/{tag}/vscode/media/marketing/vscode-workflow.png)\n\n"
-		f"![DICOM cine playback]({repository}/{tag}/vscode/media/marketing/chest-ct-cine.gif)\n\n"
-		f"[Source imagery attribution]({repository}/{tag}/vscode/media/marketing/ATTRIBUTION.md)"
+	replace_marked_block(REPO_ROOT / "README.md", root_gallery, anchor="## Why use it?")
+	replace_marked_block(REPO_ROOT / "docs" / "index.md", root_gallery, anchor="## User Guides")
+	extension_gallery = vscode_gallery(
+		artifact_paths,
+		asset_base=f"{repository}/{tag}/vscode/media/marketing",
+		attribution_url=f"{repository}/{tag}/vscode/media/marketing/ATTRIBUTION.md",
 	)
-	replace_marked_block(REPO_ROOT / "vscode" / "README.md", vscode_gallery, anchor="## Supported Platforms")
+	replace_marked_block(
+		REPO_ROOT / "vscode" / "README.md", extension_gallery, anchor="## Supported Platforms"
+	)
 
 	docs_repo = args.docs_repo.resolve()
 	docs_index = docs_repo / "src" / "content" / "docs" / "index.mdx"
@@ -936,11 +991,10 @@ def publish_media(args: argparse.Namespace) -> None:
 		raise MarketingMediaError(f"dcmview-docs index is unavailable: {docs_index}")
 	docs_media = docs_repo / "public" / "media" / "dcmview"
 	copy_bundle_files(bundle, docs_media, lock)
-	docs_gallery = (
-		"## See dcmview in action\n\n"
-		"![DICOM SEG semantic context in dcmview](/media/dcmview/brain-mr-seg.png)\n\n"
-		"![Chest CT cine playback in dcmview](/media/dcmview/chest-ct-cine.gif)\n\n"
-		"[Review source imagery attribution](/reference/media-attribution/)."
+	docs_gallery = viewer_gallery(
+		artifact_paths,
+		asset_base="/media/dcmview",
+		attribution_url="/reference/media-attribution/",
 	)
 	replace_marked_block(docs_index, docs_gallery, anchor="## Choose your workflow")
 	attribution_page = docs_repo / "src" / "content" / "docs" / "reference" / "media-attribution.md"
